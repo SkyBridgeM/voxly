@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meeting-asr"
+version = "0.1.0"
+description = "Local-first meeting audio recording, chunking, MiMo ASR transcription, and prompt-based notes preparation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "python-dotenv>=1.0.1",
+  "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+webui = [
+  "streamlit>=1.36.0",
+]
+all = [
+  "pytest>=8.0.0",
+  "streamlit>=1.36.0",
+]
+
+[project.scripts]
+meeting-asr = "meeting_asr.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
