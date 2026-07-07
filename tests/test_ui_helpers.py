@@ -7,6 +7,7 @@ from webui.ui_helpers import (
     discover_prompt_templates,
     read_preview,
     resolve_prompt_path,
+    update_env_value,
 )
 
 
@@ -62,3 +63,82 @@ def test_classify_error_names_common_failures() -> None:
     assert classify_error(ValueError("Unsupported audio format '.m4a'."))[0] == "Unsupported audio format"
     assert classify_error(FileNotFoundError("Prompt file not found: prompts/missing.md"))[0] == "Prompt file was not found"
     assert classify_error(RuntimeError("MiMo API error 401: unauthorized"))[0] == "MiMo ASR failed"
+
+
+def test_update_env_value_creates_env_file(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == "MIMO_API_KEY=new-key\n"
+
+
+def test_update_env_value_replaces_existing_key_and_preserves_other_lines(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "# comment\n"
+        "MIMO_ASR_MODEL=model\n"
+        "\n"
+        "MIMO_API_KEY=old-key\n"
+        "MAX_UPLOAD_MB=10\n",
+        encoding="utf-8",
+    )
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == (
+        "# comment\n"
+        "MIMO_ASR_MODEL=model\n"
+        "\n"
+        "MIMO_API_KEY=new-key\n"
+        "MAX_UPLOAD_MB=10\n"
+    )
+
+
+def test_update_env_value_appends_missing_key(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("MAX_UPLOAD_MB=10", encoding="utf-8")
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == "MAX_UPLOAD_MB=10\nMIMO_API_KEY=new-key\n"
+
+
+def test_update_env_value_ignores_commented_key(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("# MIMO_API_KEY=old-key\nMAX_UPLOAD_MB=10\n", encoding="utf-8")
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == (
+        "# MIMO_API_KEY=old-key\n"
+        "MAX_UPLOAD_MB=10\n"
+        "MIMO_API_KEY=new-key\n"
+    )
+
+
+def test_update_env_value_replaces_first_key_and_removes_duplicates(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "MIMO_API_KEY=old-one\n"
+        "MAX_UPLOAD_MB=10\n"
+        "MIMO_API_KEY=old-two\n",
+        encoding="utf-8",
+    )
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == "MIMO_API_KEY=new-key\nMAX_UPLOAD_MB=10\n"
+
+
+def test_update_env_value_does_not_treat_export_as_existing_key(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("export MIMO_API_KEY=old-key\nMAX_UPLOAD_MB=10\n", encoding="utf-8")
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.read_text(encoding="utf-8") == (
+        "export MIMO_API_KEY=old-key\n"
+        "MAX_UPLOAD_MB=10\n"
+        "MIMO_API_KEY=new-key\n"
+    )

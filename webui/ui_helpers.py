@@ -51,6 +51,38 @@ def format_detected(value: bool) -> str:
     return "Detected" if value else "Not detected"
 
 
+def update_env_value(env_path: Path, key: str, value: str) -> None:
+    new_line = f"{key}={value}"
+    if not env_path.exists():
+        env_path.write_text(new_line + "\n", encoding="utf-8")
+        return
+
+    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    output: list[str] = []
+    replaced = False
+
+    for line in lines:
+        if _is_env_key_line(line, key):
+            if not replaced:
+                newline = "\n" if line.endswith("\n") else ""
+                output.append(new_line + newline)
+                replaced = True
+            continue
+        output.append(line)
+
+    if not replaced:
+        if output and not output[-1].endswith("\n"):
+            output[-1] += "\n"
+        output.append(new_line + "\n")
+
+    env_path.write_text("".join(output), encoding="utf-8")
+
+
+def _is_env_key_line(line: str, key: str) -> bool:
+    stripped = line.lstrip()
+    return not stripped.startswith("#") and stripped.startswith(f"{key}=")
+
+
 def classify_error(exc: Exception) -> tuple[str, str]:
     message = str(exc)
     lower = message.lower()

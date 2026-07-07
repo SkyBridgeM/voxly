@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import streamlit as st
@@ -19,6 +20,7 @@ from ui_helpers import (
     format_detected,
     read_preview,
     resolve_prompt_path,
+    update_env_value,
 )
 
 
@@ -127,7 +129,25 @@ def main() -> None:
     with st.sidebar:
         st.header("Settings")
         st.caption("Local settings for this run only.")
-        st.text_input("MIMO_API_KEY", value=format_detected(bool(settings.mimo_api_key)), disabled=True)
+        api_key_status = "Detected from .env" if settings.mimo_api_key else format_detected(False)
+        st.text_input("MIMO_API_KEY", value=api_key_status, disabled=True)
+        api_key_input = st.text_input(
+            "MIMO API key for this run",
+            value="",
+            type="password",
+            placeholder="Leave blank to use the .env key"
+            if settings.mimo_api_key
+            else "Paste a MIMO API key for this run",
+        )
+        save_api_key = st.checkbox("Save API key to .env for future runs", value=False)
+        if st.button("Save API key", disabled=not save_api_key, use_container_width=True):
+            api_key_to_save = api_key_input.strip()
+            if not api_key_to_save:
+                st.warning("Paste a MIMO API key before saving.")
+            else:
+                update_env_value(ROOT / ".env", "MIMO_API_KEY", api_key_to_save)
+                st.success("Saved MIMO_API_KEY to .env.")
+                st.rerun()
         output_dir = st.text_input("Output directory", value="output")
         chunk_minutes = st.number_input(
             "Chunk length, minutes",
@@ -195,6 +215,11 @@ def main() -> None:
 
     if run_button and uploaded_file is not None:
         try:
+            effective_settings = settings
+            api_key_override = api_key_input.strip()
+            if api_key_override:
+                effective_settings = replace(settings, mimo_api_key=api_key_override)
+
             options = TranscribeOptions(
                 output_dir=Path(output_dir),
                 chunk_minutes=int(chunk_minutes),
@@ -219,7 +244,7 @@ def main() -> None:
             result = run_uploaded_audio_workflow(
                 uploaded_file.name,
                 uploaded_file.getvalue(),
-                settings,
+                effective_settings,
                 options,
                 status_callback=status,
                 chunk_callback=chunk_status,

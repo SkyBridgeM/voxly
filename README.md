@@ -246,6 +246,8 @@ Check or toggle the background WebUI:
 
 If `.env` is missing, the start script prints a warning but still opens the WebUI. Transcription requires `MIMO_API_KEY` in `.env`.
 
+The WebUI can read `MIMO_API_KEY` from `.env` without showing the key in the sidebar. You can also paste a MIMO API key into the WebUI for the current run only; this temporary value is not saved by default. To save it for future runs, check **Save API key to .env for future runs** and click **Save API key**. This updates only `MIMO_API_KEY` in the local `.env` file.
+
 The WebUI supports:
 
 - uploading `mp3` or `wav` audio;
@@ -256,7 +258,7 @@ The WebUI supports:
 - previewing `transcript.md`;
 - downloading `transcript.md`, `notes_input.md`, `meeting_minutes.md` if present, and a zip of text outputs.
 
-The WebUI does not expose your API key. It only shows whether `MIMO_API_KEY` was detected from `.env`.
+The WebUI does not expose your saved API key. It only shows whether `MIMO_API_KEY` was detected from `.env`.
 
 The WebUI does not record audio in this MVP. Recording remains CLI-first. Use:
 
