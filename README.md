@@ -210,17 +210,41 @@ Or use the convenience scripts:
 ./scripts/webui.sh
 ./scripts/start_webui.sh
 ./scripts/stop_webui.sh
+./scripts/status_webui.sh
+./scripts/toggle_webui.sh
 ```
 
 The simplest option is `webui.sh`: it starts the WebUI in the current terminal, and `Ctrl+C` stops it.
 
 `start_webui.sh` starts the WebUI in the background, opens `http://127.0.0.1:8501`, and writes logs to `.streamlit/webui.log`. Use `stop_webui.sh` to close that background service.
 
+For one-click macOS use, double-click:
+
+```text
+启动 meeting-asr.command
+关闭 meeting-asr.command
+```
+
+You can keep `启动 meeting-asr.command` on your Desktop or another easy-to-click location. If macOS blocks the file, right-click it and choose Open once, or run:
+
+```bash
+chmod +x "启动 meeting-asr.command" "关闭 meeting-asr.command"
+```
+
 If you do not want the script to open a browser automatically:
 
 ```bash
 MEETING_ASR_NO_OPEN=1 ./scripts/start_webui.sh
 ```
+
+Check or toggle the background WebUI:
+
+```bash
+./scripts/status_webui.sh
+./scripts/toggle_webui.sh
+```
+
+If `.env` is missing, the start script prints a warning but still opens the WebUI. Transcription requires `MIMO_API_KEY` in `.env`.
 
 The WebUI supports:
 

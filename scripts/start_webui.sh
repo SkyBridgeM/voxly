@@ -10,7 +10,20 @@ URL="http://${HOST}:${PORT}"
 PID_FILE=".streamlit/webui.pid"
 LOG_FILE=".streamlit/webui.log"
 
+is_pid_running() {
+  ps -p "$1" >/dev/null 2>&1 && return 0
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -qx "$1"
+    return
+  fi
+  return 1
+}
+
 mkdir -p .streamlit
+
+if [ ! -f ".env" ]; then
+  echo "Warning: .env was not found. The WebUI can open, but transcription will fail until you create .env with MIMO_API_KEY."
+fi
 
 if [ ! -x ".venv/bin/python" ]; then
   echo "Creating local Python environment..."
@@ -23,8 +36,14 @@ if ! .venv/bin/python -c "import streamlit" >/dev/null 2>&1; then
 fi
 
 if [ -f "$PID_FILE" ]; then
-  PID="$(cat "$PID_FILE")"
-  if kill -0 "$PID" >/dev/null 2>&1; then
+  PIDS="$(tr '\n' ' ' < "$PID_FILE")"
+  ALIVE=""
+  for PID in $PIDS; do
+    if is_pid_running "$PID"; then
+      ALIVE="${ALIVE}${ALIVE:+ }$PID"
+    fi
+  done
+  if [ -n "$ALIVE" ]; then
     echo "meeting-asr WebUI is already running:"
     echo "$URL"
     if command -v open >/dev/null 2>&1; then
@@ -50,11 +69,11 @@ STARTER_PID="$!"
 PID=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if command -v lsof >/dev/null 2>&1; then
-    PID="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)"
+    PID="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
     if [ -n "$PID" ]; then
       break
     fi
-  elif kill -0 "$STARTER_PID" >/dev/null 2>&1; then
+  elif is_pid_running "$STARTER_PID"; then
     PID="$STARTER_PID"
     break
   fi
