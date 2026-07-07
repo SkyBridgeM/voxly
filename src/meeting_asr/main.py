@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import load_settings
 from .recorder import record_chunks
 from .utils import create_task_dir
-from .workflow import TranscribeOptions, run_audio_file_workflow, run_recorded_chunks_workflow
+from .workflow import TranscribeOptions, run_audio_file_workflow, run_recorded_chunks_workflow, run_resume_workflow
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,12 +26,20 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--input-device", default=":0", help="ffmpeg avfoundation input device. Default: :0.")
     add_common_flags(record)
 
+    resume = subparsers.add_parser("resume", help="Resume transcription in an existing task folder.")
+    resume.add_argument("task_dir", type=Path)
+    add_notes_flags(resume)
+
     return parser
 
 
 def add_common_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chunk-minutes", type=int, default=None, help="Chunk length in minutes. Default from .env or 5.")
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="Base output directory. Default: output/.")
+    add_notes_flags(parser)
+
+
+def add_notes_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--summarize", action="store_true", help="Create notes_input.md from prompt and transcript.")
     parser.add_argument("--prompt", type=Path, default=Path("prompts/default_minutes.md"), help="Prompt file for notes input.")
 
@@ -78,6 +86,22 @@ def run_record(args: argparse.Namespace) -> Path:
     return result.task_dir
 
 
+def run_resume(args: argparse.Namespace) -> Path:
+    settings = load_settings()
+    options = TranscribeOptions(
+        output_dir=args.task_dir.parent,
+        chunk_minutes=settings.default_chunk_minutes,
+        max_upload_mb=settings.max_upload_mb,
+        summarize=args.summarize,
+        prompt_path=args.prompt,
+    )
+    result = run_resume_workflow(args.task_dir, settings, options)
+    print(f"Transcript saved: {result.transcript_path}")
+    if result.notes_input_path:
+        print(f"Notes input saved: {result.notes_input_path}")
+    return result.task_dir
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -87,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             task_dir = run_transcribe(args)
         elif args.command == "record":
             task_dir = run_record(args)
+        elif args.command == "resume":
+            task_dir = run_resume(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return 2

@@ -81,25 +81,35 @@ def transcribe_audio_file(audio_path: Path, settings: Settings, api_key: str | N
 
 
 def build_mimo_asr_payload(audio_b64: str, audio_format: str, model: str) -> dict[str, Any]:
-    # Isolated for first real-API calibration if MiMo's exact multimodal schema differs.
     return {
         "model": model,
+        "asr_options": {"language": "auto"},
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Transcribe this meeting audio accurately."},
                     {
                         "type": "input_audio",
                         "input_audio": {
-                            "data": audio_b64,
-                            "format": audio_format,
+                            "data": build_audio_data_url(audio_b64, audio_format),
                         },
                     },
                 ],
             }
         ],
     }
+
+
+def build_audio_data_url(audio_b64: str, audio_format: str) -> str:
+    mime_types = {
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+    }
+    try:
+        mime_type = mime_types[audio_format]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported audio format {audio_format!r}. Supported formats: mp3, wav.") from exc
+    return f"data:{mime_type};base64,{audio_b64}"
 
 
 def extract_transcript(data: dict[str, Any]) -> str:

@@ -3,7 +3,25 @@ from pathlib import Path
 import pytest
 
 from meeting_asr.config import Settings
-from meeting_asr.transcribe_mimo import extract_transcript, transcribe_audio_file
+from meeting_asr.transcribe_mimo import build_mimo_asr_payload, extract_transcript, transcribe_audio_file
+
+
+@pytest.mark.parametrize(
+    ("audio_format", "expected_data"),
+    [
+        ("wav", "data:audio/wav;base64,YXVkaW8="),
+        ("mp3", "data:audio/mpeg;base64,YXVkaW8="),
+    ],
+)
+def test_build_mimo_asr_payload_uses_data_url_without_format(audio_format: str, expected_data: str) -> None:
+    payload = build_mimo_asr_payload("YXVkaW8=", audio_format, "mimo-v2.5-asr")
+
+    input_audio = payload["messages"][0]["content"][0]["input_audio"]
+    assert input_audio == {"data": expected_data}
+    assert payload["asr_options"] == {"language": "auto"}
+    assert "format" not in input_audio
+    assert payload["messages"][0]["content"][0]["type"] == "input_audio"
+    assert len(payload["messages"][0]["content"]) == 1
 
 
 def test_extract_transcript_accepts_string_content() -> None:

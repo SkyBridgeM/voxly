@@ -6,7 +6,9 @@ from meeting_asr.config import Settings
 from meeting_asr.workflow import (
     TranscribeOptions,
     TranscribeResult,
+    find_resume_chunks,
     run_recorded_chunks_workflow,
+    run_resume_workflow,
     safe_upload_filename,
 )
 
@@ -92,3 +94,122 @@ def test_recorded_chunks_workflow_reuses_transcription_pipeline(
     assert result.transcript_path.read_text(encoding="utf-8") == "[Part 001]\n\nhello\n"
     assert result.notes_input_path is not None
     assert "Make notes" in result.notes_input_path.read_text(encoding="utf-8")
+
+
+def test_resume_workflow_rejects_missing_task_dir(tmp_path: Path) -> None:
+    settings = Settings("key", "endpoint", "model", 10, 5, 3, 120)
+    options = TranscribeOptions(tmp_path, 5, 10)
+
+    with pytest.raises(FileNotFoundError, match="Task folder not found"):
+        run_resume_workflow(tmp_path / "missing", settings, options)
+
+
+def test_find_resume_chunks_rejects_missing_chunks(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="No resume chunks found"):
+        find_resume_chunks(task_dir)
+
+
+def test_find_resume_chunks_uses_chunks_wav(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    chunks_dir.mkdir(parents=True)
+    chunk = chunks_dir / "part_001.wav"
+    chunk.write_bytes(b"audio")
+
+    assert find_resume_chunks(task_dir) == [chunk.resolve()]
+
+
+def test_find_resume_chunks_falls_back_to_recorded_audio_wav(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    audio_dir = task_dir / "audio"
+    audio_dir.mkdir(parents=True)
+    original = audio_dir / "original.wav"
+    original.write_bytes(b"ignored")
+    chunk = audio_dir / "part_001.wav"
+    chunk.write_bytes(b"audio")
+
+    assert find_resume_chunks(task_dir) == [chunk.resolve()]
+
+
+def test_resume_skips_existing_non_empty_transcript_part(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    transcripts_dir = task_dir / "transcripts"
+    chunks_dir.mkdir(parents=True)
+    transcripts_dir.mkdir()
+    (chunks_dir / "part_001.wav").write_bytes(b"audio")
+    (transcripts_dir / "part_001.txt").write_text("already done", encoding="utf-8")
+    settings = Settings("key", "endpoint", "model", 10, 5, 3, 120)
+    options = TranscribeOptions(tmp_path, 5, 10)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("ASR should not run for an existing non-empty transcript part")
+
+    monkeypatch.setattr("meeting_asr.transcribe_mimo.transcribe_audio_file", fail_if_called)
+
+    result = run_resume_workflow(task_dir, settings, options)
+
+    assert result.transcript_path.read_text(encoding="utf-8") == "[Part 001]\n\nalready done\n"
+
+
+def test_find_resume_chunks_rejects_mixed_chunk_formats(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    chunks_dir.mkdir(parents=True)
+    (chunks_dir / "part_001.wav").write_bytes(b"audio")
+    (chunks_dir / "part_002.mp3").write_bytes(b"audio")
+
+    with pytest.raises(RuntimeError, match="Mixed resume chunk formats"):
+        find_resume_chunks(task_dir)
+
+
+def test_find_resume_chunks_rejects_missing_part_number(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    chunks_dir.mkdir(parents=True)
+    (chunks_dir / "part_001.wav").write_bytes(b"audio")
+    (chunks_dir / "part_003.wav").write_bytes(b"audio")
+
+    with pytest.raises(RuntimeError, match="Missing resume chunk"):
+        find_resume_chunks(task_dir)
+
+
+def test_find_resume_chunks_rejects_chunks_not_starting_at_one(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    chunks_dir.mkdir(parents=True)
+    (chunks_dir / "part_002.wav").write_bytes(b"audio")
+
+    with pytest.raises(RuntimeError, match="must start at part_001"):
+        find_resume_chunks(task_dir)
+
+
+def test_find_resume_chunks_rejects_invalid_chunk_name_without_fallback(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    audio_dir = task_dir / "audio"
+    chunks_dir.mkdir(parents=True)
+    audio_dir.mkdir()
+    (chunks_dir / "part_backup.wav").write_bytes(b"bad")
+    (audio_dir / "part_001.wav").write_bytes(b"audio")
+
+    with pytest.raises(RuntimeError, match="Invalid resume chunk filename"):
+        find_resume_chunks(task_dir)
+
+
+def test_resume_workflow_validates_chunk_size(tmp_path: Path) -> None:
+    task_dir = tmp_path / "task"
+    chunks_dir = task_dir / "chunks"
+    chunks_dir.mkdir(parents=True)
+    (chunks_dir / "part_001.wav").write_bytes(b"audio")
+    settings = Settings("key", "endpoint", "model", 0.000001, 5, 3, 120)
+    options = TranscribeOptions(tmp_path, 5, settings.max_upload_mb)
+
+    with pytest.raises(RuntimeError, match="exceed the upload limit"):
+        run_resume_workflow(task_dir, settings, options)

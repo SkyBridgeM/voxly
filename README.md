@@ -281,9 +281,25 @@ transcripts/part_001.txt
 transcripts/part_002.txt
 ```
 
-If a part transcript already exists and is non-empty, `meeting-asr` skips that chunk. If a later chunk fails after retries, completed parts remain in place so the same task folder can be continued by rerunning the workflow logic.
+If a part transcript already exists and is non-empty, `meeting-asr` skips that chunk. Empty part transcripts are treated as incomplete and are transcribed again.
 
-v1 resumability is per task folder and per chunk file. It does not automatically discover old tasks and does not include `--resume-dir`.
+Resume an existing task folder without copying audio or splitting again:
+
+```bash
+meeting-asr resume output/20260707_143000_meeting_name
+```
+
+Resume and regenerate `notes_input.md`:
+
+```bash
+meeting-asr resume output/20260707_143000_meeting_name --summarize
+```
+
+`resume` first reads existing chunks from `chunks/part_*.mp3` or `chunks/part_*.wav`. If `chunks/` has no chunks, it falls back to `audio/part_*.wav` for recorded tasks. Chunk files must start at `part_001` and be numbered continuously.
+
+After transcription, `resume` always rebuilds `transcript.md`. When `--summarize` is passed, it overwrites `notes_input.md` using the selected prompt template.
+
+`resume` uses the configured `MAX_UPLOAD_MB` value from `.env` to validate existing chunk sizes before upload. Adjust `MAX_UPLOAD_MB` in `.env` if an existing chunk is larger than the current limit.
 
 ## Chunking and Upload Limits
 
@@ -326,4 +342,4 @@ In v1, this creates `notes_input.md` containing the prompt and transcript. A fut
 
 ## Current MiMo Payload Note
 
-MiMo ASR calls are isolated in `transcribe_mimo.py`. The request body uses an OpenAI-compatible chat-completions style with base64 `input_audio`. If MiMo's exact production schema differs, adjust `build_mimo_asr_payload()` without changing the CLI workflow.
+MiMo ASR calls are isolated in `transcribe_mimo.py`. The request body follows MiMo's speech-recognition schema with a data URL in `input_audio.data` and `asr_options.language` set to `auto`. If MiMo's production schema changes, adjust `build_mimo_asr_payload()` without changing the CLI workflow.
