@@ -34,12 +34,13 @@ def test_create_task_dir_uses_safe_timestamped_name(tmp_path: Path) -> None:
     assert (task_dir / "transcripts").is_dir()
 
 
-def test_supported_audio_format_accepts_mp3_and_wav() -> None:
+def test_supported_audio_format_accepts_mp3_wav_and_m4a() -> None:
     assert supported_audio_format(Path("meeting.mp3")) == "mp3"
     assert supported_audio_format(Path("meeting.wav")) == "wav"
+    assert supported_audio_format(Path("voice-memo.m4a")) == "m4a"
 
     with pytest.raises(ValueError):
-        supported_audio_format(Path("meeting.m4a"))
+        supported_audio_format(Path("meeting.aiff"))
 
 
 def test_retry_chunk_seconds_stop_at_sixty_seconds() -> None:

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-SUPPORTED_AUDIO_SUFFIXES = {".mp3", ".wav"}
+SUPPORTED_AUDIO_SUFFIXES = {".m4a", ".mp3", ".wav"}
 MIN_CHUNK_SECONDS = 60
 
 

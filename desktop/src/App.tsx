@@ -1,224 +1,394 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { useState, useEffect, useCallback } from "react";
+import { translations, getLocale, setLocale, type Locale } from "./i18n";
+import {
+  runMeetingAsr,
+  openTaskFolder,
+  type LogEntry,
+  type ProgressEvent,
+} from "./lib/meetingAsr";
+import { FilePicker } from "./components/FilePicker";
+import { RunControls } from "./components/RunControls";
+import { LogPanel } from "./components/LogPanel";
+import { ResultPanel } from "./components/ResultPanel";
 import "./App.css";
 
-interface LogEntry {
-  stream: "stdout" | "stderr";
-  line: string;
-}
+type Theme = "light" | "dark" | "system";
 
 function App() {
+  const [locale, setLocaleState] = useState<Locale>(getLocale());
+  const [theme, setTheme] = useState<Theme>(
+    (localStorage.getItem("theme") as Theme) || "system"
+  );
   const [audioPath, setAudioPath] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<"transcript" | "minutes">(
     "transcript"
   );
   const [isRunning, setIsRunning] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [taskFolder, setTaskFolder] = useState<string | null>(null);
+  const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
+  const [notesInputPath, setNotesInputPath] = useState<string | null>(null);
+  const [minutesPath, setMinutesPath] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [statusOk, setStatusOk] = useState<boolean | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showError, setShowError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
 
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const [mimoApiKey, setMimoApiKey] = useState(
+    localStorage.getItem("mimoApiKey") || ""
+  );
+  const [deepseekApiKey, setDeepseekApiKey] = useState(
+    localStorage.getItem("deepseekApiKey") || ""
+  );
+  const [deepseekModel, setDeepseekModel] = useState(
+    localStorage.getItem("deepseekModel") || "deepseek-v4-flash"
+  );
+
+  const t = translations[locale];
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  const pickFile = async () => {
-    const selected = await open({
-      multiple: false,
-      filters: [
-        {
-          name: "Audio",
-          extensions: ["mp3", "wav"],
-        },
-      ],
-    });
-    if (selected && typeof selected === "string") {
-      setAudioPath(selected);
+    const root = document.documentElement;
+    if (theme === "system") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", theme);
     }
-  };
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    setLocale(locale);
+  }, [locale]);
 
   const startRun = useCallback(async () => {
     if (!audioPath || isRunning) return;
 
     setIsRunning(true);
-    setLogs([]);
+    setProgress(null);
     setTaskFolder(null);
+    setTranscriptPath(null);
+    setNotesInputPath(null);
+    setMinutesPath(null);
     setStatus(null);
     setStatusOk(null);
-
-    const unlisteners: UnlistenFn[] = [];
-
-    const unlistenLog = await listen<LogEntry>("log-line", (event) => {
-      const entry = event.payload;
-      setLogs((prev) => [...prev, entry]);
-
-      const trimmed = entry.line.trim();
-      if (entry.stream === "stdout" && trimmed.startsWith("Task folder:")) {
-        const folder = trimmed.slice("Task folder:".length).trim();
-        if (folder) {
-          setTaskFolder(folder);
-        }
-      }
-    });
-    unlisteners.push(unlistenLog);
-
-    const unlistenDone = await listen<{ code: number | null }>(
-      "process-done",
-      (event) => {
-        const { code } = event.payload;
-        if (code === 0) {
-          setStatus("Completed successfully.");
-          setStatusOk(true);
-        } else if (code !== null) {
-          setStatus(`Exited with code ${code}.`);
-          setStatusOk(false);
-        } else {
-          setStatus("Terminated by signal.");
-          setStatusOk(false);
-        }
-      }
-    );
-    unlisteners.push(unlistenDone);
+    setLogs([]);
+    setErrorMessage("");
 
     try {
-      const result = await invoke<string>("run_meeting_asr", {
+      const result = await runMeetingAsr(
         audioPath,
         outputMode,
-      });
-      if (result === "success") {
+        { mimoApiKey, deepseekApiKey, deepseekModel },
+        {
+          onLog: (entry) => {
+            setLogs((prev) => [...prev, entry]);
+            if (entry.stream === "stderr" && entry.line.trim()) {
+              setErrorMessage((prev) =>
+                prev ? prev + "\n" + entry.line : entry.line
+              );
+            }
+          },
+          onProgress: (event) => setProgress(event),
+          onDone: (code) => {
+            if (code === 0) {
+              setStatus(t.completedSuccessfully);
+              setStatusOk(true);
+            } else if (code !== null) {
+              setStatus(`${t.exitedWithCode} ${code}.`);
+              setStatusOk(false);
+            } else {
+              setStatus(t.terminatedBySignal);
+              setStatusOk(false);
+            }
+          },
+        }
+      );
+
+      if (result.task_folder) setTaskFolder(result.task_folder);
+      if (result.transcript_path) setTranscriptPath(result.transcript_path);
+      if (result.notes_input_path) setNotesInputPath(result.notes_input_path);
+      if (result.minutes_path) setMinutesPath(result.minutes_path);
+
+      if (result.status === "success") {
         if (!status) {
-          setStatus("Completed successfully.");
+          setStatus(t.completedSuccessfully);
           setStatusOk(true);
         }
       } else if (!status) {
-        setStatus(result);
+        setStatus(result.status);
         setStatusOk(false);
       }
     } catch (e) {
-      setStatus(String(e));
+      const err = String(e);
+      const stderrLines = logs
+        .filter((l) => l.stream === "stderr")
+        .map((l) => l.line)
+        .join("\n");
+      const displayError = stderrLines || err;
+      setErrorMessage(displayError);
+      setShowError(true);
+      setStatus(err);
       setStatusOk(false);
     } finally {
       setIsRunning(false);
-      for (const fn of unlisteners) {
-        fn();
-      }
+      setProgress(null);
     }
-  }, [audioPath, isRunning, outputMode, status]);
+  }, [
+    audioPath,
+    isRunning,
+    outputMode,
+    status,
+    mimoApiKey,
+    deepseekApiKey,
+    deepseekModel,
+    t,
+    logs,
+  ]);
 
-  const openOutputDir = useCallback(async () => {
+  const handleOpenFolder = useCallback(async () => {
     if (!taskFolder) return;
-    const projectRoot = (await import.meta.env.DEV)
-      ? "../.."
-      : ".";
-    const fullPath = `${projectRoot}/${taskFolder}`;
-    await openPath(fullPath);
+    try {
+      await openTaskFolder(taskFolder);
+    } catch (e) {
+      setErrorMessage(String(e));
+      setShowError(true);
+    }
   }, [taskFolder]);
+
+  const handleSaveSettings = () => {
+    localStorage.setItem("mimoApiKey", mimoApiKey);
+    localStorage.setItem("deepseekApiKey", deepseekApiKey);
+    localStorage.setItem("deepseekModel", deepseekModel);
+    setShowSettings(false);
+  };
 
   return (
     <div className="app">
-      <h1>meeting-asr Desktop Prototype</h1>
-      <p className="subtitle">
-        Tauri thin-shell experiment — Python CLI handles all ASR/LLM logic.
-      </p>
-
-      <div className="section">
-        <label>Audio File</label>
-        <div className="file-row">
+      <header className="app-header">
+        <h1>{t.appTitle}</h1>
+        <p className="subtitle">{t.appSubtitle}</p>
+        <div className="header-actions">
           <button
-            className="btn-secondary"
-            onClick={pickFile}
-            disabled={isRunning}
+            className="btn-icon"
+            onClick={() => setShowSettings(true)}
+            title={t.settingsTitle}
           >
-            Choose File…
+            ⚙️
           </button>
-          <span className="file-path">
-            {audioPath || "No file selected"}
-          </span>
         </div>
-      </div>
+      </header>
 
-      <div className="section">
-        <label>Output Mode</label>
-        <div className="mode-options">
-          <label>
-            <input
-              type="radio"
-              name="mode"
-              value="transcript"
-              checked={outputMode === "transcript"}
-              onChange={() => setOutputMode("transcript")}
-              disabled={isRunning}
-            />
-            transcript
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="mode"
-              value="minutes"
-              checked={outputMode === "minutes"}
-              onChange={() => setOutputMode("minutes")}
-              disabled={isRunning}
-            />
-            minutes
-          </label>
-        </div>
-      </div>
-
-      <div className="section">
-        <button
-          className="btn-primary"
-          onClick={startRun}
-          disabled={!audioPath || isRunning}
-        >
-          {isRunning ? "Running…" : "Start"}
-        </button>
-      </div>
-
-      <div className="section">
-        <label>Logs</label>
-        <div className="log-container">
-          {logs.length === 0 && !isRunning && (
-            <p className="log-placeholder">Logs will appear here…</p>
-          )}
-          {logs.map((entry, i) => (
-            <p key={i} className={`log-line ${entry.stream}`}>
-              {entry.line}
-            </p>
-          ))}
-          {isRunning && logs.length === 0 && (
-            <p className="log-placeholder">Waiting for output…</p>
-          )}
-          <div ref={logEndRef} />
-        </div>
-      </div>
-
-      {taskFolder && (
-        <div className="section">
-          <label>Task Folder</label>
-          <div className="task-folder">
-            <code>{taskFolder}</code>
-            <button className="btn-secondary" onClick={openOutputDir}>
-              Open Output Directory
-            </button>
+      <div className="main-content">
+        <div className="section input-section">
+          <div className="section-header">
+            <label>{t.inputTitle}</label>
           </div>
-        </div>
-      )}
 
-      {status && (
-        <div className="section">
-          <p
-            className={`status-text ${
+          <FilePicker
+            audioPath={audioPath}
+            onFileSelected={setAudioPath}
+            disabled={isRunning}
+            labels={{ chooseFile: t.chooseFile, noFileSelected: t.noFileSelected }}
+          />
+
+          <RunControls
+            outputMode={outputMode}
+            onModeChange={setOutputMode}
+            onStartRun={startRun}
+            isRunning={isRunning}
+            audioPath={audioPath}
+            labels={{
+              modeTranscript: t.modeTranscript,
+              modeTranscriptDesc: t.modeTranscriptDesc,
+              modeMinutes: t.modeMinutes,
+              modeMinutesDesc: t.modeMinutesDesc,
+              start: t.start,
+              processing: t.processing,
+              llmWarning: t.llmWarning,
+              transcriptWarning: t.transcriptWarning,
+            }}
+          />
+        </div>
+
+        <LogPanel
+          isRunning={isRunning}
+          progress={progress}
+          logs={logs}
+          showLogs={showLogs}
+          onToggleLogs={() => setShowLogs(!showLogs)}
+          onSetShowLogs={setShowLogs}
+          statusOk={statusOk}
+          labels={{
+            splitting: t.splitting,
+            transcribing: t.transcribing,
+            merging: t.merging,
+            preparingNotes: t.preparingNotes,
+            generatingMinutes: t.generatingMinutes,
+            done: t.done,
+            showLogs: t.showLogs,
+            hideLogs: t.hideLogs,
+          }}
+        />
+
+        <ResultPanel
+          taskFolder={taskFolder}
+          transcriptPath={transcriptPath}
+          notesInputPath={notesInputPath}
+          minutesPath={minutesPath}
+          onOpenFolder={handleOpenFolder}
+          labels={{
+            resultsTitle: t.resultsTitle,
+            folder: t.folder,
+            transcript: t.transcript,
+            notesInput: t.notesInput,
+            meetingMinutes: t.meetingMinutes,
+            openOutputFolder: t.openOutputFolder,
+          }}
+        />
+
+        {status && !isRunning && (
+          <div
+            className={`section status-section ${
               statusOk === true ? "success" : statusOk === false ? "error" : ""
             }`}
           >
             {status}
-          </p>
+          </div>
+        )}
+      </div>
+
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{t.settingsTitle}</h2>
+              <button
+                className="btn-close"
+                onClick={() => setShowSettings(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>{t.language}</label>
+                <select
+                  value={locale}
+                  onChange={(e) => setLocaleState(e.target.value as Locale)}
+                >
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>{locale === "zh" ? "主题" : "Theme"}</label>
+                <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value as Theme)}
+                >
+                  <option value="system">
+                    {locale === "zh" ? "跟随系统" : "System"}
+                  </option>
+                  <option value="light">
+                    {locale === "zh" ? "浅色" : "Light"}
+                  </option>
+                  <option value="dark">
+                    {locale === "zh" ? "深色" : "Dark"}
+                  </option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>
+                  {t.mimoApiKey}
+                  {mimoApiKey && (
+                    <span className="key-status">
+                      {locale === "zh" ? "已连接" : "Connected"}
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={mimoApiKey}
+                  onChange={(e) => setMimoApiKey(e.target.value)}
+                  placeholder={
+                    locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>
+                  {t.deepseekApiKey}
+                  {deepseekApiKey && (
+                    <span className="key-status">
+                      {locale === "zh" ? "已连接" : "Connected"}
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={deepseekApiKey}
+                  onChange={(e) => setDeepseekApiKey(e.target.value)}
+                  placeholder={
+                    locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>{t.deepseekModel}</label>
+                <select
+                  value={deepseekModel}
+                  onChange={(e) => setDeepseekModel(e.target.value)}
+                >
+                  <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                </select>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowSettings(false)}
+              >
+                {t.cancel}
+              </button>
+              <button className="btn-primary" onClick={handleSaveSettings}>
+                {t.save}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showError && (
+        <div className="modal-overlay" onClick={() => setShowError(false)}>
+          <div
+            className="modal modal-error"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2>{t.errorTitle}</h2>
+              <button
+                className="btn-close"
+                onClick={() => setShowError(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="error-message">{errorMessage}</p>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowError(false)}
+              >
+                {t.close}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

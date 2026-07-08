@@ -20,7 +20,8 @@ def calculate_retry_chunk_seconds(initial_seconds: int, min_seconds: int = MIN_C
 
 def split_audio(input_path: Path, chunks_dir: Path, chunk_minutes: int, max_upload_bytes: int) -> list[Path]:
     ensure_ffmpeg()
-    audio_format = supported_audio_format(input_path)
+    input_format = supported_audio_format(input_path)
+    chunk_format = chunk_audio_format(input_format)
     if not input_path.exists():
         raise FileNotFoundError(f"Audio file not found: {input_path}")
 
@@ -30,8 +31,8 @@ def split_audio(input_path: Path, chunks_dir: Path, chunk_minutes: int, max_uplo
     for chunk_seconds in calculate_retry_chunk_seconds(initial_seconds):
         attempted.append(chunk_seconds)
         _clear_chunks(chunks_dir)
-        _split_once(input_path, chunks_dir, audio_format, chunk_seconds)
-        chunks = sorted(chunks_dir.glob(f"part_*.{audio_format}"))
+        _split_once(input_path, chunks_dir, input_format, chunk_seconds)
+        chunks = sorted(chunks_dir.glob(f"part_*.{chunk_format}"))
         if not chunks:
             raise RuntimeError("ffmpeg did not create any audio chunks.")
 
@@ -49,6 +50,10 @@ def split_audio(input_path: Path, chunks_dir: Path, chunk_minutes: int, max_uplo
     raise RuntimeError(f"Unable to split audio below upload limit. Attempted chunk lengths: {attempted}")
 
 
+def chunk_audio_format(input_format: str) -> str:
+    return "wav" if input_format == "m4a" else input_format
+
+
 def _clear_chunks(chunks_dir: Path) -> None:
     chunks_dir.mkdir(parents=True, exist_ok=True)
     for path in chunks_dir.glob("part_*.*"):
@@ -57,7 +62,13 @@ def _clear_chunks(chunks_dir: Path) -> None:
 
 
 def _split_once(input_path: Path, chunks_dir: Path, audio_format: str, chunk_seconds: int) -> None:
-    output_pattern = chunks_dir / f"part_%03d.{audio_format}"
+    output_format = chunk_audio_format(audio_format)
+    output_pattern = chunks_dir / f"part_%03d.{output_format}"
+    if audio_format == "m4a":
+        _split_m4a_to_wav(input_path, output_pattern, chunk_seconds)
+        _renumber_chunks(chunks_dir, output_format)
+        return
+
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -99,6 +110,36 @@ def _split_once(input_path: Path, chunks_dir: Path, audio_format: str, chunk_sec
         ]
         run_command(fallback, capture=True)
 
+    _renumber_chunks(chunks_dir, output_format)
+
+
+def _split_m4a_to_wav(input_path: Path, output_pattern: Path, chunk_seconds: int) -> None:
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(input_path),
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_seconds),
+        "-reset_timestamps",
+        "1",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_pattern),
+    ]
+    run_command(command, capture=True)
+
+
+def _renumber_chunks(chunks_dir: Path, audio_format: str) -> None:
     # ffmpeg segment numbering starts at 0; rename through temporary names to avoid collisions.
     original_paths = sorted(chunks_dir.glob(f"part_*.{audio_format}"))
     temp_paths: list[Path] = []
