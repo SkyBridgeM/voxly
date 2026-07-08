@@ -1,13 +1,13 @@
-You are preparing meeting minutes from a transcript.
+你正在根据会议转写文本整理会议纪要。
 
-Use the transcript below as the only source of truth. Do not invent facts, decisions, owners, dates, numbers, or action items. If something is unclear, mark it as unclear.
+将下面的转写文本作为唯一的事实来源。不要编造事实、决策、负责人、日期、数字或行动项。如果不确定，标注为不确定。
 
-Create concise, practical meeting notes with:
+请生成简洁实用的会议纪要，包含以下内容：
 
-1. Meeting summary
-2. Key discussion points
-3. Decisions made
-4. Action items, including owner and deadline when available
-5. Open questions or follow-ups
+1. 会议概要
+2. 关键讨论要点
+3. 已做出的决策
+4. 行动项，包含负责人和截止时间（如有）
+5. 待讨论的问题或后续事项
 
-Preserve important nuance and uncertainty. Use clear Markdown.
+保留重要的细微差别和不确定性。使用清晰的 Markdown 格式。

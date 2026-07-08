@@ -8,7 +8,7 @@ from typing import Callable
 
 from .audio_splitter import split_audio
 from .config import Settings
-from .summarize import create_notes_input
+from .summarize import apply_obsidian_template, create_notes_input, generate_minutes
 from .transcribe_mimo import transcribe_chunks
 from .transcript_merger import merge_transcripts
 from .utils import create_task_dir, safe_slug, supported_audio_format, validate_chunks_under_limit
@@ -24,14 +24,28 @@ class TranscribeOptions:
     output_dir: Path
     chunk_minutes: int
     max_upload_mb: float
+    output_mode: str = "transcript"
     summarize: bool = False
     prompt_path: Path = Path("prompts/default_minutes.md")
+    llm_provider: str = "deepseek"
+    llm_model: str = "deepseek-v4-flash"
+    obsidian_template_path: Path = Path("prompts/obsidian_minutes.md")
 
     def __post_init__(self) -> None:
         if self.chunk_minutes <= 0:
             raise ValueError(f"Chunk length must be greater than 0, got {self.chunk_minutes!r}.")
         if self.max_upload_mb <= 0:
             raise ValueError(f"Max upload size must be greater than 0, got {self.max_upload_mb!r}.")
+        if self.output_mode not in ("transcript", "notes", "minutes"):
+            raise ValueError(f"Invalid output_mode: {self.output_mode!r}. Expected transcript, notes, or minutes.")
+
+    @property
+    def _needs_notes(self) -> bool:
+        return self.output_mode in ("notes", "minutes") or self.summarize
+
+    @property
+    def _needs_llm(self) -> bool:
+        return self.output_mode == "minutes"
 
 
 @dataclass(frozen=True)
@@ -265,7 +279,7 @@ def run_transcription_workflow(
     transcript_path = merge_transcripts(transcripts_dir, task_dir / "transcript.md")
 
     notes_input_path: Path | None = None
-    if options.summarize:
+    if options._needs_notes:
         if status_callback:
             status_callback("Preparing notes input")
         notes_input_path = create_notes_input(
@@ -274,9 +288,24 @@ def run_transcription_workflow(
             task_dir / "notes_input.md",
         )
 
-    minutes_path = task_dir / "meeting_minutes.md"
-    if not minutes_path.exists():
-        minutes_path = None
+    minutes_path: Path | None = None
+    if options._needs_llm:
+        if status_callback:
+            status_callback("Generating meeting minutes via LLM")
+        try:
+            minutes_text = _run_llm_minutes(
+                notes_input_path,
+                task_dir,
+                settings,
+                options,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"转写已完成，notes_input.md 已生成，但会议总结生成失败：{exc}"
+            )
+
+        minutes_path = task_dir / "meeting_minutes.md"
+        minutes_path.write_text(minutes_text, encoding="utf-8")
 
     if status_callback:
         status_callback("Done")
@@ -284,5 +313,51 @@ def run_transcription_workflow(
         task_dir=task_dir,
         transcript_path=transcript_path,
         notes_input_path=notes_input_path,
-        minutes_path=minutes_path,
+        minutes_path=minutes_path if minutes_path else None,
     )
+
+
+def _run_llm_minutes(
+    notes_input_path: Path | None,
+    task_dir: Path,
+    settings: Settings,
+    options: TranscribeOptions,
+) -> str:
+    if notes_input_path is None:
+        raise RuntimeError("notes_input.md was not generated; cannot create meeting minutes.")
+
+    provider = options.llm_provider
+    if provider != "deepseek":
+        raise RuntimeError(
+            f"output-mode=minutes requires MINUTES_PROVIDER=deepseek or --llm-provider deepseek, got {provider!r}."
+        )
+
+    api_key = settings.require_deepseek_api_key()
+    endpoint = settings.deepseek_endpoint
+    model = options.llm_model
+    timeout_seconds = settings.llm_timeout_seconds
+
+    raw_minutes = generate_minutes(
+        notes_input_path,
+        api_key,
+        endpoint=endpoint,
+        model=model,
+        timeout_seconds=timeout_seconds,
+    )
+
+    transcript = ""
+    transcript_path = task_dir / "transcript.md"
+    if transcript_path.exists():
+        transcript = transcript_path.read_text(encoding="utf-8")
+
+    title = safe_slug(task_dir.name.split("_", 2)[-1] if "_" in task_dir.name else task_dir.name)
+    task_name = task_dir.name
+
+    wrapped = apply_obsidian_template(
+        options.obsidian_template_path.expanduser().resolve(),
+        minutes_text=raw_minutes,
+        title=title,
+        task_name=task_name,
+        transcript=transcript,
+    )
+    return wrapped

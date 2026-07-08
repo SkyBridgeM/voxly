@@ -1,8 +1,8 @@
 # meeting-asr
 
-`meeting-asr` is a local-first Python CLI for recording or importing meeting audio, splitting it into upload-safe chunks, transcribing each chunk with MiMo ASR, and merging the result into a clean `transcript.md`.
+`meeting-asr` is a local-first Python CLI for recording or importing meeting audio, splitting it into upload-safe chunks, transcribing each chunk with MiMo ASR, and generating meeting minutes via LLM (DeepSeek).
 
-The main stable workflow is transcription. In v1, `--summarize` prepares `notes_input.md` from a prompt template and the transcript; it does not call an LLM or generate `meeting_minutes.md` yet.
+Three output modes are available: `transcript` (raw transcription only), `notes` (transcript + notes input for manual processing), and `minutes` (full pipeline including LLM-generated meeting minutes).
 
 ## Installation
 
@@ -51,7 +51,7 @@ python -m meeting_asr.main --help
 
 ## Environment Setup
 
-Copy the example file and add your MiMo API key:
+Copy the example file and add your keys:
 
 ```bash
 cp .env.example .env
@@ -60,21 +60,35 @@ cp .env.example .env
 Set:
 
 ```text
-MIMO_API_KEY=your_api_key_here
+MIMO_API_KEY=your_mimo_api_key_here
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ```
 
 Optional values:
 
 ```text
+# MiMo ASR
 MIMO_ASR_ENDPOINT=https://api.xiaomimimo.com/v1/chat/completions
 MIMO_ASR_MODEL=mimo-v2.5-asr
+
+# Upload and retry
 MAX_UPLOAD_MB=10
 DEFAULT_CHUNK_MINUTES=5
 MIMO_RETRY_COUNT=3
 MIMO_TIMEOUT_SECONDS=120
+
+# LLM minutes generation
+MINUTES_PROVIDER=deepseek
+DEEPSEEK_ENDPOINT=https://api.deepseek.com/chat/completions
+DEEPSEEK_MODEL=deepseek-v4-flash
+LLM_TIMEOUT_SECONDS=120
+MINUTES_PROMPT_PATH=prompts/default_minutes.md
+OBSIDIAN_TEMPLATE_PATH=prompts/obsidian_minutes.md
 ```
 
 API keys and configurable values are read from `.env`. Do not put secrets in source files.
+
+MiMo is used for ASR transcription. DeepSeek is used for LLM meeting minutes generation.
 
 ## ffmpeg
 
@@ -132,22 +146,46 @@ ffmpeg -f avfoundation -list_devices true -i ""
 
 ## Usage
 
-Transcribe an existing file:
+### Output Modes
+
+`meeting-asr` supports three output modes:
+
+- **`transcript`** (default): Only generates `transcript.md`. Audio is sent to MiMo ASR.
+- **`notes`**: Generates `transcript.md` + `notes_input.md` (prompt + transcript). No LLM is called.
+- **`minutes`**: Generates `transcript.md` + `notes_input.md` + `meeting_minutes.md` via LLM. Transcription text is sent to DeepSeek.
+
+The old `--summarize` flag is still accepted and equivalent to `--output-mode notes`, but is deprecated. When both `--summarize` and `--output-mode` are passed, `--output-mode` takes priority.
+
+### Transcribe an Existing File
+
+Basic transcription:
 
 ```bash
 meeting-asr transcribe input/meeting.mp3
 ```
 
-Prepare notes input after transcription:
+Generate notes input (prompt + transcript):
 
 ```bash
-meeting-asr transcribe input/meeting.mp3 --summarize
+meeting-asr transcribe input/meeting.mp3 --output-mode notes
 ```
 
-Use a custom notes prompt:
+Generate LLM meeting minutes:
 
 ```bash
-meeting-asr transcribe input/meeting.mp3 --summarize --prompt prompts/default_minutes.md
+meeting-asr transcribe input/meeting.mp3 --output-mode minutes
+```
+
+Use `deepseek-v4-pro` for higher quality:
+
+```bash
+meeting-asr transcribe input/meeting.mp3 --output-mode minutes --llm-model deepseek-v4-pro
+```
+
+Custom Obsidian template:
+
+```bash
+meeting-asr transcribe input/meeting.mp3 --output-mode minutes --obsidian-template prompts/obsidian_minutes.md
 ```
 
 Change chunk length:
@@ -162,16 +200,18 @@ Choose output directory:
 meeting-asr transcribe input/meeting.mp3 --output-dir "/Users/yourname/Documents/MeetingNotes"
 ```
 
+### Recording
+
 Record for a fixed duration:
 
 ```bash
 meeting-asr record --duration 60
 ```
 
-Record and prepare notes input:
+Record with LLM minutes:
 
 ```bash
-meeting-asr record --duration 60 --summarize
+meeting-asr record --duration 60 --output-mode minutes
 ```
 
 Record 90 minutes in 5-minute chunks:
@@ -183,10 +223,24 @@ meeting-asr record --duration 90 --chunk-minutes 5 --output-dir "/Users/yourname
 Record until Ctrl+C:
 
 ```bash
-meeting-asr record --summarize
+meeting-asr record --output-mode notes
 ```
 
 When no duration is provided, Ctrl+C stops recording and then continues with transcription for the completed chunks.
+
+### Resume
+
+Resume an existing task (skips already-transcribed chunks):
+
+```bash
+meeting-asr resume output/20250707_143000_meeting_name
+```
+
+Regenerate notes or minutes after resume:
+
+```bash
+meeting-asr resume output/20250707_143000_meeting_name --output-mode minutes
+```
 
 ## Local WebUI
 
@@ -244,29 +298,41 @@ Check or toggle the background WebUI:
 ./scripts/toggle_webui.sh
 ```
 
-If `.env` is missing, the start script prints a warning but still opens the WebUI. Transcription requires `MIMO_API_KEY` in `.env`.
+If `.env` is missing, the start script prints a warning but still opens the WebUI. Transcription requires `MIMO_API_KEY` in `.env`. LLM minutes generation requires `DEEPSEEK_API_KEY` in `.env`.
 
-The WebUI can read `MIMO_API_KEY` from `.env` without showing the key in the sidebar. You can also paste a MIMO API key into the WebUI for the current run only; this temporary value is not saved by default. To save it for future runs, check **Save API key to .env for future runs** and click **Save API key**. This updates only `MIMO_API_KEY` in the local `.env` file.
+### WebUI Output Modes
 
-The WebUI supports:
+The WebUI supports two output modes:
 
-- uploading `mp3` or `wav` audio;
-- choosing output directory;
-- choosing chunk length;
-- setting max upload size for the current run;
-- generating `notes_input.md` from a selected prompt template;
-- previewing `transcript.md`;
-- downloading `transcript.md`, `notes_input.md`, `meeting_minutes.md` if present, and a zip of text outputs.
+- **输出原文** (Output transcript): Only generates `transcript.md`. Audio is sent to MiMo ASR.
+- **生成总结** (Generate summary): Calls DeepSeek to generate `meeting_minutes.md` in addition to `transcript.md` and `notes_input.md`. Transcription text is sent to DeepSeek.
 
-The WebUI does not expose your saved API key. It only shows whether `MIMO_API_KEY` was detected from `.env`.
+Privacy warnings are shown for each mode, explaining which provider receives your data.
 
-The WebUI does not record audio in this MVP. Recording remains CLI-first. Use:
+### WebUI API Keys
+
+API keys are managed in a collapsible "API keys" section in the sidebar (collapsed by default):
+
+- **MIMO API key（用于 ASR 转写）**: Detects `.env` key status, supports temporary override and save.
+- **DeepSeek API key（用于 LLM 总结）**: Detects `.env` key status, supports temporary override and save.
+
+Keys are never displayed in plain text. You can save each key to `.env` for future use.
+
+### WebUI LLM Settings
+
+When "生成总结" mode is selected, the sidebar shows:
+
+- Provider dropdown (currently only DeepSeek).
+- Model dropdown: `DeepSeek V4 Flash（更快/更省）` or `DeepSeek V4 Pro（质量更高）`.
+- "保存为默认总结服务商" button to persist the selected model to `.env`.
+
+The WebUI does not expose prompt/template path settings. Custom templates must be configured via CLI or `.env` defaults.
+
+The WebUI does not record audio. Recording remains CLI-first. Use:
 
 ```bash
 meeting-asr record --duration 60 --chunk-minutes 5
 ```
-
-Privacy note: audio is sent to MiMo ASR when transcription runs. Do not upload sensitive meetings unless you are allowed to use cloud ASR.
 
 ## Output Layout
 
@@ -284,6 +350,7 @@ output/
       part_002.txt
     transcript.md
     notes_input.md
+    meeting_minutes.md
 ```
 
 For recordings:
@@ -295,8 +362,9 @@ output/
 
 Final filenames are stable inside the task folder:
 
-- `transcript.md`
-- `notes_input.md`, only when `--summarize` is passed
+- `transcript.md` — always generated
+- `notes_input.md` — generated in `notes` and `minutes` modes
+- `meeting_minutes.md` — generated in `minutes` mode, wrapped with Obsidian template
 
 ## Resumable Transcription
 
@@ -318,12 +386,18 @@ meeting-asr resume output/20260707_143000_meeting_name
 Resume and regenerate `notes_input.md`:
 
 ```bash
-meeting-asr resume output/20260707_143000_meeting_name --summarize
+meeting-asr resume output/20260707_143000_meeting_name --output-mode notes
+```
+
+Resume and regenerate LLM minutes:
+
+```bash
+meeting-asr resume output/20260707_143000_meeting_name --output-mode minutes
 ```
 
 `resume` first reads existing chunks from `chunks/part_*.mp3` or `chunks/part_*.wav`. If `chunks/` has no chunks, it falls back to `audio/part_*.wav` for recorded tasks. Chunk files must start at `part_001` and be numbered continuously.
 
-After transcription, `resume` always rebuilds `transcript.md`. When `--summarize` is passed, it overwrites `notes_input.md` using the selected prompt template.
+After transcription, `resume` always rebuilds `transcript.md`. When `--output-mode notes` or `--output-mode minutes` is used, it overwrites `notes_input.md` and/or `meeting_minutes.md`.
 
 `resume` uses the configured `MAX_UPLOAD_MB` value from `.env` to validate existing chunk sizes before upload. Adjust `MAX_UPLOAD_MB` in `.env` if an existing chunk is larger than the current limit.
 
@@ -341,6 +415,32 @@ If a chunk from an imported file is too large, the splitter automatically halves
 
 For recorded audio, chunks are captured directly as 16 kHz mono wav files and checked before upload. If a recorded chunk exceeds the limit, rerun with a smaller `--chunk-minutes` value or increase `MAX_UPLOAD_MB`.
 
+## LLM Minutes Generation
+
+When using `--output-mode minutes`, the workflow:
+
+1. Transcribes audio with MiMo ASR.
+2. Generates `notes_input.md` from the prompt template and transcript.
+3. Sends `notes_input.md` to DeepSeek with a fixed system prompt (bottom-line constraints only — no fabrication, mark uncertainties, Markdown output).
+4. The default system prompt enforces: only generate from transcript, don't invent facts, mark uncertainties, output Markdown.
+5. The LLM response is wrapped with the Obsidian template (placeholder substitution: `{{ title }}`, `{{ generated_at }}`, `{{ generated_minutes }}`, `{{ transcript }}`, `{{ task_name }}`).
+
+The default Obsidian template at `prompts/obsidian_minutes.md` includes YAML frontmatter with title and date, but does **not** include the full transcript. Customize the template to add `{{ transcript }}` if you want the full transcript embedded.
+
+Required configuration for minutes generation:
+
+- `DEEPSEEK_API_KEY` in `.env`
+- `DEEPSEEK_MODEL` in `.env` (default: `deepseek-v4-flash`)
+
+Available models:
+
+- `deepseek-v4-flash` — faster and cost-effective (default)
+- `deepseek-v4-pro` — higher quality
+
+If `output-mode=minutes` and the DeepSeek API key is missing, the command fails with a clear error. It does not fall back to notes mode.
+
+If DeepSeek generation fails (API error, network issue, etc.), the workflow preserves the already-generated `notes_input.md` and reports: "转写已完成，notes_input.md 已生成，但会议总结生成失败。"
+
 ## Notes Prompt Templates
 
 Meeting-note structure is stored in Markdown prompt files, not Python code.
@@ -354,15 +454,39 @@ prompts/default_minutes.md
 Custom:
 
 ```bash
-meeting-asr transcribe input/meeting.mp3 --summarize --prompt prompts/my_template.md
+meeting-asr transcribe input/meeting.mp3 --output-mode notes --prompt prompts/my_template.md
 ```
 
-In v1, this creates `notes_input.md` containing the prompt and transcript. A future LLM provider can consume that file to create `meeting_minutes.md`.
+The prompt template defines the structure of `notes_input.md`, which is used as the user prompt when calling the LLM in `minutes` mode.
+
+## Obsidian Template
+
+The Obsidian template wraps the LLM-generated minutes for use in Obsidian. It supports simple placeholder substitution:
+
+| Placeholder | Description |
+|---|---|
+| `{{ title }}` | Derived from task name |
+| `{{ generated_at }}` | UTC timestamp |
+| `{{ generated_minutes }}` | Raw LLM minutes output |
+| `{{ transcript }}` | Full transcript text (empty by default) |
+| `{{ task_name }}` | Full task directory name |
+
+Default:
+
+```text
+prompts/obsidian_minutes.md
+```
+
+Custom:
+
+```bash
+meeting-asr transcribe input/meeting.mp3 --output-mode minutes --obsidian-template prompts/my_obsidian.md
+```
 
 ## Extension Points
 
 - Add other ASR providers by following the boundary in `src/meeting_asr/transcribe_mimo.py`.
-- Add LLM meeting-minutes generation behind `src/meeting_asr/summarize.py`.
+- Add other LLM providers by following the pattern in `src/meeting_asr/summarize.py`.
 - Add new note formats by creating more files under `prompts/`.
 - Keep workflow orchestration in `src/meeting_asr/main.py` and provider details inside provider modules.
 

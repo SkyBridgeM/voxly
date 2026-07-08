@@ -48,7 +48,7 @@ def build_text_outputs_zip(task_dir: Path) -> bytes:
 
 
 def format_detected(value: bool) -> str:
-    return "Detected" if value else "Not detected"
+    return "已检测到" if value else "未检测到"
 
 
 def update_env_value(env_path: Path, key: str, value: str) -> None:
@@ -89,6 +89,8 @@ def classify_error(exc: Exception) -> tuple[str, str]:
 
     if "mimo_api_key" in lower:
         return "MiMo API key is missing", message
+    if "deepseek_api_key" in lower or "deepseek" in lower and "api key" in lower:
+        return "DeepSeek API key is missing", message
     if "ffmpeg was not found" in lower:
         return "ffmpeg is not installed", message
     if isinstance(exc, ValueError) and "unsupported audio format" in lower:
@@ -99,5 +101,9 @@ def classify_error(exc: Exception) -> tuple[str, str]:
         return "File was not found", message
     if "mimo api error" in lower or "mimo server error" in lower or "failed to transcribe" in lower:
         return "MiMo ASR failed", message
+    if "deepseek" in lower:
+        return "DeepSeek LLM failed", message
+    if "会议总结生成失败" in message:
+        return "LLM 会议总结生成失败", message
 
     return "Run failed", message
