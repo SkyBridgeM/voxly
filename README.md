@@ -403,7 +403,8 @@ After transcription, `resume` always rebuilds `transcript.md`. When `--output-mo
 
 ## Chunking and Upload Limits
 
-Existing `mp3` and `wav` files are split with `ffmpeg`.
+Existing `mp3`, `wav`, and macOS Voice Memos `m4a` files are split with `ffmpeg`.
+`m4a` inputs are converted to 16 kHz mono `wav` chunks before upload.
 
 Defaults:
 
