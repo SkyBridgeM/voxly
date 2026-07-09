@@ -95,6 +95,8 @@ func TestStdoutContract_StatusLine(t *testing.T) {
 		"Status: Splitting audio",
 		"Status: Transcribing 3 chunk(s)",
 		"Status: Merging transcript",
+		"Status: Preparing notes input",
+		"Status: Generating meeting minutes",
 		"Status: Done",
 	}
 	for _, line := range lines {
@@ -138,6 +140,26 @@ func TestStdoutContract_TaskFolderLine(t *testing.T) {
 	}
 }
 
+func TestStdoutContract_SavedLines(t *testing.T) {
+	lines := []string{
+		"Transcript saved: /path/to/transcript.md",
+		"Notes input saved: /path/to/notes_input.md",
+		"Meeting minutes saved: /path/to/meeting_minutes.md",
+		"Task folder: /path/to/task",
+	}
+	prefixes := []string{
+		"Transcript saved: ",
+		"Notes input saved: ",
+		"Meeting minutes saved: ",
+		"Task folder: ",
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefixes[i]) {
+			t.Errorf("line %q must start with %q", line, prefixes[i])
+		}
+	}
+}
+
 // --- Error case tests ---
 
 func TestRunTranscribe_UnsupportedOutputMode(t *testing.T) {
@@ -147,12 +169,57 @@ func TestRunTranscribe_UnsupportedOutputMode(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--output-mode", "minutes", audioPath})
+	err := runTranscribe([]string{"--output-mode", "invalid", audioPath})
 	if err == nil {
 		t.Fatal("expected error for unsupported output-mode")
 	}
-	if !strings.Contains(err.Error(), "only --output-mode transcript") {
+	if !strings.Contains(err.Error(), "invalid --output-mode") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRunTranscribe_NotesModeNoDeepSeekKey(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	// Has MIMO_API_KEY but no DEEPSEEK_API_KEY — notes mode should still work
+	// (it fails at ffmpeg, not at key validation).
+	os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0644)
+	audioPath := filepath.Join(dir, "test.mp3")
+	os.WriteFile(audioPath, []byte("fake"), 0644)
+
+	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "notes", audioPath})
+	if err != nil && strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Errorf("notes mode should not require DEEPSEEK_API_KEY: %v", err)
+	}
+}
+
+func TestRunTranscribe_MinutesModeRequiresDeepSeekKey(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	// Has MIMO_API_KEY but no DEEPSEEK_API_KEY.
+	os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0644)
+	audioPath := filepath.Join(dir, "test.mp3")
+	os.WriteFile(audioPath, []byte("fake"), 0644)
+
+	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "minutes", audioPath})
+	if err == nil {
+		t.Fatal("expected error for missing DEEPSEEK_API_KEY in minutes mode")
+	}
+	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Errorf("error should mention DEEPSEEK_API_KEY, got: %v", err)
+	}
+}
+
+func TestRunTranscribe_TranscriptModeNoDeepSeekKey(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0644)
+	audioPath := filepath.Join(dir, "test.mp3")
+	os.WriteFile(audioPath, []byte("fake"), 0644)
+
+	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "transcript", audioPath})
+	if err != nil && strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Errorf("transcript mode should not require DEEPSEEK_API_KEY: %v", err)
 	}
 }
 
@@ -228,5 +295,148 @@ func TestRunTranscribe_AudioNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error should mention not found, got: %v", err)
+	}
+}
+
+// --- CLI path resolution tests ---
+
+func TestResolveCLIPath(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"absolute unchanged", "/abs/path.md", "/abs/path.md"},
+		{"relative joins cwd", "prompt.md", filepath.Join(cwd, "prompt.md")},
+		{"nested relative", "prompts/default.md", filepath.Join(cwd, "prompts", "default.md")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveCLIPath(tt.in)
+			if got != tt.want {
+				t.Errorf("resolveCLIPath(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunTranscribe_CLIFlagPathResolvesRelativeToCwd(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROMPT_PATH=env_prompt.md\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	audioPath := filepath.Join(dir, "test.mp3")
+	if err := os.WriteFile(audioPath, []byte("fake-audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// CLI --prompt-path "cli_prompt.md" should resolve to cwd/cli_prompt.md,
+	// NOT dir/cli_prompt.md (which would be .env-relative).
+	err := runTranscribe([]string{
+		"--env-file", envPath,
+		"--prompt-path", "cli_prompt.md",
+		"--output-dir", filepath.Join(dir, "out"),
+		audioPath,
+	})
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), ".env") {
+		t.Errorf("CLI path should resolve relative to cwd, not .env: %v", err)
+	}
+}
+
+func TestRunResume_CLIFlagPathResolvesRelativeToCwd(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	taskDir := filepath.Join(dir, "task")
+	chunksDir := filepath.Join(taskDir, "chunks")
+	if err := os.MkdirAll(chunksDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(chunksDir, "part_001.wav"), []byte("audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunResume([]string{
+		"--env-file", envPath,
+		"--prompt-path", "cli_prompt.md",
+		taskDir,
+	})
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), ".env") {
+		t.Errorf("CLI path should resolve relative to cwd, not .env: %v", err)
+	}
+}
+
+// --- MINUTES_PROVIDER validation tests ---
+
+func TestRunTranscribe_MinutesProviderNotDeepSeek(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROVIDER=openai\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	audioPath := filepath.Join(dir, "test.mp3")
+	if err := os.WriteFile(audioPath, []byte("fake-audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runTranscribe([]string{
+		"--env-file", envPath,
+		"--output-mode", "minutes",
+		audioPath,
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported MINUTES_PROVIDER")
+	}
+	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") {
+		t.Errorf("error should mention required provider, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `"openai"`) {
+		t.Errorf("error should mention actual provider, got: %v", err)
+	}
+}
+
+func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROVIDER=openai\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	taskDir := filepath.Join(dir, "task")
+	chunksDir := filepath.Join(taskDir, "chunks")
+	if err := os.MkdirAll(chunksDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(chunksDir, "part_001.wav"), []byte("audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunResume([]string{
+		"--env-file", envPath,
+		"--output-mode", "minutes",
+		taskDir,
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported MINUTES_PROVIDER")
+	}
+	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") {
+		t.Errorf("error should mention required provider, got: %v", err)
 	}
 }

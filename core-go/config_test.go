@@ -78,6 +78,115 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsDeepSeekDefaults(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=sk-test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.MinutesProvider != defaultMinutesProvider {
+		t.Errorf("default MinutesProvider = %q, want %q", s.MinutesProvider, defaultMinutesProvider)
+	}
+	if s.DeepSeekEndpoint != defaultDeepSeekEndpoint {
+		t.Errorf("default DeepSeekEndpoint = %q, want %q", s.DeepSeekEndpoint, defaultDeepSeekEndpoint)
+	}
+	if s.DeepSeekModel != defaultDeepSeekModel {
+		t.Errorf("default DeepSeekModel = %q, want %q", s.DeepSeekModel, defaultDeepSeekModel)
+	}
+	if s.LLMTimeoutSeconds != defaultLLMTimeoutSeconds {
+		t.Errorf("default LLMTimeoutSeconds = %v, want %v", s.LLMTimeoutSeconds, defaultLLMTimeoutSeconds)
+	}
+	if s.MinutesPromptPath != defaultMinutesPromptPath {
+		t.Errorf("default MinutesPromptPath = %q, want %q", s.MinutesPromptPath, defaultMinutesPromptPath)
+	}
+	if s.ObsidianTemplatePath != defaultObsidianTemplatePath {
+		t.Errorf("default ObsidianTemplatePath = %q, want %q", s.ObsidianTemplatePath, defaultObsidianTemplatePath)
+	}
+}
+
+func TestLoadSettingsDeepSeekCustom(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `MIMO_API_KEY=x
+DEEPSEEK_API_KEY=sk-deep
+DEEPSEEK_ENDPOINT=https://custom.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
+LLM_TIMEOUT_SECONDS=60
+MINUTES_PROMPT_PATH=custom_prompt.md
+OBSIDIAN_TEMPLATE_PATH=custom_template.md
+`
+	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.DeepSeekAPIKey != "sk-deep" {
+		t.Errorf("DeepSeekAPIKey = %q", s.DeepSeekAPIKey)
+	}
+	if s.DeepSeekEndpoint != "https://custom.deepseek.com" {
+		t.Errorf("DeepSeekEndpoint = %q", s.DeepSeekEndpoint)
+	}
+	if s.DeepSeekModel != "deepseek-v4-pro" {
+		t.Errorf("DeepSeekModel = %q", s.DeepSeekModel)
+	}
+	if s.LLMTimeoutSeconds != 60 {
+		t.Errorf("LLMTimeoutSeconds = %v", s.LLMTimeoutSeconds)
+	}
+	if s.MinutesPromptPath != "custom_prompt.md" {
+		t.Errorf("MinutesPromptPath = %q", s.MinutesPromptPath)
+	}
+	if s.ObsidianTemplatePath != "custom_template.md" {
+		t.Errorf("ObsidianTemplatePath = %q", s.ObsidianTemplatePath)
+	}
+}
+
+func TestSettingsResolvePath(t *testing.T) {
+	s := DefaultSettings()
+	s.EnvBase = "/project"
+
+	// Absolute path — unchanged.
+	if got := s.ResolvePath("/absolute/path"); got != "/absolute/path" {
+		t.Errorf("absolute: got %q", got)
+	}
+
+	// Relative path — resolved against EnvBase.
+	if got := s.ResolvePath("prompts/default.md"); got != "/project/prompts/default.md" {
+		t.Errorf("relative: got %q", got)
+	}
+}
+
+func TestRequireDeepSeekAPIKey(t *testing.T) {
+	s := DefaultSettings()
+	s.DeepSeekAPIKey = ""
+
+	_, err := s.RequireDeepSeekAPIKey()
+	if err == nil {
+		t.Fatal("expected error for empty DeepSeekAPIKey")
+	}
+	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Errorf("error should mention DEEPSEEK_API_KEY: %v", err)
+	}
+
+	s.DeepSeekAPIKey = "sk-test"
+	key, err := s.RequireDeepSeekAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "sk-test" {
+		t.Errorf("got %q, want %q", key, "sk-test")
+	}
+}
+
 func TestLoadSettingsMissingFile(t *testing.T) {
 	_, err := LoadSettings("/nonexistent/.env")
 	if err == nil {
@@ -234,5 +343,83 @@ func TestEnvVarPrecedence(t *testing.T) {
 	}
 	if s.MimoAPIKey != "from-env" {
 		t.Errorf("MimoAPIKey = %q, want %q (env should take precedence)", s.MimoAPIKey, "from-env")
+	}
+}
+
+func TestResolvePath_RelativeToEnvBase(t *testing.T) {
+	s := DefaultSettings()
+	s.EnvBase = "/project/root"
+
+	// Relative path should be resolved relative to EnvBase.
+	result := s.ResolvePath("prompts/default.md")
+	expected := "/project/root/prompts/default.md"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestResolvePath_AbsolutePath(t *testing.T) {
+	s := DefaultSettings()
+	s.EnvBase = "/project/root"
+
+	// Absolute path should be returned as-is.
+	result := s.ResolvePath("/absolute/path/prompt.md")
+	expected := "/absolute/path/prompt.md"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestResolvePath_EmptyEnvBase(t *testing.T) {
+	s := DefaultSettings()
+	s.EnvBase = ""
+
+	// With empty EnvBase, relative path should be returned as-is.
+	result := s.ResolvePath("prompts/default.md")
+	expected := "prompts/default.md"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestLoadSettings_PromptPaths(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `MIMO_API_KEY=test
+MINUTES_PROMPT_PATH=custom/prompts/minutes.md
+OBSIDIAN_TEMPLATE_PATH=custom/templates/obsidian.md
+`
+	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.MinutesPromptPath != "custom/prompts/minutes.md" {
+		t.Errorf("MinutesPromptPath = %q, want %q", s.MinutesPromptPath, "custom/prompts/minutes.md")
+	}
+	if s.ObsidianTemplatePath != "custom/templates/obsidian.md" {
+		t.Errorf("ObsidianTemplatePath = %q, want %q", s.ObsidianTemplatePath, "custom/templates/obsidian.md")
+	}
+
+	// EnvBase should be set to the directory containing .env.
+	if s.EnvBase != dir {
+		t.Errorf("EnvBase = %q, want %q", s.EnvBase, dir)
+	}
+
+	// ResolvePath should resolve relative to EnvBase.
+	resolvedPrompt := s.ResolvePath(s.MinutesPromptPath)
+	expectedPrompt := filepath.Join(dir, "custom/prompts/minutes.md")
+	if resolvedPrompt != expectedPrompt {
+		t.Errorf("resolved prompt path = %q, want %q", resolvedPrompt, expectedPrompt)
+	}
+
+	resolvedTemplate := s.ResolvePath(s.ObsidianTemplatePath)
+	expectedTemplate := filepath.Join(dir, "custom/templates/obsidian.md")
+	if resolvedTemplate != expectedTemplate {
+		t.Errorf("resolved template path = %q, want %q", resolvedTemplate, expectedTemplate)
 	}
 }

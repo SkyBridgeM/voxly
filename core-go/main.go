@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const version = "0.1.0-spike"
+const version = "0.2.0-minutes"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -19,6 +19,11 @@ func main() {
 	switch os.Args[1] {
 	case "transcribe":
 		if err := runTranscribe(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "resume":
+		if err := RunResume(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -38,14 +43,17 @@ func printUsage() {
 
 Usage:
   meeting-asr-go transcribe <audio_path> [flags]
+  meeting-asr-go resume <task_dir> [flags]
 
 Flags:
-  --output-mode transcript   Output mode (only "transcript" supported in spike)
+  --output-mode transcript   Output mode: transcript, notes, or minutes
   --output-dir output        Base output directory
   --chunk-minutes 5          Chunk length in minutes
   --max-upload-mb 10         Max upload size in MB
   --env-file path            Explicit path to .env file (default: search upward from cwd)
   --project-root path        Explicit project root for .env lookup (default: cwd)
+  --prompt-path path         Path to prompt template
+  --obsidian-template-path path  Path to Obsidian template
 
 `, version)
 }
@@ -89,14 +97,16 @@ func runTranscribe(args []string) error {
 	maxUploadMB := fs.Float64("max-upload-mb", 0, "Max upload size in MB (0 = use .env or default)")
 	envFile := fs.String("env-file", "", "Explicit path to .env file")
 	projectRoot := fs.String("project-root", "", "Explicit project root for .env lookup")
+	promptPath := fs.String("prompt-path", "", "Path to prompt template")
+	obsidianTemplatePath := fs.String("obsidian-template-path", "", "Path to Obsidian template")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
 		return err
 	}
 
-	if *outputMode != "transcript" {
-		return fmt.Errorf("only --output-mode transcript is supported in this spike, got %q", *outputMode)
+	if *outputMode != "transcript" && *outputMode != "notes" && *outputMode != "minutes" {
+		return fmt.Errorf("invalid --output-mode %q. Supported: transcript, notes, minutes", *outputMode)
 	}
 
 	if fs.NArg() < 1 {
@@ -167,10 +177,26 @@ func runTranscribe(args []string) error {
 	if *maxUploadMB > 0 {
 		settings.MaxUploadMB = *maxUploadMB
 	}
+	if *promptPath != "" {
+		settings.MinutesPromptPath = resolveCLIPath(*promptPath)
+	}
+	if *obsidianTemplatePath != "" {
+		settings.ObsidianTemplatePath = resolveCLIPath(*obsidianTemplatePath)
+	}
 
-	// Validate API key.
+	// Validate API key (always needed).
 	if _, err := settings.RequireMimoAPIKey(); err != nil {
 		return err
+	}
+
+	// Fail fast on unsupported minutes provider before expensive work.
+	if *outputMode == "minutes" {
+		if err := ValidateMinutesProvider(settings); err != nil {
+			return err
+		}
+		if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
+			return err
+		}
 	}
 
 	// Resolve output directory.
@@ -180,10 +206,10 @@ func runTranscribe(args []string) error {
 	}
 
 	// Run the workflow.
-	return runWorkflow(absAudio, absOutput, settings)
+	return runWorkflow(absAudio, absOutput, settings, *outputMode)
 }
 
-func runWorkflow(audioPath, outputDir string, settings *Settings) error {
+func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode string) error {
 	// 1. Create task directory.
 	audioStem := filepath.Base(audioPath)
 	audioStem = audioStem[:len(audioStem)-len(filepath.Ext(audioStem))]
@@ -199,14 +225,21 @@ func runWorkflow(audioPath, outputDir string, settings *Settings) error {
 		return fmt.Errorf("copying audio: %w", err)
 	}
 
-	// 3. Split audio.
+	// 3. Create manifest.
+	manifest := CreateManifest(taskDir, audioPath, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, "mimo", settings.MimoModel)
+	if err := SaveManifest(taskDir, manifest); err != nil {
+		return fmt.Errorf("creating manifest: %w", err)
+	}
+
+	// 4. Split audio.
 	fmt.Println("Status: Splitting audio")
 	chunks, err := SplitAudio(sourceCopy, filepath.Join(taskDir, "chunks"), settings.DefaultChunkMin, settings.MaxUploadBytes())
 	if err != nil {
+		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
 		return fmt.Errorf("splitting audio: %w", err)
 	}
 
-	// 4. Transcribe chunks.
+	// 5. Transcribe chunks.
 	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(chunks))
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	progressFn := func(action string, index, total int) {
@@ -215,20 +248,96 @@ func runWorkflow(audioPath, outputDir string, settings *Settings) error {
 		}
 	}
 	if _, err := TranscribeChunks(chunks, transcriptsDir, settings, progressFn); err != nil {
+		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
 		return fmt.Errorf("transcribing: %w", err)
 	}
 
-	// 5. Merge transcripts.
+	// 6. Merge transcripts.
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
+		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
 		return fmt.Errorf("merging transcripts: %w", err)
 	}
 
-	// 6. Done.
+	// 7. notes_input.md (notes and minutes modes).
+	var notesInputPath string
+	if outputMode == "notes" || outputMode == "minutes" {
+		fmt.Println("Status: Preparing notes input")
+		promptPath := settings.ResolvePath(settings.MinutesPromptPath)
+		notesInputPath = filepath.Join(taskDir, "notes_input.md")
+		if err := CreateNotesInput(promptPath, transcriptPath, notesInputPath); err != nil {
+			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
+			return fmt.Errorf("creating notes input: %w", err)
+		}
+	}
+
+	// 8. meeting_minutes.md (minutes mode only).
+	var minutesPath string
+	if outputMode == "minutes" {
+		fmt.Println("Status: Generating meeting minutes")
+		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
+		if err != nil {
+			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
+			return fmt.Errorf("generating meeting minutes: %w", err)
+		}
+
+		// Apply Obsidian template.
+		templatePath := settings.ResolvePath(settings.ObsidianTemplatePath)
+		title := ExtractTitle(filepath.Base(taskDir))
+		taskName := filepath.Base(taskDir)
+
+		transcriptData, err := os.ReadFile(transcriptPath)
+		if err != nil {
+			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
+			return fmt.Errorf("reading transcript for template: %w", err)
+		}
+
+		wrapped, err := ApplyObsidianTemplate(templatePath, rawMinutes, title, taskName, string(transcriptData))
+		if err != nil {
+			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
+			return fmt.Errorf("applying Obsidian template: %w", err)
+		}
+
+		minutesPath = filepath.Join(taskDir, "meeting_minutes.md")
+		if err := os.WriteFile(minutesPath, []byte(wrapped), 0644); err != nil {
+			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
+			return fmt.Errorf("writing meeting minutes: %w", err)
+		}
+	}
+
+	// 9. Update manifest status to completed.
+	_ = UpdateManifestStatus(taskDir, "completed", nil)
+
+	// 10. Done.
 	fmt.Println("Status: Done")
 	fmt.Printf("Transcript saved: %s\n", transcriptPath)
+	if notesInputPath != "" {
+		fmt.Printf("Notes input saved: %s\n", notesInputPath)
+	}
+	if minutesPath != "" {
+		fmt.Printf("Meeting minutes saved: %s\n", minutesPath)
+	}
 	fmt.Printf("Task folder: %s\n", taskDir)
 
 	return nil
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+// resolveCLIPath resolves a CLI flag path relative to the current working directory.
+// This ensures CLI flags override .env paths with cwd-relative semantics,
+// not .env-file-relative semantics.
+func resolveCLIPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		// Fallback: return as-is if we can't get cwd.
+		return p
+	}
+	return filepath.Join(cwd, p)
 }

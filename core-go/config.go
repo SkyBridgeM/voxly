@@ -10,13 +10,19 @@ import (
 )
 
 const (
-	defaultMimoEndpoint    = "https://api.xiaomimimo.com/v1/chat/completions"
-	defaultMimoModel       = "mimo-v2.5-asr"
-	defaultMaxUploadMB     = 10.0
-	defaultChunkMinutes    = 5
-	defaultRetryCount      = 3
-	defaultTimeoutSeconds  = 120
-	minChunkSeconds        = 60
+	defaultMimoEndpoint         = "https://api.xiaomimimo.com/v1/chat/completions"
+	defaultMimoModel            = "mimo-v2.5-asr"
+	defaultMaxUploadMB          = 10.0
+	defaultChunkMinutes         = 5
+	defaultRetryCount           = 3
+	defaultTimeoutSeconds       = 120
+	minChunkSeconds             = 60
+	defaultMinutesProvider      = "deepseek"
+	defaultDeepSeekEndpoint     = "https://api.deepseek.com/chat/completions"
+	defaultDeepSeekModel        = "deepseek-v4-flash"
+	defaultLLMTimeoutSeconds    = 120
+	defaultMinutesPromptPath    = "prompts/default_minutes.md"
+	defaultObsidianTemplatePath = "prompts/obsidian_minutes.md"
 )
 
 var supportedAudioSuffixes = map[string]bool{
@@ -26,23 +32,38 @@ var supportedAudioSuffixes = map[string]bool{
 }
 
 type Settings struct {
-	MimoAPIKey       string
-	MimoEndpoint     string
-	MimoModel        string
-	MaxUploadMB      float64
-	DefaultChunkMin  int
-	RetryCount       int
-	TimeoutSeconds   int
+	MimoAPIKey           string
+	MimoEndpoint         string
+	MimoModel            string
+	MaxUploadMB          float64
+	DefaultChunkMin      int
+	RetryCount           int
+	TimeoutSeconds       int
+	MinutesProvider      string
+	DeepSeekAPIKey       string
+	DeepSeekEndpoint     string
+	DeepSeekModel        string
+	LLMTimeoutSeconds    int
+	MinutesPromptPath    string
+	ObsidianTemplatePath string
+	// EnvBase is the directory containing the .env file, used to resolve relative paths.
+	EnvBase string
 }
 
 func DefaultSettings() *Settings {
 	return &Settings{
-		MimoEndpoint:    defaultMimoEndpoint,
-		MimoModel:       defaultMimoModel,
-		MaxUploadMB:     defaultMaxUploadMB,
-		DefaultChunkMin: defaultChunkMinutes,
-		RetryCount:      defaultRetryCount,
-		TimeoutSeconds:  defaultTimeoutSeconds,
+		MimoEndpoint:         defaultMimoEndpoint,
+		MimoModel:            defaultMimoModel,
+		MaxUploadMB:          defaultMaxUploadMB,
+		DefaultChunkMin:      defaultChunkMinutes,
+		RetryCount:           defaultRetryCount,
+		TimeoutSeconds:       defaultTimeoutSeconds,
+		MinutesProvider:      defaultMinutesProvider,
+		DeepSeekEndpoint:     defaultDeepSeekEndpoint,
+		DeepSeekModel:        defaultDeepSeekModel,
+		LLMTimeoutSeconds:    defaultLLMTimeoutSeconds,
+		MinutesPromptPath:    defaultMinutesPromptPath,
+		ObsidianTemplatePath: defaultObsidianTemplatePath,
 	}
 }
 
@@ -55,6 +76,21 @@ func (s *Settings) RequireMimoAPIKey() (string, error) {
 		return "", fmt.Errorf("MIMO_API_KEY is not configured. Copy .env.example to .env and set MIMO_API_KEY")
 	}
 	return s.MimoAPIKey, nil
+}
+
+func (s *Settings) RequireDeepSeekAPIKey() (string, error) {
+	if s.DeepSeekAPIKey == "" {
+		return "", fmt.Errorf("DEEPSEEK_API_KEY is not configured. Copy .env.example to .env and set DEEPSEEK_API_KEY")
+	}
+	return s.DeepSeekAPIKey, nil
+}
+
+// ResolvePath resolves a path relative to EnvBase if it is not absolute.
+func (s *Settings) ResolvePath(p string) string {
+	if filepath.IsAbs(p) || s.EnvBase == "" {
+		return p
+	}
+	return filepath.Join(s.EnvBase, p)
 }
 
 // FindEnvFile searches upward from startDir looking for a .env file.
@@ -80,6 +116,12 @@ func FindEnvFile(startDir string) (string, bool) {
 // LoadSettings reads a .env file and returns Settings with defaults applied.
 func LoadSettings(envPath string) (*Settings, error) {
 	s := DefaultSettings()
+
+	// Set EnvBase to the directory containing the .env file.
+	absEnv, err := filepath.Abs(envPath)
+	if err == nil {
+		s.EnvBase = filepath.Dir(absEnv)
+	}
 
 	vars, err := parseEnvFile(envPath)
 	if err != nil {
@@ -136,9 +178,42 @@ func LoadSettings(envPath string) (*Settings, error) {
 		s.TimeoutSeconds = n
 	}
 
-	// Override MIMO_API_KEY from environment if set (env vars take precedence over .env file).
+	// DeepSeek / minutes settings.
+	if v, ok := vars["MINUTES_PROVIDER"]; ok {
+		s.MinutesProvider = v
+	}
+	if v, ok := vars["DEEPSEEK_API_KEY"]; ok {
+		s.DeepSeekAPIKey = v
+	}
+	if v, ok := vars["DEEPSEEK_ENDPOINT"]; ok {
+		s.DeepSeekEndpoint = v
+	}
+	if v, ok := vars["DEEPSEEK_MODEL"]; ok {
+		s.DeepSeekModel = v
+	}
+	if v, ok := vars["LLM_TIMEOUT_SECONDS"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("LLM_TIMEOUT_SECONDS must be an integer, got %q", v)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("LLM_TIMEOUT_SECONDS must be greater than 0, got %v", n)
+		}
+		s.LLMTimeoutSeconds = n
+	}
+	if v, ok := vars["MINUTES_PROMPT_PATH"]; ok {
+		s.MinutesPromptPath = v
+	}
+	if v, ok := vars["OBSIDIAN_TEMPLATE_PATH"]; ok {
+		s.ObsidianTemplatePath = v
+	}
+
+	// Override from environment variables (env vars take precedence over .env file).
 	if envKey := os.Getenv("MIMO_API_KEY"); envKey != "" {
 		s.MimoAPIKey = envKey
+	}
+	if envKey := os.Getenv("DEEPSEEK_API_KEY"); envKey != "" {
+		s.DeepSeekAPIKey = envKey
 	}
 
 	return s, nil

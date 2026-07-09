@@ -151,8 +151,8 @@ func BuildMimoASRPayload(audioB64, audioFormat, model string) map[string]interfa
 	dataURL := fmt.Sprintf("data:%s;base64,%s", mime, audioB64)
 
 	return map[string]interface{}{
-		"model":        model,
-		"asr_options":  map[string]string{"language": "auto"},
+		"model":       model,
+		"asr_options": map[string]string{"language": "auto"},
 		"messages": []map[string]interface{}{
 			{
 				"role": "user",
