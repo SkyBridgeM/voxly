@@ -64,6 +64,57 @@ func TestMergeTranscripts(t *testing.T) {
 	}
 }
 
+func TestMergeTranscriptsSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	transcriptsDir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(transcriptsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	os.WriteFile(filepath.Join(transcriptsDir, "part_001.txt"), []byte("Hello from part one.\n"), 0644)
+	os.WriteFile(filepath.Join(transcriptsDir, "part_002.txt"), []byte("Hello from part two.\n"), 0644)
+
+	outputPath := filepath.Join(dir, "transcript.md")
+	if err := MergeTranscripts(transcriptsDir, outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exact snapshot — must match Python merge_transcripts() format.
+	want := "[Part 001]\n\nHello from part one.\n\n[Part 002]\n\nHello from part two.\n"
+	if string(got) != want {
+		t.Errorf("transcript.md snapshot mismatch\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+}
+
+func TestMergeTranscriptsTrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	transcriptsDir := filepath.Join(dir, "transcripts")
+	os.MkdirAll(transcriptsDir, 0755)
+
+	// Part with trailing whitespace — should be trimmed then re-terminated.
+	os.WriteFile(filepath.Join(transcriptsDir, "part_001.txt"), []byte("  text with spaces  \n\n"), 0644)
+
+	outputPath := filepath.Join(dir, "transcript.md")
+	if err := MergeTranscripts(transcriptsDir, outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "[Part 001]\n\ntext with spaces\n"
+	if string(got) != want {
+		t.Errorf("snapshot mismatch\n--- got ---\n%q--- want ---\n%q", got, want)
+	}
+}
+
 func TestMergeTranscriptsEmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	transcriptsDir := filepath.Join(dir, "empty")

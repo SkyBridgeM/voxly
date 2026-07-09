@@ -101,6 +101,97 @@ func TestLoadSettingsInvalidNumber(t *testing.T) {
 	}
 }
 
+func TestParseEnvFileQuotedValues(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `MIMO_API_KEY=plain-value
+MIMO_ASR_ENDPOINT="https://quoted.example.com/v1"
+MIMO_ASR_MODEL='single-quoted-model'
+MAX_UPLOAD_MB=15
+`
+	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.MimoAPIKey != "plain-value" {
+		t.Errorf("plain value: got %q, want %q", s.MimoAPIKey, "plain-value")
+	}
+	if s.MimoEndpoint != "https://quoted.example.com/v1" {
+		t.Errorf("double-quoted value: got %q, want %q", s.MimoEndpoint, "https://quoted.example.com/v1")
+	}
+	if s.MimoModel != "single-quoted-model" {
+		t.Errorf("single-quoted value: got %q, want %q", s.MimoModel, "single-quoted-model")
+	}
+	if s.MaxUploadMB != 15 {
+		t.Errorf("MaxUploadMB = %v, want 15", s.MaxUploadMB)
+	}
+}
+
+func TestParseEnvFileCommentsAndBlanks(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	content := `
+# Top comment
+MIMO_API_KEY=key1
+
+  # Indented comment
+  	MIMO_ASR_MODEL=model1
+
+# Another comment
+MIMO_RETRY_COUNT=2
+
+`
+	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.MimoAPIKey != "key1" {
+		t.Errorf("MimoAPIKey = %q, want %q", s.MimoAPIKey, "key1")
+	}
+	if s.MimoModel != "model1" {
+		t.Errorf("MimoModel = %q, want %q", s.MimoModel, "model1")
+	}
+	if s.RetryCount != 2 {
+		t.Errorf("RetryCount = %v, want 2", s.RetryCount)
+	}
+}
+
+func TestLoadSettingsNegativeValues(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=x\nMAX_UPLOAD_MB=-5\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadSettings(envPath)
+	if err == nil {
+		t.Fatal("expected error for negative MAX_UPLOAD_MB")
+	}
+}
+
+func TestLoadSettingsZeroValues(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=x\nDEFAULT_CHUNK_MINUTES=0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadSettings(envPath)
+	if err == nil {
+		t.Fatal("expected error for zero DEFAULT_CHUNK_MINUTES")
+	}
+}
+
 func TestFindEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "a", "b", "c")

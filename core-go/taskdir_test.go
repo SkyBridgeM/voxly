@@ -21,6 +21,12 @@ func TestSafeSlug(t *testing.T) {
 		{"---test---", "test"},
 		{"hello@world#123", "hello_world_123"},
 		{"my.file.name.wav", "my.file.name"},
+		{"会议记录", "meeting"},
+		{"会议_record", "record"},
+		{"café résumé", "caf_r_sum"},
+		{"file (copy)", "file_copy"},
+		{"a", "a"},
+		{"  spaces  ", "spaces"},
 	}
 	for _, tt := range tests {
 		got := SafeSlug(tt.input)

@@ -13,10 +13,18 @@ The goal is to validate whether the Python core can be replaced by a small Go CL
 
 ## What it does NOT do
 
-- No DeepSeek meeting minutes generation.
-- No recording, resume, or Obsidian templates.
-- No Tauri integration or packaging.
-- No LAN server, database, or task queue.
+- **No DeepSeek minutes** — `--output-mode minutes` is rejected.
+- **No `notes_input.md`** — prompt-based notes input is not generated.
+- **No `meeting_minutes.md`** — LLM meeting minutes generation is not implemented.
+- **No resume** — cannot continue a partially-completed task.
+- **No recording** — cannot record from microphone.
+- **No Tauri integration** — not wired to the desktop app.
+- **No packaging** — no installers, bundles, or auto-update.
+- **No ffmpeg bundling** — requires external `ffmpeg` on PATH.
+- **No Obsidian templates** — no template rendering.
+
+**Python remains the stable baseline.** This spike is for validation only.
+The Python CLI (`meeting-asr`), Streamlit WebUI, and Tauri desktop app are unaffected.
 
 ## Prerequisites
 

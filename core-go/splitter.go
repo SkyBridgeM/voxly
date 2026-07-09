@@ -219,7 +219,11 @@ func filterOversize(chunks []string, maxBytes int64) []string {
 
 func ensureFFmpeg() error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg was not found. Install it with: brew install ffmpeg")
+		return fmt.Errorf("ffmpeg was not found on PATH. Install it:\n" +
+			"  macOS:   brew install ffmpeg\n" +
+			"  Ubuntu:  sudo apt install ffmpeg\n" +
+			"  Windows: choco install ffmpeg  (or scoop install ffmpeg)\n" +
+			"  Docs:    https://ffmpeg.org/download.html")
 	}
 	return nil
 }
