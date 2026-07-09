@@ -63,7 +63,7 @@ def main() -> None:
 
     with upload_col:
         st.subheader("上传音频")
-        uploaded_file = st.file_uploader("选择 mp3 或 wav 文件", type=["mp3", "wav"])
+        uploaded_file = st.file_uploader("选择 mp3、wav 或 m4a 文件", type=["mp3", "wav", "m4a"])
 
         st.subheader("录音")
         st.info(

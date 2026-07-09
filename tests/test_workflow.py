@@ -117,9 +117,10 @@ def test_transcribe_options_rejects_invalid_run_overrides(tmp_path: Path) -> Non
 def test_safe_upload_filename_strips_paths_and_sanitizes_names() -> None:
     assert safe_upload_filename("../Team Meeting/Q3 Plan.mp3") == "Q3_Plan.mp3"
     assert safe_upload_filename(r"..\Team Meeting\Q3 Plan.wav") == "Q3_Plan.wav"
+    assert safe_upload_filename("../Voice Memo.m4a") == "Voice_Memo.m4a"
 
     with pytest.raises(ValueError, match="Unsupported audio format"):
-        safe_upload_filename("../meeting.m4a")
+        safe_upload_filename("../meeting.aiff")
 
 
 def test_recorded_chunks_workflow_reuses_transcription_pipeline(

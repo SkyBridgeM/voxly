@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    transcribe = subparsers.add_parser("transcribe", help="Process an existing mp3/wav file.")
+    transcribe = subparsers.add_parser("transcribe", help="Process an existing mp3/wav/m4a file.")
     transcribe.add_argument("audio_file", type=Path)
     add_common_flags(transcribe)
     add_output_mode_flags(transcribe)
@@ -86,7 +86,21 @@ def run_transcribe(args: argparse.Namespace) -> Path:
         llm_model=args.llm_model or settings.deepseek_model,
         obsidian_template_path=args.obsidian_template or settings.obsidian_template_path,
     )
-    result = run_audio_file_workflow(args.audio_file, settings, options)
+
+    def status_cb(msg: str) -> None:
+        print(f"Status: {msg}")
+
+    def chunk_cb(action: str, index: int, total: int, _path: Path) -> None:
+        if action in ("transcribing", "completed"):
+            print(f"Progress: {index}/{total}")
+
+    result = run_audio_file_workflow(
+        args.audio_file,
+        settings,
+        options,
+        status_callback=status_cb,
+        chunk_callback=chunk_cb,
+    )
     print(f"Transcript saved: {result.transcript_path}")
     if result.notes_input_path:
         print(f"Notes input saved: {result.notes_input_path}")
@@ -111,6 +125,13 @@ def run_record(args: argparse.Namespace) -> Path:
         obsidian_template_path=args.obsidian_template or settings.obsidian_template_path,
     )
 
+    def status_cb(msg: str) -> None:
+        print(f"Status: {msg}")
+
+    def chunk_cb(action: str, index: int, total: int, _path: Path) -> None:
+        if action in ("transcribing", "completed"):
+            print(f"Progress: {index}/{total}")
+
     print("Recording... Press Ctrl+C to stop when no duration is set.")
     chunks = record_chunks(
         task_dir / "audio",
@@ -118,7 +139,14 @@ def run_record(args: argparse.Namespace) -> Path:
         duration_minutes=args.duration,
         input_device=args.input_device,
     )
-    result = run_recorded_chunks_workflow(chunks, task_dir, settings, options)
+    result = run_recorded_chunks_workflow(
+        chunks,
+        task_dir,
+        settings,
+        options,
+        status_callback=status_cb,
+        chunk_callback=chunk_cb,
+    )
     print(f"Transcript saved: {result.transcript_path}")
     if result.notes_input_path:
         print(f"Notes input saved: {result.notes_input_path}")
@@ -140,7 +168,21 @@ def run_resume(args: argparse.Namespace) -> Path:
         llm_model=args.llm_model or settings.deepseek_model,
         obsidian_template_path=args.obsidian_template or settings.obsidian_template_path,
     )
-    result = run_resume_workflow(args.task_dir, settings, options)
+
+    def status_cb(msg: str) -> None:
+        print(f"Status: {msg}")
+
+    def chunk_cb(action: str, index: int, total: int, _path: Path) -> None:
+        if action in ("transcribing", "completed"):
+            print(f"Progress: {index}/{total}")
+
+    result = run_resume_workflow(
+        args.task_dir,
+        settings,
+        options,
+        status_callback=status_cb,
+        chunk_callback=chunk_cb,
+    )
     print(f"Transcript saved: {result.transcript_path}")
     if result.notes_input_path:
         print(f"Notes input saved: {result.notes_input_path}")
