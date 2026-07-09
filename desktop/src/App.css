@@ -669,6 +669,29 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.key-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.key-input-row input {
+  flex: 1;
+}
+
+.btn-save-key {
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  padding: 8px 12px;
+}
+
+.save-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--success);
+}
+
 /* Scrollbar */
 .main-content::-webkit-scrollbar {
   width: 6px;

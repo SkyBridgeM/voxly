@@ -76,3 +76,7 @@ export async function runMeetingAsr(
 export async function openTaskFolder(taskFolder: string): Promise<void> {
   await invoke("open_task_folder", { taskFolder });
 }
+
+export async function saveEnvKey(key: string, value: string): Promise<void> {
+  await invoke("save_env_key", { key, value });
+}

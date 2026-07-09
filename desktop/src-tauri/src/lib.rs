@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -277,11 +278,74 @@ fn run_meeting_asr(
     })
 }
 
+const ALLOWED_ENV_KEYS: &[&str] = &["MIMO_API_KEY", "DEEPSEEK_API_KEY"];
+
+#[tauri::command]
+fn save_env_key(key: String, value: String) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("Key name cannot be empty.".into());
+    }
+    if value.is_empty() {
+        return Err("Key value cannot be empty.".into());
+    }
+    if !ALLOWED_ENV_KEYS.contains(&key.as_str()) {
+        return Err(format!(
+            "Key '{}' is not allowed. Allowed keys: {:?}",
+            key, ALLOWED_ENV_KEYS
+        ));
+    }
+
+    let env_path = Path::new(project_root()).join(".env");
+    let new_line = format!("{}={}", key, value);
+
+    if !env_path.exists() {
+        fs::write(&env_path, new_line + "\n")
+            .map_err(|e| format!("Failed to create .env: {}", e))?;
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&env_path)
+        .map_err(|e| format!("Failed to read .env: {}", e))?;
+
+    let lines: Vec<&str> = content.split('\n').collect();
+    let mut output: Vec<String> = Vec::new();
+    let mut replaced = false;
+
+    for line in &lines {
+        let stripped = line.trim_start();
+        if !stripped.starts_with('#') && stripped.starts_with(&format!("{}=", key)) {
+            if !replaced {
+                output.push(new_line.clone());
+                replaced = true;
+            }
+            continue;
+        }
+        output.push(line.to_string());
+    }
+
+    if !replaced {
+        if let Some(last) = output.last() {
+            if !last.is_empty() {
+                output.push(String::new());
+            }
+        }
+        output.push(new_line);
+    }
+
+    let result = output.join("\n");
+    let result = if result.ends_with('\n') { result } else { result + "\n" };
+
+    fs::write(&env_path, result)
+        .map_err(|e| format!("Failed to write .env: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_task_folder, run_meeting_asr])
+        .invoke_handler(tauri::generate_handler![open_task_folder, run_meeting_asr, save_env_key])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

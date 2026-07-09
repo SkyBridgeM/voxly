@@ -3,6 +3,7 @@ import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
   openTaskFolder,
+  saveEnvKey,
   type LogEntry,
   type ProgressEvent,
 } from "./lib/meetingAsr";
@@ -37,15 +38,9 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
 
-  const [mimoApiKey, setMimoApiKey] = useState(
-    localStorage.getItem("mimoApiKey") || ""
-  );
-  const [deepseekApiKey, setDeepseekApiKey] = useState(
-    localStorage.getItem("deepseekApiKey") || ""
-  );
-  const [deepseekModel, setDeepseekModel] = useState(
-    localStorage.getItem("deepseekModel") || "deepseek-v4-flash"
-  );
+  const [mimoApiKey, setMimoApiKey] = useState("");
+  const [deepseekApiKey, setDeepseekApiKey] = useState("");
+  const [deepseekModel, setDeepseekModel] = useState("deepseek-v4-flash");
 
   const t = translations[locale];
 
@@ -158,12 +153,21 @@ function App() {
     }
   }, [taskFolder]);
 
-  const handleSaveSettings = () => {
-    localStorage.setItem("mimoApiKey", mimoApiKey);
-    localStorage.setItem("deepseekApiKey", deepseekApiKey);
-    localStorage.setItem("deepseekModel", deepseekModel);
+  const handleCloseSettings = () => {
     setShowSettings(false);
   };
+
+  const handleSaveKey = async (key: string, value: string) => {
+    if (!value.trim()) return;
+    try {
+      await saveEnvKey(key, value.trim());
+      setSaveStatus((prev) => ({ ...prev, [key]: t.savedSuccessfully }));
+    } catch (e) {
+      setSaveStatus((prev) => ({ ...prev, [key]: `${t.saveFailed}: ${String(e)}` }));
+    }
+  };
+
+  const [saveStatus, setSaveStatus] = useState<Record<string, string>>({});
 
   return (
     <div className="app">
@@ -273,6 +277,9 @@ function App() {
               </button>
             </div>
             <div className="modal-body">
+              <div className="warning-banner settings-warning">
+                {t.keysNotPersisted}
+              </div>
               <div className="form-group">
                 <label>{t.language}</label>
                 <select
@@ -301,40 +308,52 @@ function App() {
                 </select>
               </div>
               <div className="form-group">
-                <label>
-                  {t.mimoApiKey}
-                  {mimoApiKey && (
-                    <span className="key-status">
-                      {locale === "zh" ? "已连接" : "Connected"}
-                    </span>
-                  )}
-                </label>
-                <input
-                  type="password"
-                  value={mimoApiKey}
-                  onChange={(e) => setMimoApiKey(e.target.value)}
-                  placeholder={
-                    locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
-                  }
-                />
+                <label>{t.mimoApiKey}</label>
+                <div className="key-input-row">
+                  <input
+                    type="password"
+                    value={mimoApiKey}
+                    onChange={(e) => setMimoApiKey(e.target.value)}
+                    placeholder={
+                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                    }
+                  />
+                  <button
+                    className="btn-secondary btn-save-key"
+                    onClick={() => handleSaveKey("MIMO_API_KEY", mimoApiKey)}
+                    disabled={!mimoApiKey.trim()}
+                    title={t.saveToEnv}
+                  >
+                    {t.saveToEnv}
+                  </button>
+                </div>
+                {saveStatus["MIMO_API_KEY"] && (
+                  <span className="save-status">{saveStatus["MIMO_API_KEY"]}</span>
+                )}
               </div>
               <div className="form-group">
-                <label>
-                  {t.deepseekApiKey}
-                  {deepseekApiKey && (
-                    <span className="key-status">
-                      {locale === "zh" ? "已连接" : "Connected"}
-                    </span>
-                  )}
-                </label>
-                <input
-                  type="password"
-                  value={deepseekApiKey}
-                  onChange={(e) => setDeepseekApiKey(e.target.value)}
-                  placeholder={
-                    locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
-                  }
-                />
+                <label>{t.deepseekApiKey}</label>
+                <div className="key-input-row">
+                  <input
+                    type="password"
+                    value={deepseekApiKey}
+                    onChange={(e) => setDeepseekApiKey(e.target.value)}
+                    placeholder={
+                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                    }
+                  />
+                  <button
+                    className="btn-secondary btn-save-key"
+                    onClick={() => handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)}
+                    disabled={!deepseekApiKey.trim()}
+                    title={t.saveToEnv}
+                  >
+                    {t.saveToEnv}
+                  </button>
+                </div>
+                {saveStatus["DEEPSEEK_API_KEY"] && (
+                  <span className="save-status">{saveStatus["DEEPSEEK_API_KEY"]}</span>
+                )}
               </div>
               <div className="form-group">
                 <label>{t.deepseekModel}</label>
@@ -348,14 +367,8 @@ function App() {
               </div>
             </div>
             <div className="modal-footer">
-              <button
-                className="btn-secondary"
-                onClick={() => setShowSettings(false)}
-              >
-                {t.cancel}
-              </button>
-              <button className="btn-primary" onClick={handleSaveSettings}>
-                {t.save}
+              <button className="btn-primary" onClick={handleCloseSettings}>
+                {t.close}
               </button>
             </div>
           </div>

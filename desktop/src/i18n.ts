@@ -42,12 +42,16 @@ export interface Translations {
   close: string;
   showLogs: string;
   hideLogs: string;
+  keysNotPersisted: string;
+  saveToEnv: string;
+  savedSuccessfully: string;
+  saveFailed: string;
 }
 
 export const translations: Record<Locale, Translations> = {
   zh: {
     appTitle: "meeting-asr Desktop Prototype",
-    appSubtitle: "实验性 Tauri 桌面原型 — 调用本地 Python CLI",
+    appSubtitle: "实验性 Tauri 桌面原型 — 通过 uv 调用 Python CLI",
     inputTitle: "输入",
     chooseFile: "选择音频文件",
     noFileSelected: "未选择文件",
@@ -89,10 +93,14 @@ export const translations: Record<Locale, Translations> = {
     close: "关闭",
     showLogs: "显示日志",
     hideLogs: "隐藏日志",
+    keysNotPersisted: "临时 Key 仅在本次会话有效，关闭后丢失。可点击「保存到 .env」持久化到项目根目录。",
+    saveToEnv: "保存到 .env",
+    savedSuccessfully: "已保存",
+    saveFailed: "保存失败",
   },
   en: {
     appTitle: "meeting-asr Desktop Prototype",
-    appSubtitle: "Experimental Tauri prototype — calls the local Python CLI",
+    appSubtitle: "Experimental Tauri prototype — calls Python CLI via uv",
     inputTitle: "Input",
     chooseFile: "Choose Audio File",
     noFileSelected: "No file selected",
@@ -134,6 +142,10 @@ export const translations: Record<Locale, Translations> = {
     close: "Close",
     showLogs: "Show Logs",
     hideLogs: "Hide Logs",
+    keysNotPersisted: "Temporary keys are session-only and lost when closed. Use \"Save to .env\" to persist to the project root.",
+    saveToEnv: "Save to .env",
+    savedSuccessfully: "Saved",
+    saveFailed: "Save failed",
   },
 };
 

@@ -70,9 +70,11 @@ npm run tauri dev
 ## API Key Handling
 
 - API keys are **never** embedded in source code, logs, or CLI arguments.
-- The Python CLI reads keys from the project-root `.env` file.
-- Optionally, keys can be entered in the Settings panel (stored in browser localStorage)
-  and passed as environment variables to the CLI process.
+- The Python CLI reads keys from the project-root `.env` file (preferred).
+- Temporary keys can be entered in the Settings panel for the current session only.
+  They are passed as environment variables to the CLI process.
+- Keys can be saved to `.env` from the Settings panel ("Save to .env").
+  Rust writes `.env` directly — keys never appear in process argv.
 - If both `.env` and Settings are empty, the Python CLI will report the missing key error.
 
 ## Privacy Warnings
