@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSafeSlug(t *testing.T) {
@@ -69,6 +70,41 @@ func TestCreateTaskDir(t *testing.T) {
 	base := filepath.Base(taskDir)
 	if len(base) < 15 {
 		t.Errorf("task dir name too short: %q", base)
+	}
+}
+
+func TestCreateTaskDirDoesNotReuseExistingDirectory(t *testing.T) {
+	originalNow := nowFunc
+	nowFunc = func() time.Time {
+		return time.Date(2026, 7, 10, 12, 0, 0, 0, time.Local)
+	}
+	defer func() { nowFunc = originalNow }()
+
+	outputDir := t.TempDir()
+	first, err := CreateTaskDir(outputDir, "test_meeting.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(first, "transcripts", "part_001.txt")
+	if err := os.WriteFile(marker, []byte("existing transcript"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := CreateTaskDir(outputDir, "test_meeting.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("expected a unique task directory, got the same path")
+	}
+	if filepath.Base(first) != "20260710_120000_test_meeting" {
+		t.Fatalf("unexpected first task directory: %s", first)
+	}
+	if filepath.Base(second) != "20260710_120000_test_meeting_2" {
+		t.Fatalf("unexpected second task directory: %s", second)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("existing task content was changed: %v", err)
 	}
 }
 

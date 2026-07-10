@@ -75,9 +75,23 @@ def timestamp() -> str:
 
 
 def create_task_dir(output_dir: Path, name: str) -> Path:
-    task_dir = output_dir.expanduser().resolve() / f"{timestamp()}_{safe_slug(name)}"
+    resolved_output_dir = output_dir.expanduser().resolve()
+    resolved_output_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"{timestamp()}_{safe_slug(name)}"
+
+    for suffix in range(1, 1001):
+        dir_name = base_name if suffix == 1 else f"{base_name}_{suffix}"
+        task_dir = resolved_output_dir / dir_name
+        try:
+            task_dir.mkdir()
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError(f"Could not allocate a unique task folder under {resolved_output_dir}.")
+
     for subdir in ("audio", "chunks", "transcripts"):
-        (task_dir / subdir).mkdir(parents=True, exist_ok=True)
+        (task_dir / subdir).mkdir()
     return task_dir
 
 

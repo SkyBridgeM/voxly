@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,25 @@ struct RunResult {
     transcript_path: Option<String>,
     notes_input_path: Option<String>,
     minutes_path: Option<String>,
+}
+
+fn normalize_status(status: &str) -> String {
+    let normalized = status.trim().to_ascii_lowercase();
+    if normalized.starts_with("splitting") {
+        "splitting".into()
+    } else if normalized.starts_with("transcribing") {
+        "transcribing".into()
+    } else if normalized.starts_with("merging") {
+        "merging".into()
+    } else if normalized.starts_with("preparing notes") {
+        "notes".into()
+    } else if normalized.starts_with("generating meeting minutes") {
+        "minutes".into()
+    } else if normalized == "done" {
+        "done".into()
+    } else {
+        normalized
+    }
 }
 
 fn project_root() -> &'static str {
@@ -163,15 +183,14 @@ fn run_meeting_asr(
                 Ok(text) => {
                     let trimmed = text.trim();
 
-                    if trimmed.starts_with("Status: ") {
-                        let status_val = trimmed["Status: ".len()..].trim();
+                    if let Some(status_val) = trimmed.strip_prefix("Status: ") {
                         let _ = app_stdout.emit("progress", ProgressEvent {
-                            status: status_val.to_string(),
+                            status: normalize_status(status_val),
                             current: 0,
                             total: 0,
                         });
-                    } else if trimmed.starts_with("Progress: ") {
-                        let progress_str = trimmed["Progress: ".len()..].trim();
+                    } else if let Some(progress_str) = trimmed.strip_prefix("Progress: ") {
+                        let progress_str = progress_str.trim();
                         let parts: Vec<&str> = progress_str.split('/').collect();
                         if parts.len() == 2 {
                             let current = parts[0].parse::<u32>().unwrap_or(0);
@@ -239,23 +258,23 @@ fn run_meeting_asr(
 
     for line in lines.iter() {
         let trimmed = line.trim();
-        if trimmed.starts_with("Task folder:") {
-            let val = trimmed["Task folder:".len()..].trim();
+        if let Some(val) = trimmed.strip_prefix("Task folder:") {
+            let val = val.trim();
             if !val.is_empty() {
                 task_folder = Some(val.to_string());
             }
-        } else if trimmed.starts_with("Transcript saved:") {
-            let val = trimmed["Transcript saved:".len()..].trim();
+        } else if let Some(val) = trimmed.strip_prefix("Transcript saved:") {
+            let val = val.trim();
             if !val.is_empty() {
                 transcript_path = Some(val.to_string());
             }
-        } else if trimmed.starts_with("Notes input saved:") {
-            let val = trimmed["Notes input saved:".len()..].trim();
+        } else if let Some(val) = trimmed.strip_prefix("Notes input saved:") {
+            let val = val.trim();
             if !val.is_empty() {
                 notes_input_path = Some(val.to_string());
             }
-        } else if trimmed.starts_with("Meeting minutes saved:") {
-            let val = trimmed["Meeting minutes saved:".len()..].trim();
+        } else if let Some(val) = trimmed.strip_prefix("Meeting minutes saved:") {
+            let val = val.trim();
             if !val.is_empty() {
                 minutes_path = Some(val.to_string());
             }
@@ -285,9 +304,7 @@ fn save_env_key(key: String, value: String) -> Result<(), String> {
     if key.is_empty() {
         return Err("Key name cannot be empty.".into());
     }
-    if value.is_empty() {
-        return Err("Key value cannot be empty.".into());
-    }
+    validate_env_value(&value)?;
     if !ALLOWED_ENV_KEYS.contains(&key.as_str()) {
         return Err(format!(
             "Key '{}' is not allowed. Allowed keys: {:?}",
@@ -299,8 +316,7 @@ fn save_env_key(key: String, value: String) -> Result<(), String> {
     let new_line = format!("{}={}", key, value);
 
     if !env_path.exists() {
-        fs::write(&env_path, new_line + "\n")
-            .map_err(|e| format!("Failed to create .env: {}", e))?;
+        write_env_securely(&env_path, &(new_line + "\n"))?;
         return Ok(());
     }
 
@@ -335,10 +351,66 @@ fn save_env_key(key: String, value: String) -> Result<(), String> {
     let result = output.join("\n");
     let result = if result.ends_with('\n') { result } else { result + "\n" };
 
-    fs::write(&env_path, result)
-        .map_err(|e| format!("Failed to write .env: {}", e))?;
+    write_env_securely(&env_path, &result)?;
 
     Ok(())
+}
+
+fn validate_env_value(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("Key value cannot be empty.".into());
+    }
+    if value.trim() != value || value.contains(['\r', '\n']) {
+        return Err("Key value cannot contain leading/trailing whitespace or newlines.".into());
+    }
+    Ok(())
+}
+
+fn write_env_securely(env_path: &Path, content: &str) -> Result<(), String> {
+    let parent = env_path
+        .parent()
+        .ok_or_else(|| "Could not determine .env parent directory.".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| format!("Failed to create .env directory: {}", e))?;
+
+    let temp_path = parent.join(format!(".env.{}.tmp", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let result = (|| -> Result<(), String> {
+        let mut file = options
+            .open(&temp_path)
+            .map_err(|e| format!("Failed to create temporary .env: {}", e))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write temporary .env: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync temporary .env: {}", e))?;
+        drop(file);
+        if let Err(error) = fs::rename(&temp_path, env_path) {
+            #[cfg(not(target_os = "windows"))]
+            return Err(format!("Failed to replace .env: {}", error));
+
+            #[cfg(target_os = "windows")]
+            {
+                if env_path.exists() {
+                    fs::remove_file(env_path)
+                        .map_err(|e| format!("Failed to remove old .env: {}", e))?;
+                }
+                fs::rename(&temp_path, env_path)
+                    .map_err(|e| format!("Failed to replace .env: {}", e))?;
+            }
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -348,4 +420,30 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![open_task_folder, run_meeting_asr, save_env_key])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_status, validate_env_value};
+
+    #[test]
+    fn normalizes_python_and_go_status_lines() {
+        assert_eq!(normalize_status("Splitting audio"), "splitting");
+        assert_eq!(normalize_status("Transcribing 3 chunk(s)"), "transcribing");
+        assert_eq!(normalize_status("Merging transcript"), "merging");
+        assert_eq!(normalize_status("Preparing notes input"), "notes");
+        assert_eq!(
+            normalize_status("Generating meeting minutes via LLM"),
+            "minutes"
+        );
+        assert_eq!(normalize_status("Done"), "done");
+    }
+
+    #[test]
+    fn rejects_unsafe_env_values() {
+        assert!(validate_env_value("").is_err());
+        assert!(validate_env_value(" key").is_err());
+        assert!(validate_env_value("key\nOTHER=injected").is_err());
+        assert!(validate_env_value("valid-key").is_ok());
+    }
 }

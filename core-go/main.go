@@ -235,8 +235,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	fmt.Println("Status: Splitting audio")
 	chunks, err := SplitAudio(sourceCopy, filepath.Join(taskDir, "chunks"), settings.DefaultChunkMin, settings.MaxUploadBytes())
 	if err != nil {
-		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-		return fmt.Errorf("splitting audio: %w", err)
+		return failTask(taskDir, fmt.Errorf("splitting audio: %w", err))
 	}
 
 	// 5. Transcribe chunks.
@@ -248,16 +247,14 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		}
 	}
 	if _, err := TranscribeChunks(chunks, transcriptsDir, settings, progressFn); err != nil {
-		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-		return fmt.Errorf("transcribing: %w", err)
+		return failTask(taskDir, fmt.Errorf("transcribing: %w", err))
 	}
 
 	// 6. Merge transcripts.
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
-		_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-		return fmt.Errorf("merging transcripts: %w", err)
+		return failTask(taskDir, fmt.Errorf("merging transcripts: %w", err))
 	}
 
 	// 7. notes_input.md (notes and minutes modes).
@@ -267,8 +264,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		promptPath := settings.ResolvePath(settings.MinutesPromptPath)
 		notesInputPath = filepath.Join(taskDir, "notes_input.md")
 		if err := CreateNotesInput(promptPath, transcriptPath, notesInputPath); err != nil {
-			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("creating notes input: %w", err)
+			return failTask(taskDir, fmt.Errorf("creating notes input: %w", err))
 		}
 	}
 
@@ -278,8 +274,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		fmt.Println("Status: Generating meeting minutes")
 		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
 		if err != nil {
-			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("generating meeting minutes: %w", err)
+			return failTask(taskDir, fmt.Errorf("generating meeting minutes: %w", err))
 		}
 
 		// Apply Obsidian template.
@@ -289,25 +284,24 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 		transcriptData, err := os.ReadFile(transcriptPath)
 		if err != nil {
-			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("reading transcript for template: %w", err)
+			return failTask(taskDir, fmt.Errorf("reading transcript for template: %w", err))
 		}
 
 		wrapped, err := ApplyObsidianTemplate(templatePath, rawMinutes, title, taskName, string(transcriptData))
 		if err != nil {
-			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("applying Obsidian template: %w", err)
+			return failTask(taskDir, fmt.Errorf("applying Obsidian template: %w", err))
 		}
 
 		minutesPath = filepath.Join(taskDir, "meeting_minutes.md")
 		if err := os.WriteFile(minutesPath, []byte(wrapped), 0644); err != nil {
-			_ = UpdateManifestStatus(taskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("writing meeting minutes: %w", err)
+			return failTask(taskDir, fmt.Errorf("writing meeting minutes: %w", err))
 		}
 	}
 
 	// 9. Update manifest status to completed.
-	_ = UpdateManifestStatus(taskDir, "completed", nil)
+	if err := UpdateManifestStatus(taskDir, "completed", nil); err != nil {
+		return fmt.Errorf("marking task completed: %w", err)
+	}
 
 	// 10. Done.
 	fmt.Println("Status: Done")

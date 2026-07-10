@@ -1,5 +1,8 @@
+import os
 from pathlib import Path
 from zipfile import ZipFile
+
+import pytest
 
 from webui.ui_helpers import (
     build_text_outputs_zip,
@@ -142,3 +145,19 @@ def test_update_env_value_does_not_treat_export_as_existing_key(tmp_path: Path) 
         "MAX_UPLOAD_MB=10\n"
         "MIMO_API_KEY=new-key\n"
     )
+
+
+def test_update_env_value_rejects_newlines(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="newlines"):
+        update_env_value(tmp_path / ".env", "MIMO_API_KEY", "key\nDEEPSEEK_API_KEY=injected")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
+def test_update_env_value_uses_private_permissions(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("MIMO_API_KEY=old\n", encoding="utf-8")
+    env_path.chmod(0o644)
+
+    update_env_value(env_path, "MIMO_API_KEY", "new-key")
+
+    assert env_path.stat().st_mode & 0o777 == 0o600

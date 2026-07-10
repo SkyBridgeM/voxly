@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -52,9 +54,12 @@ def format_detected(value: bool) -> str:
 
 
 def update_env_value(env_path: Path, key: str, value: str) -> None:
+    if not value or value.strip() != value or "\n" in value or "\r" in value:
+        raise ValueError("Environment value cannot be empty or contain surrounding whitespace/newlines.")
+
     new_line = f"{key}={value}"
     if not env_path.exists():
-        env_path.write_text(new_line + "\n", encoding="utf-8")
+        _write_env_securely(env_path, new_line + "\n")
         return
 
     lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -75,7 +80,31 @@ def update_env_value(env_path: Path, key: str, value: str) -> None:
             output[-1] += "\n"
         output.append(new_line + "\n")
 
-    env_path.write_text("".join(output), encoding="utf-8")
+    _write_env_securely(env_path, "".join(output))
+
+
+def _write_env_securely(env_path: Path, content: str) -> None:
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=env_path.parent,
+            prefix=f".{env_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp:
+            temp_path = Path(temp.name)
+            if hasattr(os, "fchmod"):
+                os.fchmod(temp.fileno(), 0o600)
+            temp.write(content)
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_path, env_path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
 
 
 def _is_env_key_line(line: str, key: str) -> bool:

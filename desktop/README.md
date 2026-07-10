@@ -75,6 +75,7 @@ npm run tauri dev
   They are passed as environment variables to the CLI process.
 - Keys can be saved to `.env` from the Settings panel ("Save to .env").
   Rust writes `.env` directly — keys never appear in process argv.
+- On Unix systems, saved `.env` files are replaced atomically and use owner-only permissions.
 - If both `.env` and Settings are empty, the Python CLI will report the missing key error.
 
 ## Privacy Warnings

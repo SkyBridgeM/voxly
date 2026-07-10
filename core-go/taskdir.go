@@ -13,6 +13,7 @@ import (
 var (
 	slugStripExtRe = regexp.MustCompile(`\.[A-Za-z0-9]{1,8}$`)
 	slugCleanRe    = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+	nowFunc        = time.Now
 )
 
 // SafeSlug converts a filename stem into a safe directory name component.
@@ -31,7 +32,7 @@ func SafeSlug(value string) string {
 
 // Timestamp returns the current local time formatted as YYYYMMDD_HHMMSS.
 func Timestamp() string {
-	return time.Now().Format("20060102_150405")
+	return nowFunc().Format("20060102_150405")
 }
 
 // CreateTaskDir creates a task directory with the standard layout:
@@ -41,11 +42,33 @@ func Timestamp() string {
 //	    chunks/
 //	    transcripts/
 func CreateTaskDir(outputDir, name string) (string, error) {
-	dirName := fmt.Sprintf("%s_%s", Timestamp(), SafeSlug(name))
-	taskDir := filepath.Join(outputDir, dirName)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("creating output dir: %w", err)
+	}
+
+	baseName := fmt.Sprintf("%s_%s", Timestamp(), SafeSlug(name))
+	var taskDir string
+	for suffix := 1; suffix <= 1000; suffix++ {
+		dirName := baseName
+		if suffix > 1 {
+			dirName = fmt.Sprintf("%s_%d", baseName, suffix)
+		}
+		candidate := filepath.Join(outputDir, dirName)
+		err := os.Mkdir(candidate, 0755)
+		if err == nil {
+			taskDir = candidate
+			break
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("creating task dir: %w", err)
+		}
+	}
+	if taskDir == "" {
+		return "", fmt.Errorf("could not allocate a unique task folder under %s", outputDir)
+	}
 
 	for _, sub := range []string{"audio", "chunks", "transcripts"} {
-		if err := os.MkdirAll(filepath.Join(taskDir, sub), 0755); err != nil {
+		if err := os.Mkdir(filepath.Join(taskDir, sub), 0755); err != nil {
 			return "", fmt.Errorf("creating task subdir %s: %w", sub, err)
 		}
 	}

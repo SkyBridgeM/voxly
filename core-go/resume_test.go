@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -191,6 +192,72 @@ func TestDiscoverChunks_SkipsCompletedTranscripts(t *testing.T) {
 				t.Errorf("chunk %d should not have transcript", chunk.Number)
 			}
 		}
+	}
+}
+
+func TestRunResumeInheritsManifestOutputMode(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	taskDir := filepath.Join(dir, "task")
+	if err := os.MkdirAll(filepath.Join(taskDir, "chunks"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(taskDir, "transcripts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "chunks", "part_001.wav"), []byte("audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "transcripts", "part_001.txt"), []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := CreateManifest(taskDir, "/audio.wav", "minutes", 5, 10, "mimo", "mimo-v2.5-asr")
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunResume([]string{"--env-file", envPath, taskDir})
+	if err == nil || !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Fatalf("expected inherited minutes mode to require DeepSeek key, got %v", err)
+	}
+}
+
+func TestRunResumeExplicitOutputModeUpdatesManifest(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	taskDir := filepath.Join(dir, "task")
+	if err := os.MkdirAll(filepath.Join(taskDir, "chunks"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(taskDir, "transcripts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "chunks", "part_001.wav"), []byte("audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "transcripts", "part_001.txt"), []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := CreateManifest(taskDir, "/audio.wav", "minutes", 5, 10, "mimo", "old-model")
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RunResume([]string{"--env-file", envPath, "--output-mode", "transcript", taskDir}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.OutputMode != "transcript" || loaded.Status != "completed" {
+		t.Fatalf("unexpected completed manifest: %+v", loaded)
 	}
 }
 

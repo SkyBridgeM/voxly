@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -111,10 +112,12 @@ func RunResume(args []string) error {
 	if err := fs.Parse(reordered); err != nil {
 		return err
 	}
-
-	if *outputMode != "transcript" && *outputMode != "notes" && *outputMode != "minutes" {
-		return fmt.Errorf("invalid --output-mode %q. Supported: transcript, notes, minutes", *outputMode)
-	}
+	outputModeExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "output-mode" {
+			outputModeExplicit = true
+		}
+	})
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: meeting-asr-go resume <task_dir>")
@@ -134,6 +137,22 @@ func RunResume(args []string) error {
 	// Validate task directory exists.
 	if _, err := os.Stat(absTaskDir); err != nil {
 		return fmt.Errorf("task directory not found: %s", absTaskDir)
+	}
+
+	// Resume inherits the original output mode unless the caller explicitly overrides it.
+	var existingManifest *Manifest
+	existingManifest, err = LoadManifest(absTaskDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("loading task manifest: %w", err)
+		}
+		existingManifest = nil
+	} else if !outputModeExplicit && existingManifest.OutputMode != "" {
+		*outputMode = existingManifest.OutputMode
+	}
+
+	if *outputMode != "transcript" && *outputMode != "notes" && *outputMode != "minutes" {
+		return fmt.Errorf("invalid --output-mode %q. Supported: transcript, notes, minutes", *outputMode)
 	}
 
 	// Load settings.
@@ -205,8 +224,10 @@ func RunResume(args []string) error {
 		return fmt.Errorf("discovering chunks: %w", err)
 	}
 
-	// Update manifest status to running.
-	_ = UpdateManifestStatus(absTaskDir, "running", nil)
+	// Update the manifest before work so it reflects this resume run's effective settings.
+	if err := PrepareManifestForResume(absTaskDir, *outputMode, settings.MimoModel, existingManifest); err != nil {
+		return fmt.Errorf("preparing task manifest: %w", err)
+	}
 
 	// Filter chunks that need transcription.
 	var chunksToTranscribe []string
@@ -228,8 +249,7 @@ func RunResume(args []string) error {
 			}
 		}
 		if _, err := TranscribeChunks(chunksToTranscribe, transcriptsDir, settings, progressFn); err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("transcribing: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("transcribing: %w", err))
 		}
 	} else {
 		fmt.Println("Status: All chunks already transcribed")
@@ -240,8 +260,7 @@ func RunResume(args []string) error {
 	transcriptPath := filepath.Join(absTaskDir, "transcript.md")
 	transcriptsDir := filepath.Join(absTaskDir, "transcripts")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
-		_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-		return fmt.Errorf("merging transcripts: %w", err)
+		return failTask(absTaskDir, fmt.Errorf("merging transcripts: %w", err))
 	}
 
 	// Generate notes_input.md (notes and minutes modes).
@@ -251,8 +270,7 @@ func RunResume(args []string) error {
 		promptPathResolved := settings.ResolvePath(settings.MinutesPromptPath)
 		notesInputPath = filepath.Join(absTaskDir, "notes_input.md")
 		if err := CreateNotesInput(promptPathResolved, transcriptPath, notesInputPath); err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("creating notes input: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("creating notes input: %w", err))
 		}
 	}
 
@@ -262,8 +280,7 @@ func RunResume(args []string) error {
 		fmt.Println("Status: Generating meeting minutes")
 		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
 		if err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("generating meeting minutes: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("generating meeting minutes: %w", err))
 		}
 
 		// Apply Obsidian template.
@@ -273,25 +290,24 @@ func RunResume(args []string) error {
 
 		transcriptData, err := os.ReadFile(transcriptPath)
 		if err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("reading transcript for template: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("reading transcript for template: %w", err))
 		}
 
 		wrapped, err := ApplyObsidianTemplate(templatePath, rawMinutes, title, taskName, string(transcriptData))
 		if err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("applying Obsidian template: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("applying Obsidian template: %w", err))
 		}
 
 		minutesPath = filepath.Join(absTaskDir, "meeting_minutes.md")
 		if err := os.WriteFile(minutesPath, []byte(wrapped), 0644); err != nil {
-			_ = UpdateManifestStatus(absTaskDir, "failed", strPtr(err.Error()))
-			return fmt.Errorf("writing meeting minutes: %w", err)
+			return failTask(absTaskDir, fmt.Errorf("writing meeting minutes: %w", err))
 		}
 	}
 
 	// Update manifest status to completed.
-	_ = UpdateManifestStatus(absTaskDir, "completed", nil)
+	if err := UpdateManifestStatus(absTaskDir, "completed", nil); err != nil {
+		return fmt.Errorf("marking task completed: %w", err)
+	}
 
 	// Done.
 	fmt.Println("Status: Done")

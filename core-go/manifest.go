@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -44,15 +46,49 @@ func LoadManifest(taskDir string) (*Manifest, error) {
 	return &m, nil
 }
 
-// SaveManifest writes manifest.json to a task directory.
+// SaveManifest atomically writes manifest.json to a task directory.
 func SaveManifest(taskDir string, m *Manifest) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling manifest: %w", err)
 	}
 
-	path := ManifestPath(taskDir)
-	return os.WriteFile(path, data, 0644)
+	temp, err := os.CreateTemp(taskDir, ".manifest-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temporary manifest: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	if err := temp.Chmod(0644); err != nil {
+		temp.Close()
+		return fmt.Errorf("setting manifest permissions: %w", err)
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return fmt.Errorf("writing temporary manifest: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("syncing temporary manifest: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("closing temporary manifest: %w", err)
+	}
+	destination := ManifestPath(taskDir)
+	if err := os.Rename(tempPath, destination); err != nil {
+		// Windows cannot rename over an existing file with os.Rename.
+		if runtime.GOOS != "windows" {
+			return fmt.Errorf("replacing manifest: %w", err)
+		}
+		if removeErr := os.Remove(destination); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("removing old manifest before replacement: %w", removeErr)
+		}
+		if renameErr := os.Rename(tempPath, destination); renameErr != nil {
+			return fmt.Errorf("replacing manifest: %w", renameErr)
+		}
+	}
+	return nil
 }
 
 // CreateManifest creates a new manifest for a task.
@@ -77,7 +113,10 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 func UpdateManifestStatus(taskDir, status string, errStr *string) error {
 	m, loadErr := LoadManifest(taskDir)
 	if loadErr != nil {
-		// If manifest doesn't exist, create a minimal one.
+		if !errors.Is(loadErr, os.ErrNotExist) {
+			return loadErr
+		}
+		// Legacy tasks may not have a manifest yet.
 		m = &Manifest{
 			Version:   "1",
 			CreatedAt: time.Now().Format(time.RFC3339),
@@ -89,4 +128,31 @@ func UpdateManifestStatus(taskDir, status string, errStr *string) error {
 	m.Error = errStr
 
 	return SaveManifest(taskDir, m)
+}
+
+// PrepareManifestForResume makes the manifest describe the effective resume run.
+func PrepareManifestForResume(taskDir, outputMode, asrModel string, existing *Manifest) error {
+	now := time.Now().Format(time.RFC3339)
+	m := existing
+	if m == nil {
+		m = &Manifest{
+			Version:     "1",
+			ASRProvider: "mimo",
+			CreatedAt:   now,
+		}
+	}
+	m.OutputMode = outputMode
+	m.ASRProvider = "mimo"
+	m.ASRModel = asrModel
+	m.Status = "running"
+	m.Error = nil
+	m.UpdatedAt = now
+	return SaveManifest(taskDir, m)
+}
+
+func failTask(taskDir string, workflowErr error) error {
+	if manifestErr := UpdateManifestStatus(taskDir, "failed", strPtr(workflowErr.Error())); manifestErr != nil {
+		return fmt.Errorf("%w; additionally failed to update manifest: %v", workflowErr, manifestErr)
+	}
+	return workflowErr
 }

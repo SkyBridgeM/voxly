@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -144,5 +146,75 @@ func TestLoadManifest_NotFound(t *testing.T) {
 	_, err := LoadManifest(taskDir)
 	if err == nil {
 		t.Fatal("expected error for non-existent manifest, got nil")
+	}
+}
+
+func TestSaveManifestReplacesFileWithoutLeavingTemporaryFile(t *testing.T) {
+	taskDir := t.TempDir()
+	m := CreateManifest(taskDir, "/audio.wav", "transcript", 5, 10, "mimo", "model-a")
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+	m.Status = "completed"
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "completed" {
+		t.Fatalf("status = %q, want completed", loaded.Status)
+	}
+	temps, err := filepath.Glob(filepath.Join(taskDir, ".manifest-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("temporary manifest files were not cleaned up: %v", temps)
+	}
+}
+
+func TestUpdateManifestStatusDoesNotOverwriteCorruptManifest(t *testing.T) {
+	taskDir := t.TempDir()
+	path := ManifestPath(taskDir)
+	original := "{not-json"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := UpdateManifestStatus(taskDir, "completed", nil)
+	if err == nil || !strings.Contains(err.Error(), "parsing manifest") {
+		t.Fatalf("expected parsing error, got %v", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != original {
+		t.Fatalf("corrupt manifest was unexpectedly overwritten: %q", data)
+	}
+}
+
+func TestPrepareManifestForResumeUpdatesEffectiveRun(t *testing.T) {
+	taskDir := t.TempDir()
+	existing := CreateManifest(taskDir, "/audio.wav", "minutes", 5, 10, "mimo", "old-model")
+	existing.Status = "failed"
+	errText := "old error"
+	existing.Error = &errText
+
+	if err := PrepareManifestForResume(taskDir, "transcript", "new-model", existing); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.OutputMode != "transcript" || loaded.ASRModel != "new-model" || loaded.Status != "running" {
+		t.Fatalf("unexpected resume manifest: %+v", loaded)
+	}
+	if loaded.Error != nil {
+		t.Fatalf("resume manifest retained old error: %q", *loaded.Error)
 	}
 }

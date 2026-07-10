@@ -34,6 +34,20 @@ def test_create_task_dir_uses_safe_timestamped_name(tmp_path: Path) -> None:
     assert (task_dir / "transcripts").is_dir()
 
 
+def test_create_task_dir_does_not_reuse_same_timestamped_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("meeting_asr.utils.timestamp", lambda: "20260710_120000")
+
+    first = create_task_dir(tmp_path, "meeting.mp3")
+    marker = first / "transcripts" / "part_001.txt"
+    marker.write_text("existing transcript", encoding="utf-8")
+    second = create_task_dir(tmp_path, "meeting.mp3")
+
+    assert first.name == "20260710_120000_meeting"
+    assert second.name == "20260710_120000_meeting_2"
+    assert first != second
+    assert marker.read_text(encoding="utf-8") == "existing transcript"
+
+
 def test_supported_audio_format_accepts_mp3_wav_and_m4a() -> None:
     assert supported_audio_format(Path("meeting.mp3")) == "mp3"
     assert supported_audio_format(Path("meeting.wav")) == "wav"

@@ -13,7 +13,7 @@ The goal is to validate whether the Python core can be replaced by a small Go CL
   - `transcript` — generates `transcript.md` only.
   - `notes` — generates `transcript.md` + `notes_input.md`.
   - `minutes` — generates `transcript.md` + `notes_input.md` + `meeting_minutes.md` (via DeepSeek).
-- **Resume** — `resume <task_dir>` continues a partially-completed task, skipping already-transcribed chunks.
+- **Resume** — `resume <task_dir>` continues a partially-completed task, skipping already-transcribed chunks. It inherits the manifest's original output mode unless `--output-mode` is explicitly provided.
 - Applies Obsidian templates if configured.
 - Stable stdout lines for future Tauri integration.
 
