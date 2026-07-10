@@ -99,6 +99,37 @@ func TestResume_KilledDuringTranscription_RetranscribesOnlyMissing(t *testing.T)
 	}
 }
 
+func TestReconcileChunks_HashMismatchRequiresRetranscription(t *testing.T) {
+	taskDir := createTestTaskDir(t)
+	chunkPath := filepath.Join(taskDir, "chunks", "part_001.wav")
+	transcriptPath := filepath.Join(taskDir, "transcripts", "part_001.txt")
+	if err := os.WriteFile(chunkPath, []byte("original audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte("old transcript"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "meeting.wav"), "transcript", 5, 10, "mimo", "model")
+	m.Chunks.Format = "wav"
+	m.Chunks.Total = 1
+	m.Chunks.Items = []ChunkItem{{
+		ID:               "part_001",
+		AudioPath:        chunkPath,
+		TranscriptPath:   transcriptPath,
+		State:            ChunkCompleted,
+		AudioSHA256:      mustFileSHA256(chunkPath),
+		TranscriptSHA256: mustFileSHA256(transcriptPath),
+	}}
+	if err := os.WriteFile(chunkPath, []byte("changed audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	ReconcileChunks(taskDir, m)
+	if m.Chunks.Items[0].State != ChunkPending {
+		t.Fatalf("changed audio must require retranscription, got %s", m.Chunks.Items[0].State)
+	}
+}
+
 // --- Scenario 2: Merge failure → reruns merge only ---
 
 func TestResume_MergeFailure_RerunsMergeOnly(t *testing.T) {
@@ -381,12 +412,13 @@ func TestResume_ConcurrentResumeRejected(t *testing.T) {
 	}
 }
 
-// --- Stale lock cleanup ---
+// --- Persistent lock file is reusable after a process exits ---
 
-func TestTaskLock_StaleLockCleanedUp(t *testing.T) {
+func TestTaskLock_ReusesPersistentLockFile(t *testing.T) {
 	taskDir := createTestTaskDir(t)
 
-	// Write a lock file with a non-existent PID.
+	// A lock file from a previous process is only metadata; the OS lock is what
+	// controls ownership and is released automatically when that process exits.
 	lockPath := filepath.Join(taskDir, ".resume.lock")
 	if err := os.WriteFile(lockPath, []byte("99999999\n2026-01-01T00:00:00Z\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -394,7 +426,7 @@ func TestTaskLock_StaleLockCleanedUp(t *testing.T) {
 
 	lock, err := AcquireTaskLock(taskDir)
 	if err != nil {
-		t.Fatalf("expected stale lock to be cleaned up, got: %v", err)
+		t.Fatalf("expected persistent lock file to be reusable, got: %v", err)
 	}
 	defer lock.Release()
 
@@ -427,8 +459,8 @@ func TestTaskLock_Release(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatal("lock file should be removed after release")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatal("lock file should remain available for future locking")
 	}
 }
 
@@ -466,8 +498,8 @@ func TestMigrateManifest_BuildsFromDisk(t *testing.T) {
 		t.Errorf("expected 3 chunks, got %d", migrated.Chunks.Total)
 	}
 	completed := migrated.CountCompletedChunks()
-	if completed != 2 {
-		t.Errorf("expected 2 completed chunks, got %d", completed)
+	if completed != 0 {
+		t.Errorf("legacy chunks without recorded hashes must be retranscribed, got %d completed", completed)
 	}
 }
 
@@ -505,11 +537,11 @@ func TestRunResume_MigratesLegacyManifestFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RunResume([]string{taskDir}); err != nil {
-		t.Fatalf("resuming legacy task: %v", err)
+	legacyInput, err := LoadLegacyManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	migrated, err := LoadManifest(taskDir)
+	migrated, err := migrateLegacyManifest(taskDir, legacyInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,8 +554,8 @@ func TestRunResume_MigratesLegacyManifestFile(t *testing.T) {
 	if migrated.Chunks.ChunkMinutes != legacy.ChunkMinutes {
 		t.Errorf("chunk minutes were not preserved: got %d", migrated.Chunks.ChunkMinutes)
 	}
-	if migrated.State != TaskCompleted {
-		t.Errorf("expected migrated task to complete, got %q", migrated.State)
+	if migrated.CountCompletedChunks() != 0 {
+		t.Error("legacy transcripts without hashes must be retranscribed")
 	}
 }
 
@@ -667,7 +699,8 @@ func TestReconcileArtifacts_TranscriptMissing_InvalidatesDownstream(t *testing.T
 	taskDir := createTestTaskDir(t)
 
 	m := &Manifest{
-		OutputMode: "minutes",
+		OutputMode:       "minutes",
+		IntegrityVersion: 1,
 		Artifacts: Artifacts{
 			Transcript: ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactReady},
 			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: ArtifactReady},
@@ -696,7 +729,8 @@ func TestReconcileArtifacts_NotesInputMissing_InvalidatesMinutes(t *testing.T) {
 	}
 
 	m := &Manifest{
-		OutputMode: "minutes",
+		OutputMode:       "minutes",
+		IntegrityVersion: 1,
 		Artifacts: Artifacts{
 			Transcript: ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactReady},
 			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: ArtifactReady},
@@ -780,14 +814,14 @@ func TestBuildChunkItemsFromDisk(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
 	}
-	if items[0].State != ChunkCompleted {
-		t.Errorf("item 1: expected COMPLETED, got %s", items[0].State)
+	if items[0].State != ChunkPending {
+		t.Errorf("item 1: expected PENDING until its hash is recorded, got %s", items[0].State)
 	}
 	if items[1].State != ChunkPending {
 		t.Errorf("item 2: expected PENDING, got %s", items[1].State)
 	}
-	if items[2].State != ChunkCompleted {
-		t.Errorf("item 3: expected COMPLETED, got %s", items[2].State)
+	if items[2].State != ChunkPending {
+		t.Errorf("item 3: expected PENDING until its hash is recorded, got %s", items[2].State)
 	}
 }
 

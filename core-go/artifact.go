@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // WriteFileAtomically writes content to a final path via a temporary file
@@ -35,17 +34,8 @@ func WriteFileAtomically(finalPath string, data []byte, perm os.FileMode) error 
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		if runtime.GOOS != "windows" {
-			return fmt.Errorf("renaming temp file to final path: %w", err)
-		}
-		// Windows: remove existing then rename.
-		if removeErr := os.Remove(finalPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("removing existing file before rename: %w", removeErr)
-		}
-		if renameErr := os.Rename(tempPath, finalPath); renameErr != nil {
-			return fmt.Errorf("renaming temp file to final path: %w", renameErr)
-		}
+	if err := replaceFileAtomically(tempPath, finalPath); err != nil {
+		return fmt.Errorf("replacing file atomically: %w", err)
 	}
 	return nil
 }

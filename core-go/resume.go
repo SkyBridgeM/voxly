@@ -239,6 +239,7 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 			TranscriptPath: filepath.Join(taskDir, "transcripts", id+".txt"),
 			State:          ChunkPending,
 			SizeBytes:      sizeBytes,
+			AudioSHA256:    mustFileSHA256(chunkPath),
 		}
 	}
 
@@ -341,6 +342,7 @@ func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error 
 
 		chunk.State = ChunkCompleted
 		chunk.TranscriptPath = transcriptPath
+		chunk.TranscriptSHA256 = mustFileSHA256(transcriptPath)
 		chunk.LastError = nil
 		if err := SaveManifest(taskDir, m); err != nil {
 			return fmt.Errorf("saving manifest after transcription: %w", err)
@@ -366,6 +368,7 @@ func executeMerging(taskDir string, m *Manifest) error {
 
 	m.Artifacts.Transcript.Path = transcriptPath
 	m.Artifacts.Transcript.State = ArtifactReady
+	m.Artifacts.Transcript.SHA256 = mustFileSHA256(transcriptPath)
 	return SaveManifest(taskDir, m)
 }
 
@@ -386,6 +389,7 @@ func executeNotesGenerating(taskDir string, m *Manifest, settings *Settings) err
 
 	m.Artifacts.NotesInput.Path = notesPath
 	m.Artifacts.NotesInput.State = ArtifactReady
+	m.Artifacts.NotesInput.SHA256 = mustFileSHA256(notesPath)
 	return SaveManifest(taskDir, m)
 }
 
@@ -432,6 +436,7 @@ func executeMinutesGenerating(taskDir string, m *Manifest, settings *Settings) e
 
 	m.Artifacts.Minutes.Path = minutesPath
 	m.Artifacts.Minutes.State = ArtifactReady
+	m.Artifacts.Minutes.SHA256 = mustFileSHA256(minutesPath)
 	return SaveManifest(taskDir, m)
 }
 
@@ -454,6 +459,7 @@ func executeValidatingOutputs(taskDir string, m *Manifest) error {
 		return fmt.Errorf("meeting_minutes.md is not ready")
 	}
 
+	m.IntegrityVersion = 1
 	return SaveManifest(taskDir, m)
 }
 
@@ -521,13 +527,14 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 	now := nowFunc().Format(time.RFC3339)
 
 	m := &Manifest{
-		SchemaVersion: currentSchemaVersion,
-		TaskID:        filepath.Base(taskDir),
-		OutputMode:    old.OutputMode,
-		State:         TaskCreated,
-		Attempt:       1,
-		Source:        old.Source,
-		Chunks:        old.Chunks,
+		SchemaVersion:    currentSchemaVersion,
+		IntegrityVersion: old.IntegrityVersion,
+		TaskID:           filepath.Base(taskDir),
+		OutputMode:       old.OutputMode,
+		State:            TaskCreated,
+		Attempt:          1,
+		Source:           old.Source,
+		Chunks:           old.Chunks,
 		Artifacts: Artifacts{
 			Transcript: ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactPending},
 			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: ArtifactPending},

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,12 +32,30 @@ func ReconcileChunks(taskDir string, m *Manifest) {
 		if info != nil {
 			item.SizeBytes = info.Size()
 		}
+		audioHash, err := fileSHA256(audioPath)
+		if err != nil {
+			item.State = ChunkPending
+			continue
+		}
+		if item.AudioSHA256 == "" && m.IntegrityVersion == 0 {
+			item.State = ChunkPending
+			continue
+		}
+		if item.AudioSHA256 == "" {
+			item.AudioSHA256 = audioHash // One-time upgrade for pre-hash manifests.
+		} else if item.AudioSHA256 != audioHash {
+			item.AudioSHA256 = audioHash
+			item.TranscriptSHA256 = ""
+			item.State = ChunkPending
+			continue
+		}
 
 		// Verify transcript.
 		transcriptPath := filepath.Join(transcriptsDir, item.ID+".txt")
 		item.TranscriptPath = transcriptPath
 
-		if isCompleteFile(transcriptPath) {
+		if transcriptHash, err := fileSHA256(transcriptPath); err == nil && (item.TranscriptSHA256 != "" && item.TranscriptSHA256 == transcriptHash || m.IntegrityVersion != 0 && item.TranscriptSHA256 == "") {
+			item.TranscriptSHA256 = transcriptHash
 			item.State = ChunkCompleted
 		} else {
 			// Missing, empty, or temp file — reclassify as PENDING.
@@ -51,7 +71,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	// Transcript artifact.
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	m.Artifacts.Transcript.Path = transcriptPath
-	if isCompleteFile(transcriptPath) {
+	if artifactMatches(transcriptPath, &m.Artifacts.Transcript, m.IntegrityVersion) {
 		m.Artifacts.Transcript.State = ArtifactReady
 	} else {
 		m.Artifacts.Transcript.State = ArtifactPending
@@ -65,7 +85,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	if m.OutputMode == "notes" || m.OutputMode == "minutes" {
 		notesPath := filepath.Join(taskDir, "notes_input.md")
 		m.Artifacts.NotesInput.Path = notesPath
-		if isCompleteFile(notesPath) {
+		if artifactMatches(notesPath, &m.Artifacts.NotesInput, m.IntegrityVersion) {
 			m.Artifacts.NotesInput.State = ArtifactReady
 		} else {
 			m.Artifacts.NotesInput.State = ArtifactPending
@@ -80,7 +100,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	if m.OutputMode == "minutes" {
 		minutesPath := filepath.Join(taskDir, "meeting_minutes.md")
 		m.Artifacts.Minutes.Path = minutesPath
-		if isCompleteFile(minutesPath) {
+		if artifactMatches(minutesPath, &m.Artifacts.Minutes, m.IntegrityVersion) {
 			m.Artifacts.Minutes.State = ArtifactReady
 		} else {
 			m.Artifacts.Minutes.State = ArtifactPending
@@ -129,18 +149,16 @@ func BuildChunkItemsFromDisk(taskDir string) ([]ChunkItem, string, error) {
 			sizeBytes = info.Size()
 		}
 
-		state := ChunkPending
-		if isCompleteFile(transcriptPath) {
-			state = ChunkCompleted
-		}
+		audioHash, _ := fileSHA256(audioPath)
 
 		items = append(items, ChunkItem{
 			ID:             id,
 			AudioPath:      audioPath,
 			TranscriptPath: transcriptPath,
-			State:          state,
+			State:          ChunkPending,
 			Attempts:       0,
 			SizeBytes:      sizeBytes,
+			AudioSHA256:    audioHash,
 			LastError:      nil,
 		})
 	}
@@ -157,4 +175,43 @@ func BuildChunkItemsFromDisk(taskDir string) ([]ChunkItem, string, error) {
 	}
 
 	return items, format, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func artifactMatches(path string, artifact *ArtifactInfo, integrityVersion int) bool {
+	if artifact.State != ArtifactReady || !isCompleteFile(path) {
+		return false
+	}
+	hash, err := fileSHA256(path)
+	if err != nil {
+		return false
+	}
+	if artifact.SHA256 == "" && integrityVersion == 0 {
+		return false
+	}
+	if artifact.SHA256 == "" {
+		artifact.SHA256 = hash // One-time upgrade for pre-hash manifests.
+		return true
+	}
+	return hash == artifact.SHA256
+}
+
+func mustFileSHA256(path string) string {
+	hash, err := fileSHA256(path)
+	if err != nil {
+		return ""
+	}
+	return hash
 }

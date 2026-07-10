@@ -292,6 +292,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 	manifest.Artifacts.Transcript.Path = transcriptPath
 	manifest.Artifacts.Transcript.State = ArtifactReady
+	manifest.Artifacts.Transcript.SHA256 = mustFileSHA256(transcriptPath)
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		return fmt.Errorf("saving manifest: %w", err)
 	}
@@ -311,6 +312,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		}
 		manifest.Artifacts.NotesInput.Path = notesInputPath
 		manifest.Artifacts.NotesInput.State = ArtifactReady
+		manifest.Artifacts.NotesInput.SHA256 = mustFileSHA256(notesInputPath)
 		if err := SaveManifest(taskDir, manifest); err != nil {
 			return fmt.Errorf("saving manifest: %w", err)
 		}
@@ -353,6 +355,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		}
 		manifest.Artifacts.Minutes.Path = minutesPath
 		manifest.Artifacts.Minutes.State = ArtifactReady
+		manifest.Artifacts.Minutes.SHA256 = mustFileSHA256(minutesPath)
 		if err := SaveManifest(taskDir, manifest); err != nil {
 			return fmt.Errorf("saving manifest: %w", err)
 		}
@@ -399,6 +402,7 @@ func buildChunkItems(taskDir string, chunks []string) []ChunkItem {
 			TranscriptPath: filepath.Join(taskDir, "transcripts", id+".txt"),
 			State:          ChunkPending,
 			SizeBytes:      sizeBytes,
+			AudioSHA256:    mustFileSHA256(chunkPath),
 		}
 	}
 	return items

@@ -2,11 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -16,18 +14,19 @@ const currentSchemaVersion = 1
 // Manifest represents the task manifest stored in each task directory.
 // This is the durable checkpoint for resume operations.
 type Manifest struct {
-	SchemaVersion int        `json:"schema_version"`
-	TaskID        string     `json:"task_id"`
-	OutputMode    string     `json:"output_mode"`
-	Source        SourceInfo `json:"source"`
-	State         TaskState  `json:"state"`
-	Attempt       int        `json:"attempt"`
-	Chunks        ChunksInfo `json:"chunks"`
-	Artifacts     Artifacts  `json:"artifacts"`
-	LastError     *ErrorInfo `json:"last_error"`
-	CreatedAt     string     `json:"created_at"`
-	UpdatedAt     string     `json:"updated_at"`
-	CompletedAt   *string    `json:"completed_at"`
+	SchemaVersion    int        `json:"schema_version"`
+	IntegrityVersion int        `json:"integrity_version"`
+	TaskID           string     `json:"task_id"`
+	OutputMode       string     `json:"output_mode"`
+	Source           SourceInfo `json:"source"`
+	State            TaskState  `json:"state"`
+	Attempt          int        `json:"attempt"`
+	Chunks           ChunksInfo `json:"chunks"`
+	Artifacts        Artifacts  `json:"artifacts"`
+	LastError        *ErrorInfo `json:"last_error"`
+	CreatedAt        string     `json:"created_at"`
+	UpdatedAt        string     `json:"updated_at"`
+	CompletedAt      *string    `json:"completed_at"`
 }
 
 // SourceInfo describes the input audio file.
@@ -50,13 +49,15 @@ type ChunksInfo struct {
 
 // ChunkItem describes one audio chunk and its transcription state.
 type ChunkItem struct {
-	ID             string     `json:"id"`
-	AudioPath      string     `json:"audio_path"`
-	TranscriptPath string     `json:"transcript_path"`
-	State          ChunkState `json:"state"`
-	Attempts       int        `json:"attempts"`
-	SizeBytes      int64      `json:"size_bytes"`
-	LastError      *string    `json:"last_error"`
+	ID               string     `json:"id"`
+	AudioPath        string     `json:"audio_path"`
+	TranscriptPath   string     `json:"transcript_path"`
+	State            ChunkState `json:"state"`
+	Attempts         int        `json:"attempts"`
+	SizeBytes        int64      `json:"size_bytes"`
+	AudioSHA256      string     `json:"audio_sha256"`
+	TranscriptSHA256 string     `json:"transcript_sha256"`
+	LastError        *string    `json:"last_error"`
 }
 
 // Artifacts describes the generated output files.
@@ -68,8 +69,9 @@ type Artifacts struct {
 
 // ArtifactInfo describes one generated output file.
 type ArtifactInfo struct {
-	Path  string        `json:"path"`
-	State ArtifactState `json:"state"`
+	Path   string        `json:"path"`
+	State  ArtifactState `json:"state"`
+	SHA256 string        `json:"sha256"`
 }
 
 // ErrorInfo records the last error that occurred during the task.
@@ -168,17 +170,8 @@ func SaveManifest(taskDir string, m *Manifest) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("closing temporary manifest: %w", err)
 	}
-	destination := ManifestPath(taskDir)
-	if err := os.Rename(tempPath, destination); err != nil {
-		if runtime.GOOS != "windows" {
-			return fmt.Errorf("replacing manifest: %w", err)
-		}
-		if removeErr := os.Remove(destination); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return fmt.Errorf("removing old manifest before replacement: %w", removeErr)
-		}
-		if renameErr := os.Rename(tempPath, destination); renameErr != nil {
-			return fmt.Errorf("replacing manifest: %w", renameErr)
-		}
+	if err := replaceFileAtomically(tempPath, ManifestPath(taskDir)); err != nil {
+		return fmt.Errorf("replacing manifest: %w", err)
 	}
 	return nil
 }
@@ -193,9 +186,10 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 	}
 
 	return &Manifest{
-		SchemaVersion: currentSchemaVersion,
-		TaskID:        filepath.Base(taskDir),
-		OutputMode:    outputMode,
+		SchemaVersion:    currentSchemaVersion,
+		IntegrityVersion: 1,
+		TaskID:           filepath.Base(taskDir),
+		OutputMode:       outputMode,
 		Source: SourceInfo{
 			Path:         sourceAudio,
 			OriginalName: filepath.Base(sourceAudio),
