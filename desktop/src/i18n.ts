@@ -8,6 +8,8 @@ export interface Translations {
   noFileSelected: string;
   modeTranscript: string;
   modeTranscriptDesc: string;
+  modeNotes: string;
+  modeNotesDesc: string;
   modeMinutes: string;
   modeMinutesDesc: string;
   start: string;
@@ -28,9 +30,17 @@ export interface Translations {
   exitedWithCode: string;
   terminatedBySignal: string;
   transcriptWarning: string;
+  notesWarning: string;
   llmWarning: string;
   settingsTitle: string;
   language: string;
+  advancedSettings: string;
+  backend: string;
+  backendPython: string;
+  backendGo: string;
+  goBackendHint: string;
+  outputDir: string;
+  pickOutputDir: string;
   mimoApiKey: string;
   deepseekApiKey: string;
   deepseekModel: string;
@@ -51,12 +61,14 @@ export interface Translations {
 export const translations: Record<Locale, Translations> = {
   zh: {
     appTitle: "meeting-asr Desktop Prototype",
-    appSubtitle: "实验性 Tauri 桌面原型 — 通过 uv 调用 Python CLI",
+    appSubtitle: "实验性 Tauri 桌面原型",
     inputTitle: "输入",
     chooseFile: "选择音频文件",
     noFileSelected: "未选择文件",
     modeTranscript: "转写文本",
     modeTranscriptDesc: "仅转写",
+    modeNotes: "笔记",
+    modeNotesDesc: "转写 + LLM 笔记",
     modeMinutes: "LLM 总结",
     modeMinutesDesc: "AI 生成纪要",
     start: "开始",
@@ -78,10 +90,20 @@ export const translations: Record<Locale, Translations> = {
     terminatedBySignal: "被信号终止",
     transcriptWarning:
       "transcript 模式会将音频发送至 MiMo ASR 进行转写。请勿上传未授权的敏感会议内容。\n\nTranscript mode sends audio to MiMo ASR for transcription.",
+    notesWarning:
+      "notes 模式会将音频发送至 MiMo ASR 进行转写，然后本地生成笔记文件（不调用任何 LLM，不发送至 DeepSeek）。请勿上传未授权的敏感会议内容。\n\nNotes mode sends audio to MiMo ASR for transcription, then generates notes_input.md locally (no LLM call, nothing sent to DeepSeek). Do not upload unauthorized sensitive meeting content.",
     llmWarning:
       "minutes 模式会将转写文本发送至 DeepSeek 生成会议总结。请勿上传未授权的敏感会议内容。\n\nMinutes mode sends transcript text to DeepSeek for summary generation.",
     settingsTitle: "设置",
     language: "语言",
+    advancedSettings: "高级 / 实验性",
+    backend: "后端引擎",
+    backendPython: "Python（稳定，默认）",
+    backendGo: "Go（实验性）",
+    goBackendHint:
+      "Go 后端需要先构建：cd core-go && go build -o meeting-asr-go .",
+    outputDir: "输出目录",
+    pickOutputDir: "选择目录",
     mimoApiKey: "MIMO API Key",
     deepseekApiKey: "DeepSeek API Key",
     deepseekModel: "DeepSeek 模型",
@@ -93,19 +115,22 @@ export const translations: Record<Locale, Translations> = {
     close: "关闭",
     showLogs: "显示日志",
     hideLogs: "隐藏日志",
-    keysNotPersisted: "临时 Key 仅在本次会话有效，关闭后丢失。可点击「保存到 .env」持久化到项目根目录。",
+    keysNotPersisted:
+      "临时 Key 仅在本次会话有效，关闭后丢失。可点击「保存到 .env」持久化到项目根目录。",
     saveToEnv: "保存到 .env",
     savedSuccessfully: "已保存",
     saveFailed: "保存失败",
   },
   en: {
     appTitle: "meeting-asr Desktop Prototype",
-    appSubtitle: "Experimental Tauri prototype — calls Python CLI via uv",
+    appSubtitle: "Experimental Tauri desktop prototype",
     inputTitle: "Input",
     chooseFile: "Choose Audio File",
     noFileSelected: "No file selected",
     modeTranscript: "Transcript",
     modeTranscriptDesc: "Text only",
+    modeNotes: "Notes",
+    modeNotesDesc: "Transcript + LLM Notes",
     modeMinutes: "LLM Summary",
     modeMinutesDesc: "AI minutes",
     start: "Start",
@@ -127,10 +152,20 @@ export const translations: Record<Locale, Translations> = {
     terminatedBySignal: "Terminated by signal",
     transcriptWarning:
       "Transcript mode sends audio to MiMo ASR for transcription. Do not upload unauthorized sensitive meeting content.",
+    notesWarning:
+      "Notes mode sends audio to MiMo ASR for transcription, then generates notes_input.md locally (no LLM call, nothing sent to DeepSeek). Do not upload unauthorized sensitive meeting content.",
     llmWarning:
       "Minutes mode sends transcript text to DeepSeek for summary generation. Do not upload unauthorized sensitive meeting content.",
     settingsTitle: "Settings",
     language: "Language",
+    advancedSettings: "Advanced / Experimental",
+    backend: "Backend Engine",
+    backendPython: "Python (stable, default)",
+    backendGo: "Go (experimental)",
+    goBackendHint:
+      "Build the Go backend first: cd core-go && go build -o meeting-asr-go .",
+    outputDir: "Output directory",
+    pickOutputDir: "Choose directory",
     mimoApiKey: "MIMO API Key",
     deepseekApiKey: "DeepSeek API Key",
     deepseekModel: "DeepSeek Model",
@@ -142,7 +177,8 @@ export const translations: Record<Locale, Translations> = {
     close: "Close",
     showLogs: "Show Logs",
     hideLogs: "Hide Logs",
-    keysNotPersisted: "Temporary keys are session-only and lost when closed. Use \"Save to .env\" to persist to the project root.",
+    keysNotPersisted:
+      "Temporary keys are session-only and lost when closed. Use \"Save to .env\" to persist to the project root.",
     saveToEnv: "Save to .env",
     savedSuccessfully: "Saved",
     saveFailed: "Save failed",

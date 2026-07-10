@@ -5,15 +5,16 @@
 
 ## What This Is
 
-A thin Tauri + React + TypeScript desktop wrapper that calls the existing Python CLI
-via `uv run meeting-asr`. All business logic (ASR, LLM, workflow, resume, ffmpeg)
-remains in the Python core under `src/meeting_asr/`.
+A thin Tauri + React + TypeScript desktop wrapper that calls either the Python CLI
+(via `uv run meeting-asr`) or the Go CLI (`core-go/meeting-asr-go`). All business
+logic (ASR, LLM, workflow, resume, ffmpeg) remains in the respective core.
 
 ## Architecture
 
 ```
 desktop/ (Tauri + React)
-  └── spawns: uv run meeting-asr transcribe <audio> --output-mode <mode>
+  ├── Python backend (stable): uv run meeting-asr transcribe <audio> --output-mode <mode>
+  └── Go backend (experimental): core-go/meeting-asr-go transcribe <audio> --output-mode <mode>
                 │
                 ├── reads .env from project root
                 ├── runs ASR / LLM
@@ -26,8 +27,8 @@ desktop/ (Tauri + React)
 |---|---|
 | **Node.js + npm** | Frontend build and Tauri CLI |
 | **Rust** (rustc, cargo) | Tauri Rust backend |
-| **[uv](https://docs.astral.sh/uv/)** | Python package manager and CLI runner |
-| **ffmpeg** | Audio splitting (required by Python CLI) |
+| **[uv](https://docs.astral.sh/uv/)** | Python package manager (`python` backend only) |
+| **ffmpeg** | Audio splitting (required by both backends) |
 | **`.env` at project root** | API keys |
 
 ## Setup
@@ -45,8 +46,27 @@ npm install
 
 # 4. Configure API keys in project-root .env
 #    transcript mode needs: MIMO_API_KEY
-#    minutes mode needs:    MIMO_API_KEY + DEEPSEEK_API_KEY
+#    minutes/notes mode needs: MIMO_API_KEY + DEEPSEEK_API_KEY
 ```
+
+### Go Backend (Experimental)
+
+```bash
+# Build the Go CLI binary
+cd core-go
+go build -o meeting-asr-go .
+go test ./...
+
+# Start Tauri dev with Go backend selected in Settings
+cd ../desktop
+npm run tauri dev
+```
+
+The Go binary is discovered via:
+1. `MEETING_ASR_GO_BINARY` environment variable (absolute path)
+2. Fallback: `<project-root>/core-go/meeting-asr-go`
+
+The Rust backend validates the binary with `<binary> version` before use.
 
 ## Running
 
@@ -58,28 +78,54 @@ npm run tauri dev
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.
-2. User chooses output mode: `transcript` or `minutes`.
-3. On "Start", the app runs:
+2. User chooses output mode: `transcript`, `notes`, or `minutes`.
+3. User selects an output directory (defaults to `<project-root>/output/`).
+4. User selects backend engine in Settings → Advanced: Python (default) or Go (experimental).
+5. On "Start", based on backend:
+
+   **Python:**
    ```
-   uv run meeting-asr transcribe <audio_path> --output-mode <mode>
+   uv run meeting-asr transcribe <audio_path> --output-mode <mode> --output-dir <dir>
    ```
-4. stdout/stderr stream in real time to the UI.
-5. On completion, the task folder and output file paths are displayed.
-6. "Open Output Folder" opens the task directory in the system file manager.
+
+   **Go:**
+   ```
+   core-go/meeting-asr-go transcribe <audio_path> --output-mode <mode> --output-dir <dir> --env-file <path>
+   ```
+
+   API keys are passed via environment variables; never in CLI arguments. DeepSeek model
+   is set via `DEEPSEEK_MODEL` envvar for Go, or `--llm-model` flag for Python.
+
+6. stdout/stderr stream in real time to the UI.
+7. On completion, the task folder and output file paths are displayed.
+8. "Open Output Folder" opens the task directory in the system file manager.
+
+## Backend Selection
+
+The backend engine (Python or Go) is selected in the Settings panel under
+"Advanced / Experimental" and persisted in `localStorage`.
+
+Backend choice must be restarted to take effect for a new run.
+
+**Python** is the stable default and uses the existing `uv run meeting-asr` command.
+
+**Go** is experimental and requires `core-go/meeting-asr-go` to be built first.
+It supports all three output modes (transcript, notes, minutes) and resume.
 
 ## API Key Handling
 
 - API keys are **never** embedded in source code, logs, or CLI arguments.
-- The Python CLI reads keys from the project-root `.env` file (preferred).
+- The CLI reads keys from the project-root `.env` file (preferred).
 - Temporary keys can be entered in the Settings panel for the current session only.
   They are passed as environment variables to the CLI process.
 - Keys can be saved to `.env` from the Settings panel ("Save to .env").
   Rust writes `.env` directly — keys never appear in process argv.
-- If both `.env` and Settings are empty, the Python CLI will report the missing key error.
+- If both `.env` and Settings are empty, the CLI will report the missing key error.
 
 ## Privacy Warnings
 
 - **transcript mode**: Sends audio to MiMo ASR for transcription.
+- **notes mode**: Sends audio to MiMo ASR for transcription, then transcript to DeepSeek for notes.
 - **minutes mode**: Sends transcript text to DeepSeek for summary generation.
 - Do not upload unauthorized sensitive meeting content.
 
@@ -91,21 +137,37 @@ The app only requests:
 
 No filesystem, shell, network, or opener permissions are granted.
 
+## Structured Error Categories
+
+The Rust backend categorizes errors for the frontend:
+
+| Category | Examples |
+|---|---|
+| `backend_not_found` | uv or Go binary missing |
+| `dependency_missing` | ffmpeg not on PATH |
+| `missing_api_key` | MIMO_API_KEY or DEEPSEEK_API_KEY not set |
+| `invalid_input` | Bad audio format, invalid output mode |
+| `manifest_error` | Corrupt or invalid task_manifest.json |
+| `task_locked` | .resume.lock file present |
+| `interrupted` | Process killed by signal |
+| `process_failed` | Generic non-zero exit |
+
 ## Common Errors
 
 | Error | Cause | Fix |
 |---|---|---|
 | `uv is not installed` | uv not in PATH | Install uv and restart |
 | `No module named meeting_asr` | Dependencies not installed | Run `uv sync --all-extras` |
+| `Go binary not found` | Go binary not built | Run `cd core-go && go build -o meeting-asr-go .` |
 | `ffmpeg not found` | ffmpeg not installed | Install ffmpeg separately |
 | `.env` missing | No API keys configured | Create `.env` with required keys |
 | `MIMO_API_KEY not set` | Key missing in `.env` | Add key to `.env` |
-| `DEEPSEEK_API_KEY not set` | Key missing for minutes mode | Add key to `.env` |
+| `DEEPSEEK_API_KEY not set` | Key missing for notes/minutes mode | Add key to `.env` |
 
 ## Security Notes
 
-- No arbitrary shell command execution — only `uv run meeting-asr` with fixed arguments.
-- `open_task_folder` validates that the path is inside the `output/` directory.
+- No arbitrary shell command execution — only fixed commands with validated arguments.
+- `open_task_folder` validates that the path is inside the selected output directory.
 - CSP is `null` (experiment-phase simplification).
 - Bundle is disabled (`"active": false` in `tauri.conf.json`).
 
@@ -115,22 +177,29 @@ No filesystem, shell, network, or opener permissions are granted.
 - No auto-update, system tray, or menu bar.
 - No FastAPI, database, task queue, or server backend.
 - No LAN mode, PWA, or browser recording.
-- No production packaging or distribution.
+- No production packaging, sidecar bundling, or distribution.
+- No user-facing cancellation or resume UI.
 
 ## Manual Verification Checklist
 
 - [ ] Tauri window opens with title "meeting-asr Desktop Prototype"
-- [ ] Subtitle shows "Experimental Tauri prototype"
 - [ ] File picker allows `.mp3`, `.wav`, and `.m4a`
-- [ ] Output mode shows `transcript` and `minutes` only
-- [ ] Privacy warning shown for both modes
-- [ ] `transcript` mode starts without DeepSeek key
-- [ ] `minutes` mode calls CLI with `--output-mode minutes`
+- [ ] Output mode shows `transcript`, `notes`, and `minutes`
+- [ ] Privacy warning shown for all modes
+- [ ] Python: `transcript` mode starts without DeepSeek key
+- [ ] Go: `transcript` mode starts with Go binary
+- [ ] Go: `notes` mode generates notes_input.md
+- [ ] Go: `minutes` mode generates meeting_minutes.md
+- [ ] Output directory picker works outside repository
+- [ ] Missing Go binary shows clear error
+- [ ] Missing ffmpeg shows clear error
+- [ ] Missing MiMo key shows clear error
+- [ ] Missing DeepSeek key for notes/minutes shows clear error
+- [ ] Locked task shows clear error
 - [ ] stdout/stderr appear in real time in the log panel
 - [ ] Logs auto-expand when stderr arrives or on failure
 - [ ] On success, task folder and output paths are displayed
 - [ ] "Open Output Folder" opens the correct folder
-- [ ] Missing uv shows clear error message
 - [ ] No API keys appear in logs or UI output
 - [ ] Existing CLI (`uv run meeting-asr`) still works
 - [ ] Existing Streamlit WebUI still works

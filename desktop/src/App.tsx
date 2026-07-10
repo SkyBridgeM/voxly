@@ -4,8 +4,12 @@ import {
   runMeetingAsr,
   openTaskFolder,
   saveEnvKey,
+  parseBackendError,
   type LogEntry,
   type ProgressEvent,
+  type BackendErrorInfo,
+  type BackendKind,
+  type OutputMode,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
@@ -21,9 +25,14 @@ function App() {
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
-  const [outputMode, setOutputMode] = useState<"transcript" | "minutes">(
-    "transcript"
+  const [outputMode, setOutputMode] = useState<OutputMode>("transcript");
+  const [outputDir, setOutputDir] = useState<string>(
+    localStorage.getItem("outputDir") || ""
   );
+  const [backend, setBackend] = useState<BackendKind>(() => {
+    const saved = localStorage.getItem("backend");
+    return saved === "go" ? "go" : "python";
+  });
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [taskFolder, setTaskFolder] = useState<string | null>(null);
@@ -58,6 +67,14 @@ function App() {
     setLocale(locale);
   }, [locale]);
 
+  useEffect(() => {
+    localStorage.setItem("backend", backend);
+  }, [backend]);
+
+  useEffect(() => {
+    localStorage.setItem("outputDir", outputDir);
+  }, [outputDir]);
+
   const startRun = useCallback(async () => {
     if (!audioPath || isRunning) return;
 
@@ -76,56 +93,37 @@ function App() {
       const result = await runMeetingAsr(
         audioPath,
         outputMode,
-        { mimoApiKey, deepseekApiKey, deepseekModel },
+        {
+          mimoApiKey,
+          deepseekApiKey,
+          deepseekModel,
+          outputDir: outputDir.trim() || undefined,
+          backend,
+        },
         {
           onLog: (entry) => {
             setLogs((prev) => [...prev, entry]);
-            if (entry.stream === "stderr" && entry.line.trim()) {
-              setErrorMessage((prev) =>
-                prev ? prev + "\n" + entry.line : entry.line
-              );
-            }
           },
           onProgress: (event) => setProgress(event),
-          onDone: (code) => {
-            if (code === 0) {
-              setStatus(t.completedSuccessfully);
-              setStatusOk(true);
-            } else if (code !== null) {
-              setStatus(`${t.exitedWithCode} ${code}.`);
-              setStatusOk(false);
-            } else {
-              setStatus(t.terminatedBySignal);
-              setStatusOk(false);
-            }
-          },
+          // process-done means subprocess ended — not success.
+          onDone: () => {},
         }
       );
 
-      if (result.task_folder) setTaskFolder(result.task_folder);
-      if (result.transcript_path) setTranscriptPath(result.transcript_path);
+      setTaskFolder(result.task_folder);
+      setTranscriptPath(result.transcript_path);
       if (result.notes_input_path) setNotesInputPath(result.notes_input_path);
       if (result.minutes_path) setMinutesPath(result.minutes_path);
 
-      if (result.status === "success") {
-        if (!status) {
-          setStatus(t.completedSuccessfully);
-          setStatusOk(true);
-        }
-      } else if (!status) {
-        setStatus(result.status);
-        setStatusOk(false);
-      }
+      // Success only after validated output paths are received.
+      setStatus(t.completedSuccessfully);
+      setStatusOk(true);
     } catch (e) {
-      const err = String(e);
-      const stderrLines = logs
-        .filter((l) => l.stream === "stderr")
-        .map((l) => l.line)
-        .join("\n");
-      const displayError = stderrLines || err;
-      setErrorMessage(displayError);
+      const raw = String(e);
+      const info: BackendErrorInfo = parseBackendError(raw);
+      setErrorMessage(info.message || raw);
       setShowError(true);
-      setStatus(err);
+      setStatus(info.message || raw);
       setStatusOk(false);
     } finally {
       setIsRunning(false);
@@ -135,23 +133,22 @@ function App() {
     audioPath,
     isRunning,
     outputMode,
-    status,
+    outputDir,
+    backend,
     mimoApiKey,
     deepseekApiKey,
     deepseekModel,
-    t,
-    logs,
   ]);
 
   const handleOpenFolder = useCallback(async () => {
     if (!taskFolder) return;
     try {
-      await openTaskFolder(taskFolder);
+      await openTaskFolder(taskFolder, outputDir.trim() || undefined);
     } catch (e) {
       setErrorMessage(String(e));
       setShowError(true);
     }
-  }, [taskFolder]);
+  }, [taskFolder, outputDir]);
 
   const handleCloseSettings = () => {
     setShowSettings(false);
@@ -163,7 +160,26 @@ function App() {
       await saveEnvKey(key, value.trim());
       setSaveStatus((prev) => ({ ...prev, [key]: t.savedSuccessfully }));
     } catch (e) {
-      setSaveStatus((prev) => ({ ...prev, [key]: `${t.saveFailed}: ${String(e)}` }));
+      setSaveStatus((prev) => ({
+        ...prev,
+        [key]: `${t.saveFailed}: ${String(e)}`,
+      }));
+    }
+  };
+
+  const handleOutputDirPick = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        title: locale === "zh" ? "选择输出目录" : "Choose Output Directory",
+      });
+      if (selected && typeof selected === "string") {
+        setOutputDir(selected);
+        localStorage.setItem("outputDir", selected);
+      }
+    } catch {
+      // dialog not available or user cancelled
     }
   };
 
@@ -204,15 +220,22 @@ function App() {
             onStartRun={startRun}
             isRunning={isRunning}
             audioPath={audioPath}
+            outputDir={outputDir}
+            onPickOutputDir={handleOutputDirPick}
             labels={{
               modeTranscript: t.modeTranscript,
               modeTranscriptDesc: t.modeTranscriptDesc,
+              modeNotes: t.modeNotes,
+              modeNotesDesc: t.modeNotesDesc,
               modeMinutes: t.modeMinutes,
               modeMinutesDesc: t.modeMinutesDesc,
               start: t.start,
               processing: t.processing,
               llmWarning: t.llmWarning,
               transcriptWarning: t.transcriptWarning,
+              notesWarning: t.notesWarning,
+              outputDir: t.outputDir,
+              pickOutputDir: t.pickOutputDir,
             }}
           />
         </div>
@@ -307,6 +330,22 @@ function App() {
                   </option>
                 </select>
               </div>
+              <h3 className="settings-section-title">{t.advancedSettings}</h3>
+              <div className="form-group">
+                <label>{t.backend}</label>
+                <select
+                  value={backend}
+                  onChange={(e) =>
+                    setBackend(e.target.value as BackendKind)
+                  }
+                >
+                  <option value="python">{t.backendPython}</option>
+                  <option value="go">{t.backendGo}</option>
+                </select>
+                {backend === "go" && (
+                  <span className="setting-hint">{t.goBackendHint}</span>
+                )}
+              </div>
               <div className="form-group">
                 <label>{t.mimoApiKey}</label>
                 <div className="key-input-row">
@@ -315,7 +354,9 @@ function App() {
                     value={mimoApiKey}
                     onChange={(e) => setMimoApiKey(e.target.value)}
                     placeholder={
-                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                      locale === "zh"
+                        ? "留空则使用 .env 配置"
+                        : "Leave empty to use .env"
                     }
                   />
                   <button
@@ -328,7 +369,9 @@ function App() {
                   </button>
                 </div>
                 {saveStatus["MIMO_API_KEY"] && (
-                  <span className="save-status">{saveStatus["MIMO_API_KEY"]}</span>
+                  <span className="save-status">
+                    {saveStatus["MIMO_API_KEY"]}
+                  </span>
                 )}
               </div>
               <div className="form-group">
@@ -339,12 +382,16 @@ function App() {
                     value={deepseekApiKey}
                     onChange={(e) => setDeepseekApiKey(e.target.value)}
                     placeholder={
-                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
+                      locale === "zh"
+                        ? "留空则使用 .env 配置"
+                        : "Leave empty to use .env"
                     }
                   />
                   <button
                     className="btn-secondary btn-save-key"
-                    onClick={() => handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)}
+                    onClick={() =>
+                      handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)
+                    }
                     disabled={!deepseekApiKey.trim()}
                     title={t.saveToEnv}
                   >
@@ -352,7 +399,9 @@ function App() {
                   </button>
                 </div>
                 {saveStatus["DEEPSEEK_API_KEY"] && (
-                  <span className="save-status">{saveStatus["DEEPSEEK_API_KEY"]}</span>
+                  <span className="save-status">
+                    {saveStatus["DEEPSEEK_API_KEY"]}
+                  </span>
                 )}
               </div>
               <div className="form-group">
