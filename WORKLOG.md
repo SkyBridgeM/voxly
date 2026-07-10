@@ -3,7 +3,7 @@
 ## 现状
 
 **分支：** `experiment/go-core-spike`
-**阶段：** Phase 1 (Go Core CLI Parity) 已完成
+**阶段：** Resume state machine 重设计完成，等待 review
 
 Go CLI spike (`core-go/`) 已实现：
 - 音频切割（ffmpeg，含减半重试）
@@ -14,11 +14,13 @@ Go CLI spike (`core-go/`) 已实现：
 - Obsidian 模板渲染（minutes 模式）
 - `.env` 加载（支持 `--env-file` / `--project-root`）
 - Flag 解析支持任意位置
-- **Resume 命令** — `resume <task_dir>` 恢复中断的转录任务，跳过已完成的 chunk
-- **Manifest 支持** — `manifest.json` 跟踪任务状态（running/completed/failed）
+- **Resume 命令** — 完整状态机：load+validate manifest → 独占锁 → 磁盘 reconcile → 最早未完成阶段幂等执行
+- **Manifest 支持** — `task_manifest.json`（schema_version=1），嵌套 chunk 逐条状态和 artifact 状态
 - **Prompt/Template 标志** — `--prompt-path` 和 `--obsidian-template-path`
-- 84 个 Go 单元测试全通过
-- Python 111 个测试无回归
+- **原子写入** — 所有生成文件通过 temp+rename 写入
+- **独占锁** — `.resume.lock` 防止并发 resume，含 PID 和 stale 检测
+- 132 个 Go 单元测试全通过（含 race detector）
+- Python 114 个测试无回归
 
 ## 当前任务
 
@@ -29,6 +31,7 @@ Go CLI spike (`core-go/`) 已实现：
 - [x] Review fixes: gofmt、template error handling、write error check、WORKLOG 修正
 - [x] Phase 1: resume 命令、manifest 支持、prompt/template 标志
 - [x] Review fixes: gofmt、chunk 严格三位编号校验、README 更新
+- [x] Resume state machine 重设计（state.go、artifact.go、tasklock.go、reconcile.go、manifest 重写、resume 重写）
 - [ ] 等待 Codex review
 - [ ] 可选：端到端手动验证（需要真实 API key + 音频文件）
 
@@ -90,3 +93,30 @@ Go CLI spike (`core-go/`) 已实现：
 - 修正 chunk 文件名校验：只接受严格三位编号（part_001.wav），拒绝 part_1.wav
 - 更新 README.md：移除 "No resume"，添加 resume 功能说明
 - 更新 WORKLOG.md：补充 resume/manifest 实现记录
+
+**Session 8 — Resume state machine redesign**
+- 参考 `docs/go_core_resume_state_machine_design.md`，重新设计 resume 架构
+
+- **新增文件：**
+  - `state.go`：TaskState 枚举（CREATED/VALIDATING_AUDIO/SPLITTING/TRANSCRIBING/MERGING/NOTES_GENERATING/MINUTES_GENERATING/VALIDATING_OUTPUTS/COMPLETED/FAILED）、ChunkState 枚举（PENDING/IN_PROGRESS/COMPLETED/FAILED）、ArtifactState 枚举、`ResumeStage()` 阶段选择逻辑
+  - `artifact.go`：`WriteFileAtomically()` — temp file + fsync + atomic rename，所有生成文件使用此方式写入
+  - `tasklock.go`：`AcquireTaskLock()`/`Release()` — `.resume.lock` 独占锁，含 PID 和 stale 检测
+  - `reconcile.go`：`ReconcileChunks()` — 校验 chunk 音频和转写文件，重置 IN_PROGRESS/缺失/空文件为 PENDING；`ReconcileArtifacts()` — 校验产物并级联失效下游；`BuildChunkItemsFromDisk()` — legacy manifest 迁移用
+
+- **重写文件：**
+  - `manifest.go`：新 schema（schema_version=1），嵌套 Source/Chunks.Items/Artifacts/LastError，新增 `ChunkByID()`/`CountCompletedChunks()`/`ValidateManifest()`/`SetTaskState()`/`RecordTaskError()`/`MarkTaskCompleted()`
+  - `resume.go`：完整重写 — 加载+校验 manifest → 获取锁 → 磁盘 reconcile → `ResumeStage()` 选最早未完成阶段 → 幂等执行各阶段（splitting/transcribing/merging/notes/minutes/validating）。支持 legacy manifest（schema_version=0）自动迁移
+  - `main.go`：`runWorkflow` 使用新 manifest schema，splitting 后填充 Chunks.Items，transcription 时逐 chunk 更新状态，minutes 用 atomic write
+
+- **测试覆盖（设计文档 8 项验收标准）：**
+  1. 进程中断（chunk 5/10）→ 只重转缺失 chunk
+  2. merge 失败 → 只重跑 merge
+  3. DeepSeek 失败 → 只重跑 minutes
+  4. 删除转写文件 → 级联失效下游，只重转该 chunk
+  5. 已完成任务 → 无 API 调用
+  6. manifest 计数器从磁盘 reconcile（含归零）
+  7. 损坏 manifest → 拒绝不安全恢复，保留文件
+  8. 并发 resume → 被锁拒绝
+
+- 其他测试：stale lock 清理、锁释放、legacy manifest 迁移、ResumeStage 边界、ReconcileArtifacts 级联失效、WriteFileAtomically、BuildChunkItemsFromDisk
+- 总测试数：132 个 Go 测试全通过（含 race detector），Python 114 个无回归

@@ -101,7 +101,7 @@ Rules:
 - Relative paths from CLI may resolve relative to the current working directory unless there is an existing project-root convention.
 - Do not hardcode prompt text in Go logic.
 
-### 4. Add minimal `manifest.json`
+### 4. Add minimal `task_manifest.json`
 
 Write a simple manifest into each task directory.
 
@@ -109,7 +109,7 @@ Suggested fields:
 
 ```json
 {
-  "version": "1",
+  "task_id": "...",
   "source_audio": "...",
   "output_mode": "transcript",
   "chunk_minutes": 5,
@@ -119,6 +119,11 @@ Suggested fields:
   "created_at": "...",
   "updated_at": "...",
   "status": "completed",
+  "total_chunks": 0,
+  "completed_chunks": 0,
+  "transcript_path": "",
+  "notes_input_path": "",
+  "minutes_path": "",
   "error": null
 }
 ```

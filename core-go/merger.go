@@ -55,5 +55,5 @@ func MergeTranscripts(transcriptsDir, outputPath string) error {
 	}
 
 	output := strings.Join(sections, "\n\n") + "\n"
-	return os.WriteFile(outputPath, []byte(output), 0644)
+	return WriteFileAtomically(outputPath, []byte(output), 0600)
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +40,7 @@ def transcribe_chunks(
         print(f"Transcribing {chunk.name}...")
         text = transcribe_audio_file(chunk, settings, api_key)
         transcript_path.write_text(text.strip() + "\n", encoding="utf-8")
+        transcript_path.chmod(0o600)
         if progress_callback:
             progress_callback("completed", index, total, chunk)
         outputs.append(transcript_path)

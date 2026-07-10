@@ -99,6 +99,7 @@ def run_uploaded_audio_workflow(
     task_dir = create_task_dir(options.output_dir, Path(safe_name).stem)
     source_audio = task_dir / "audio" / safe_name
     source_audio.write_bytes(data)
+    source_audio.chmod(0o600)
 
     return run_task_audio_workflow(
         source_audio,
@@ -306,6 +307,7 @@ def run_transcription_workflow(
 
         minutes_path = task_dir / "meeting_minutes.md"
         minutes_path.write_text(minutes_text, encoding="utf-8")
+        minutes_path.chmod(0o600)
 
     if status_callback:
         status_callback("Done")

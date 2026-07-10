@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -128,6 +129,69 @@ func TestCopyFile(t *testing.T) {
 	}
 	if string(got) != string(content) {
 		t.Errorf("content = %q, want %q", got, content)
+	}
+}
+
+func TestCreateTaskDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission test on Windows")
+	}
+
+	outputDir := t.TempDir()
+	taskDir, err := CreateTaskDir(outputDir, "test_meeting.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Task directory should be 0700 (owner-only).
+	info, err := os.Stat(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0700 {
+		t.Errorf("task dir permissions = %o, want 0700", perm)
+	}
+
+	// Subdirectories should be 0700.
+	for _, sub := range []string{"audio", "chunks", "transcripts"} {
+		subPath := filepath.Join(taskDir, sub)
+		info, err := os.Stat(subPath)
+		if err != nil {
+			t.Errorf("subdir %s: %v", sub, err)
+			continue
+		}
+		perm := info.Mode().Perm()
+		if perm != 0700 {
+			t.Errorf("subdir %s permissions = %o, want 0700", sub, perm)
+		}
+	}
+}
+
+func TestCopyFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping permission test on Windows")
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.txt")
+	dst := filepath.Join(dir, "sub", "dest.txt")
+
+	if err := os.WriteFile(src, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("copied file permissions = %o, want 0600", perm)
 	}
 }
 

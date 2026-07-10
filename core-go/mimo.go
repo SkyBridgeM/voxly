@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,7 +23,7 @@ func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(transcriptsDir, 0755); err != nil {
+	if err := os.MkdirAll(transcriptsDir, 0700); err != nil {
 		return nil, err
 	}
 
@@ -52,7 +53,7 @@ func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings
 			return nil, fmt.Errorf("transcribing %s: %w", filepath.Base(chunk), err)
 		}
 
-		if err := os.WriteFile(transcriptPath, []byte(strings.TrimSpace(text)+"\n"), 0644); err != nil {
+		if err := os.WriteFile(transcriptPath, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
 			return nil, err
 		}
 
@@ -91,17 +92,14 @@ func transcribeAudioFile(audioPath string, settings *Settings, apiKey string) (s
 		}
 		lastErr = err
 
-		// Don't retry on client errors (4xx).
-		if isHTTPClientError(err) {
+		// Don't retry non-retriable client errors (e.g. 401, 403).
+		if isHTTPClientError(err) && !isRetriableHTTPError(err) {
 			break
 		}
 
 		if attempt < settings.RetryCount {
-			backoff := 1 << uint(attempt) // 2^attempt
-			if backoff > 10 {
-				backoff = 10
-			}
-			time.Sleep(time.Duration(backoff) * time.Second)
+			backoff := retryBackoff(err, attempt)
+			time.Sleep(backoff)
 		}
 	}
 
@@ -132,9 +130,11 @@ func callMimoAPI(apiKey, endpoint string, body []byte, timeoutSeconds int) (stri
 		return "", fmt.Errorf("MiMo server error %d: %s", resp.StatusCode, truncate(string(respBody), 500))
 	}
 	if resp.StatusCode >= 400 {
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		return "", &httpClientError{
 			statusCode: resp.StatusCode,
 			message:    fmt.Sprintf("MiMo API error %d: %s", resp.StatusCode, truncate(string(respBody), 1000)),
+			retryAfter: retryAfter,
 		}
 	}
 
@@ -220,15 +220,28 @@ func ExtractTranscript(body []byte) (string, error) {
 type httpClientError struct {
 	statusCode int
 	message    string
+	retryAfter time.Duration // parsed Retry-After header, 0 if absent/invalid
 }
 
 func (e *httpClientError) Error() string {
 	return e.message
 }
 
+// isRetriable returns true for rate-limit (429) and request-timeout (408) errors.
+func (e *httpClientError) isRetriable() bool {
+	return e.statusCode == http.StatusTooManyRequests || e.statusCode == http.StatusRequestTimeout
+}
+
 func isHTTPClientError(err error) bool {
 	_, ok := err.(*httpClientError)
 	return ok
+}
+
+func isRetriableHTTPError(err error) bool {
+	if herr, ok := err.(*httpClientError); ok {
+		return herr.isRetriable()
+	}
+	return false
 }
 
 func isCompleteFile(path string) bool {
@@ -241,4 +254,38 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+// retryBackoff computes the backoff duration for a retry attempt.
+// If the error carries a Retry-After header (e.g. 429), that value is used.
+// Otherwise, exponential backoff capped at 10 seconds is used.
+func retryBackoff(err error, attempt int) time.Duration {
+	if herr, ok := err.(*httpClientError); ok && herr.retryAfter > 0 {
+		return herr.retryAfter
+	}
+	backoff := 1 << uint(attempt) // 2^attempt
+	if backoff > 10 {
+		backoff = 10
+	}
+	return time.Duration(backoff) * time.Second
+}
+
+// parseRetryAfter parses a Retry-After header value (seconds or HTTP-date).
+// Returns 0 if the value is absent or unparseable.
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	// Try integer seconds first.
+	if secs, err := strconv.Atoi(value); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	// Try HTTP-date format.
+	if t, err := http.ParseTime(value); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
 }

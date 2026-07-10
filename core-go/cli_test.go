@@ -421,10 +421,37 @@ func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
 
 	taskDir := filepath.Join(dir, "task")
 	chunksDir := filepath.Join(taskDir, "chunks")
+	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	if err := os.MkdirAll(chunksDir, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(transcriptsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(chunksDir, "part_001.wav"), []byte("audio"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(transcriptsDir, "part_001.txt"), []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create transcript.md and notes_input.md so resume goes straight to minutes.
+	if err := os.WriteFile(filepath.Join(taskDir, "transcript.md"), []byte("transcript"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "notes_input.md"), []byte("notes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a manifest with chunk items so resume doesn't try to re-split.
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "meeting.wav"), "minutes", 5, 10, "mimo", "model")
+	m.Chunks.Format = "wav"
+	m.Chunks.Total = 1
+	m.Chunks.Items = []ChunkItem{
+		{ID: "part_001", AudioPath: filepath.Join(chunksDir, "part_001.wav"), TranscriptPath: filepath.Join(transcriptsDir, "part_001.txt"), State: ChunkCompleted},
+	}
+	m.Artifacts.Transcript.State = ArtifactReady
+	m.Artifacts.NotesInput.State = ArtifactReady
+	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
 
@@ -434,9 +461,9 @@ func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
 		taskDir,
 	})
 	if err == nil {
-		t.Fatal("expected error for unsupported MINUTES_PROVIDER")
+		t.Fatal("expected error for missing DEEPSEEK_API_KEY")
 	}
-	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") {
-		t.Errorf("error should mention required provider, got: %v", err)
+	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Errorf("error should mention DEEPSEEK_API_KEY, got: %v", err)
 	}
 }

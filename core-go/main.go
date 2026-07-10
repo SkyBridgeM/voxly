@@ -226,55 +226,107 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 
 	// 3. Create manifest.
-	manifest := CreateManifest(taskDir, audioPath, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, "mimo", settings.MimoModel)
-	if err := SaveManifest(taskDir, manifest); err != nil {
+	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, "mimo", settings.MimoModel)
+	if err := SetTaskState(taskDir, manifest, TaskValidatingAudio); err != nil {
 		return fmt.Errorf("creating manifest: %w", err)
 	}
 
 	// 4. Split audio.
+	if err := SetTaskState(taskDir, manifest, TaskSplitting); err != nil {
+		return fmt.Errorf("updating task state: %w", err)
+	}
 	fmt.Println("Status: Splitting audio")
 	chunks, err := SplitAudio(sourceCopy, filepath.Join(taskDir, "chunks"), settings.DefaultChunkMin, settings.MaxUploadBytes())
 	if err != nil {
-		return failTask(taskDir, fmt.Errorf("splitting audio: %w", err))
+		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, false)
+		return fmt.Errorf("splitting audio: %w", err)
+	}
+
+	// Build chunk items from split results.
+	chunkItems := buildChunkItems(taskDir, chunks)
+	chunkFormat := ""
+	if len(chunks) > 0 {
+		chunkFormat = strings.TrimPrefix(filepath.Ext(chunks[0]), ".")
+	}
+	manifest.Chunks.Format = chunkFormat
+	manifest.Chunks.Total = len(chunkItems)
+	manifest.Chunks.Items = chunkItems
+	if err := SaveManifest(taskDir, manifest); err != nil {
+		return fmt.Errorf("saving chunk info: %w", err)
 	}
 
 	// 5. Transcribe chunks.
+	if err := SetTaskState(taskDir, manifest, TaskTranscribing); err != nil {
+		return fmt.Errorf("updating task state: %w", err)
+	}
 	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(chunks))
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	progressFn := func(action string, index, total int) {
 		if action == "transcribing" || action == "completed" {
 			fmt.Printf("Progress: %d/%d\n", index, total)
 		}
+		if action == "completed" {
+			// Update chunk state in manifest.
+			if index-1 < len(manifest.Chunks.Items) {
+				manifest.Chunks.Items[index-1].State = ChunkCompleted
+				if err := SaveManifest(taskDir, manifest); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to update manifest progress: %v\n", err)
+				}
+			}
+		}
 	}
 	if _, err := TranscribeChunks(chunks, transcriptsDir, settings, progressFn); err != nil {
-		return failTask(taskDir, fmt.Errorf("transcribing: %w", err))
+		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, err, false)
+		return fmt.Errorf("transcribing: %w", err)
 	}
 
 	// 6. Merge transcripts.
+	if err := SetTaskState(taskDir, manifest, TaskMerging); err != nil {
+		return fmt.Errorf("updating task state: %w", err)
+	}
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
-		return failTask(taskDir, fmt.Errorf("merging transcripts: %w", err))
+		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, false)
+		return fmt.Errorf("merging transcripts: %w", err)
+	}
+	manifest.Artifacts.Transcript.Path = transcriptPath
+	manifest.Artifacts.Transcript.State = ArtifactReady
+	if err := SaveManifest(taskDir, manifest); err != nil {
+		return fmt.Errorf("saving manifest: %w", err)
 	}
 
 	// 7. notes_input.md (notes and minutes modes).
 	var notesInputPath string
 	if outputMode == "notes" || outputMode == "minutes" {
+		if err := SetTaskState(taskDir, manifest, TaskNotesGenerating); err != nil {
+			return fmt.Errorf("updating task state: %w", err)
+		}
 		fmt.Println("Status: Preparing notes input")
 		promptPath := settings.ResolvePath(settings.MinutesPromptPath)
 		notesInputPath = filepath.Join(taskDir, "notes_input.md")
 		if err := CreateNotesInput(promptPath, transcriptPath, notesInputPath); err != nil {
-			return failTask(taskDir, fmt.Errorf("creating notes input: %w", err))
+			_ = RecordTaskError(taskDir, manifest, TaskNotesGenerating, err, false)
+			return fmt.Errorf("creating notes input: %w", err)
+		}
+		manifest.Artifacts.NotesInput.Path = notesInputPath
+		manifest.Artifacts.NotesInput.State = ArtifactReady
+		if err := SaveManifest(taskDir, manifest); err != nil {
+			return fmt.Errorf("saving manifest: %w", err)
 		}
 	}
 
 	// 8. meeting_minutes.md (minutes mode only).
 	var minutesPath string
 	if outputMode == "minutes" {
+		if err := SetTaskState(taskDir, manifest, TaskMinutesGenerating); err != nil {
+			return fmt.Errorf("updating task state: %w", err)
+		}
 		fmt.Println("Status: Generating meeting minutes")
 		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
 		if err != nil {
-			return failTask(taskDir, fmt.Errorf("generating meeting minutes: %w", err))
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			return fmt.Errorf("generating meeting minutes: %w", err)
 		}
 
 		// Apply Obsidian template.
@@ -284,22 +336,36 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 		transcriptData, err := os.ReadFile(transcriptPath)
 		if err != nil {
-			return failTask(taskDir, fmt.Errorf("reading transcript for template: %w", err))
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			return fmt.Errorf("reading transcript for template: %w", err)
 		}
 
 		wrapped, err := ApplyObsidianTemplate(templatePath, rawMinutes, title, taskName, string(transcriptData))
 		if err != nil {
-			return failTask(taskDir, fmt.Errorf("applying Obsidian template: %w", err))
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			return fmt.Errorf("applying Obsidian template: %w", err)
 		}
 
 		minutesPath = filepath.Join(taskDir, "meeting_minutes.md")
-		if err := os.WriteFile(minutesPath, []byte(wrapped), 0644); err != nil {
-			return failTask(taskDir, fmt.Errorf("writing meeting minutes: %w", err))
+		if err := WriteFileAtomically(minutesPath, []byte(wrapped), 0600); err != nil {
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			return fmt.Errorf("writing meeting minutes: %w", err)
+		}
+		manifest.Artifacts.Minutes.Path = minutesPath
+		manifest.Artifacts.Minutes.State = ArtifactReady
+		if err := SaveManifest(taskDir, manifest); err != nil {
+			return fmt.Errorf("saving manifest: %w", err)
 		}
 	}
 
-	// 9. Update manifest status to completed.
-	if err := UpdateManifestStatus(taskDir, "completed", nil); err != nil {
+	// 9. Validate final outputs before completing the task.
+	if err := executeValidatingOutputs(taskDir, manifest); err != nil {
+		_ = RecordTaskError(taskDir, manifest, TaskValidatingOutputs, err, false)
+		return fmt.Errorf("validating outputs: %w", err)
+	}
+
+	// 10. Mark task completed.
+	if err := MarkTaskCompleted(taskDir, manifest); err != nil {
 		return fmt.Errorf("marking task completed: %w", err)
 	}
 
@@ -315,6 +381,27 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	fmt.Printf("Task folder: %s\n", taskDir)
 
 	return nil
+}
+
+// buildChunkItems creates ChunkItem records from split audio chunk paths.
+func buildChunkItems(taskDir string, chunks []string) []ChunkItem {
+	items := make([]ChunkItem, len(chunks))
+	for i, chunkPath := range chunks {
+		id := strings.TrimSuffix(filepath.Base(chunkPath), filepath.Ext(chunkPath))
+		info, _ := os.Stat(chunkPath)
+		var sizeBytes int64
+		if info != nil {
+			sizeBytes = info.Size()
+		}
+		items[i] = ChunkItem{
+			ID:             id,
+			AudioPath:      chunkPath,
+			TranscriptPath: filepath.Join(taskDir, "transcripts", id+".txt"),
+			State:          ChunkPending,
+			SizeBytes:      sizeBytes,
+		}
+	}
+	return items
 }
 
 func strPtr(s string) *string {

@@ -44,7 +44,6 @@ The current Go spike already has:
 
 Known Go gaps:
 
-- No resume command or resume workflow.
 - No recording workflow.
 - No Tauri integration.
 - No packaging.
@@ -136,7 +135,7 @@ Tasks:
    - Do not hardcode meeting-notes prompt content.
 
 4. Add a minimal manifest file.
-   - Write `manifest.json` into each task directory.
+   - Write `task_manifest.json` into each task directory.
    - Include:
      - source audio path/name
      - output mode

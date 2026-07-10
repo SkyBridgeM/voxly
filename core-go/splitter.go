@@ -94,7 +94,7 @@ func chunkAudioFormat(inputFormat string) string {
 }
 
 func clearChunks(chunksDir, format string) {
-	_ = os.MkdirAll(chunksDir, 0755)
+	_ = os.MkdirAll(chunksDir, 0700)
 	entries, _ := os.ReadDir(chunksDir)
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasPrefix(e.Name(), "part_") && strings.HasSuffix(e.Name(), "."+format) {

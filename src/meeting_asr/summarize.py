@@ -30,6 +30,7 @@ def create_notes_input(prompt_path: Path, transcript_path: Path, output_path: Pa
         f"{transcript}\n"
     )
     output_path.write_text(content, encoding="utf-8")
+    output_path.chmod(0o600)
     return output_path
 
 

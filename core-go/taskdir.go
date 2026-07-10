@@ -54,7 +54,7 @@ func CreateTaskDir(outputDir, name string) (string, error) {
 			dirName = fmt.Sprintf("%s_%d", baseName, suffix)
 		}
 		candidate := filepath.Join(outputDir, dirName)
-		err := os.Mkdir(candidate, 0755)
+		err := os.Mkdir(candidate, 0700)
 		if err == nil {
 			taskDir = candidate
 			break
@@ -68,7 +68,7 @@ func CreateTaskDir(outputDir, name string) (string, error) {
 	}
 
 	for _, sub := range []string{"audio", "chunks", "transcripts"} {
-		if err := os.Mkdir(filepath.Join(taskDir, sub), 0755); err != nil {
+		if err := os.Mkdir(filepath.Join(taskDir, sub), 0700); err != nil {
 			return "", fmt.Errorf("creating task subdir %s: %w", sub, err)
 		}
 	}
@@ -84,11 +84,11 @@ func CopyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
 		return err
 	}
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

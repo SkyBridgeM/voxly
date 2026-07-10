@@ -32,5 +32,5 @@ func CreateNotesInput(promptPath, transcriptPath, outputPath string) error {
 
 	content := fmt.Sprintf("%s\n\n---\n\n## Transcript\n\n%s\n", prompt, transcript)
 
-	return os.WriteFile(outputPath, []byte(content), 0644)
+	return WriteFileAtomically(outputPath, []byte(content), 0600)
 }

@@ -83,7 +83,7 @@ def create_task_dir(output_dir: Path, name: str) -> Path:
         dir_name = base_name if suffix == 1 else f"{base_name}_{suffix}"
         task_dir = resolved_output_dir / dir_name
         try:
-            task_dir.mkdir()
+            task_dir.mkdir(mode=0o700)
             break
         except FileExistsError:
             continue
@@ -91,7 +91,7 @@ def create_task_dir(output_dir: Path, name: str) -> Path:
         raise RuntimeError(f"Could not allocate a unique task folder under {resolved_output_dir}.")
 
     for subdir in ("audio", "chunks", "transcripts"):
-        (task_dir / subdir).mkdir()
+        (task_dir / subdir).mkdir(mode=0o700)
     return task_dir
 
 

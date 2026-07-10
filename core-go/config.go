@@ -209,11 +209,82 @@ func LoadSettings(envPath string) (*Settings, error) {
 	}
 
 	// Override from environment variables (env vars take precedence over .env file).
-	if envKey := os.Getenv("MIMO_API_KEY"); envKey != "" {
-		s.MimoAPIKey = envKey
+	if v := os.Getenv("MIMO_API_KEY"); v != "" {
+		s.MimoAPIKey = v
 	}
-	if envKey := os.Getenv("DEEPSEEK_API_KEY"); envKey != "" {
-		s.DeepSeekAPIKey = envKey
+	if v := os.Getenv("MIMO_ASR_ENDPOINT"); v != "" {
+		s.MimoEndpoint = v
+	}
+	if v := os.Getenv("MIMO_ASR_MODEL"); v != "" {
+		s.MimoModel = v
+	}
+	if v := os.Getenv("MAX_UPLOAD_MB"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("env MAX_UPLOAD_MB must be a number, got %q", v)
+		}
+		if f <= 0 {
+			return nil, fmt.Errorf("env MAX_UPLOAD_MB must be greater than 0, got %v", f)
+		}
+		s.MaxUploadMB = f
+	}
+	if v := os.Getenv("DEFAULT_CHUNK_MINUTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("env DEFAULT_CHUNK_MINUTES must be an integer, got %q", v)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("env DEFAULT_CHUNK_MINUTES must be greater than 0, got %v", n)
+		}
+		s.DefaultChunkMin = n
+	}
+	if v := os.Getenv("MIMO_RETRY_COUNT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("env MIMO_RETRY_COUNT must be an integer, got %q", v)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("env MIMO_RETRY_COUNT must be greater than 0, got %v", n)
+		}
+		s.RetryCount = n
+	}
+	if v := os.Getenv("MIMO_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("env MIMO_TIMEOUT_SECONDS must be an integer, got %q", v)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("env MIMO_TIMEOUT_SECONDS must be greater than 0, got %v", n)
+		}
+		s.TimeoutSeconds = n
+	}
+	if v := os.Getenv("MINUTES_PROVIDER"); v != "" {
+		s.MinutesProvider = v
+	}
+	if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
+		s.DeepSeekAPIKey = v
+	}
+	if v := os.Getenv("DEEPSEEK_ENDPOINT"); v != "" {
+		s.DeepSeekEndpoint = v
+	}
+	if v := os.Getenv("DEEPSEEK_MODEL"); v != "" {
+		s.DeepSeekModel = v
+	}
+	if v := os.Getenv("LLM_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("env LLM_TIMEOUT_SECONDS must be an integer, got %q", v)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("env LLM_TIMEOUT_SECONDS must be greater than 0, got %v", n)
+		}
+		s.LLMTimeoutSeconds = n
+	}
+	if v := os.Getenv("MINUTES_PROMPT_PATH"); v != "" {
+		s.MinutesPromptPath = v
+	}
+	if v := os.Getenv("OBSIDIAN_TEMPLATE_PATH"); v != "" {
+		s.ObsidianTemplatePath = v
 	}
 
 	return s, nil

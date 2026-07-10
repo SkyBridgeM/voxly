@@ -2,7 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBuildMimoASRPayload(t *testing.T) {
@@ -139,4 +144,193 @@ func TestExtractTranscriptEmptyChoices(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty choices")
 	}
+}
+
+func TestTranscribe401NotRetried(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":{"message":"unauthorized"}}`))
+	}))
+	defer server.Close()
+
+	settings := DefaultSettings()
+	settings.MimoAPIKey = "bad-key"
+	settings.MimoEndpoint = server.URL
+	settings.RetryCount = 3
+	settings.TimeoutSeconds = 5
+
+	tmpDir := t.TempDir()
+	chunkPath := tmpDir + "/part_001.wav"
+	if err := writeFakeWav(chunkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := transcribeAudioFile(chunkPath, settings, "bad-key")
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1 (401 should not be retried)", n)
+	}
+}
+
+func TestTranscribe429Retried(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n <= 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(429)
+			w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			return
+		}
+		w.WriteHeader(200)
+		resp := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"message": map[string]interface{}{
+						"content": "transcribed text",
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	settings := DefaultSettings()
+	settings.MimoAPIKey = "test-key"
+	settings.MimoEndpoint = server.URL
+	settings.RetryCount = 3
+	settings.TimeoutSeconds = 5
+
+	tmpDir := t.TempDir()
+	chunkPath := tmpDir + "/part_001.wav"
+	if err := writeFakeWav(chunkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := transcribeAudioFile(chunkPath, settings, "test-key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "transcribed text" {
+		t.Errorf("text = %q, want %q", text, "transcribed text")
+	}
+	if n := attempts.Load(); n != 3 {
+		t.Errorf("attempts = %d, want 3", n)
+	}
+}
+
+func TestTranscribe429ExhaustsRetries(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+	}))
+	defer server.Close()
+
+	settings := DefaultSettings()
+	settings.MimoAPIKey = "test-key"
+	settings.MimoEndpoint = server.URL
+	settings.RetryCount = 3
+	settings.TimeoutSeconds = 5
+
+	tmpDir := t.TempDir()
+	chunkPath := tmpDir + "/part_001.wav"
+	if err := writeFakeWav(chunkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := transcribeAudioFile(chunkPath, settings, "test-key")
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if n := attempts.Load(); n != 3 {
+		t.Errorf("attempts = %d, want 3", n)
+	}
+}
+
+func TestTranscribe408Retried(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n == 1 {
+			w.WriteHeader(408)
+			w.Write([]byte(`{"error":{"message":"timeout"}}`))
+			return
+		}
+		w.WriteHeader(200)
+		resp := map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"message": map[string]interface{}{
+						"content": "ok",
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	settings := DefaultSettings()
+	settings.MimoAPIKey = "test-key"
+	settings.MimoEndpoint = server.URL
+	settings.RetryCount = 3
+	settings.TimeoutSeconds = 5
+
+	tmpDir := t.TempDir()
+	chunkPath := tmpDir + "/part_001.wav"
+	if err := writeFakeWav(chunkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	text, err := transcribeAudioFile(chunkPath, settings, "test-key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "ok" {
+		t.Errorf("text = %q, want %q", text, "ok")
+	}
+	if n := attempts.Load(); n != 2 {
+		t.Errorf("attempts = %d, want 2", n)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+	}{
+		{"", 0},
+		{"0", 0},
+		{"5", 5 * time.Second},
+		{"120", 120 * time.Second},
+		{"invalid", 0},
+	}
+	for _, tt := range tests {
+		got := parseRetryAfter(tt.input)
+		if got != tt.want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func writeFakeWav(path string) error {
+	// Minimal WAV header (44 bytes) + 1 byte of data.
+	header := make([]byte, 45)
+	copy(header[0:4], "RIFF")
+	copy(header[8:12], "WAVE")
+	copy(header[12:16], "fmt ")
+	header[16] = 16 // chunk size
+	header[20] = 1  // PCM
+	header[22] = 1  // mono
+	header[34] = 16 // bits per sample
+	copy(header[36:40], "data")
+	header[40] = 1 // data size
+	return os.WriteFile(path, header, 0600)
 }

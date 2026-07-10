@@ -346,6 +346,96 @@ func TestEnvVarPrecedence(t *testing.T) {
 	}
 }
 
+func TestEnvVarPrecedence_Endpoint(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_ASR_ENDPOINT=https://file.example.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIMO_ASR_ENDPOINT", "https://env.example.com")
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MimoEndpoint != "https://env.example.com" {
+		t.Errorf("MimoEndpoint = %q, want %q", s.MimoEndpoint, "https://env.example.com")
+	}
+}
+
+func TestEnvVarPrecedence_Model(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_ASR_MODEL=file-model\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIMO_ASR_MODEL", "env-model")
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MimoModel != "env-model" {
+		t.Errorf("MimoModel = %q, want %q", s.MimoModel, "env-model")
+	}
+}
+
+func TestEnvVarPrecedence_Timeout(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MIMO_TIMEOUT_SECONDS=30\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIMO_TIMEOUT_SECONDS", "90")
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TimeoutSeconds != 90 {
+		t.Errorf("TimeoutSeconds = %d, want 90", s.TimeoutSeconds)
+	}
+}
+
+func TestEnvVarPrecedence_DeepSeekModel(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("DEEPSEEK_MODEL=file-model\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DEEPSEEK_MODEL", "env-model")
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.DeepSeekModel != "env-model" {
+		t.Errorf("DeepSeekModel = %q, want %q", s.DeepSeekModel, "env-model")
+	}
+}
+
+func TestEnvVarPrecedence_MaxUploadMB(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("MAX_UPLOAD_MB=5\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MAX_UPLOAD_MB", "25")
+
+	s, err := LoadSettings(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.MaxUploadMB != 25 {
+		t.Errorf("MaxUploadMB = %v, want 25", s.MaxUploadMB)
+	}
+}
+
 func TestResolvePath_RelativeToEnvBase(t *testing.T) {
 	s := DefaultSettings()
 	s.EnvBase = "/project/root"

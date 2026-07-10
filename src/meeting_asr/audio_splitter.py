@@ -55,7 +55,7 @@ def chunk_audio_format(input_format: str) -> str:
 
 
 def _clear_chunks(chunks_dir: Path) -> None:
-    chunks_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     for path in chunks_dir.glob("part_*.*"):
         if path.is_file():
             path.unlink()
