@@ -88,9 +88,22 @@ def _add_comparison(report: dict[str, Any], name: str, result: dict[str, Any]) -
     report["differences"].extend(result.get("differences", []))
 
 
-def _task_folder(parsed: dict[str, Any]) -> Path | None:
+def _task_folder(parsed: dict[str, Any], output_dir: Path, backend: str) -> tuple[Path | None, str | None]:
     folders = parsed.get("task_folders", [])
-    return Path(folders[-1]).expanduser() if folders else None
+    if not folders:
+        return None, None
+
+    task_folder = Path(folders[-1]).expanduser()
+    if not task_folder.is_absolute():
+        task_folder = REPO_ROOT / task_folder
+    task_folder = task_folder.resolve()
+    try:
+        relative_task_folder = task_folder.relative_to(output_dir)
+    except ValueError:
+        return None, f"{backend} reported task folder outside its requested output directory: {task_folder}"
+    if relative_task_folder == Path("."):
+        return None, f"{backend} reported its output root instead of a generated task folder: {task_folder}"
+    return task_folder, None
 
 
 def run_parity(args: argparse.Namespace) -> dict[str, Any]:
@@ -120,6 +133,7 @@ def run_parity(args: argparse.Namespace) -> dict[str, Any]:
         "comparisons": {},
     }
 
+    output_dirs = {"python": python_output, "go": go_output}
     for backend, command in (("python", python_command), ("go", go_command)):
         execution = _run(command, env)
         parsed = parse_backend_stdout(execution["stdout"])
@@ -131,7 +145,9 @@ def run_parity(args: argparse.Namespace) -> dict[str, Any]:
             _add_comparison(report, f"{backend}.stdout", validate_stdout_contract(parsed, args.mode))
         else:
             report["differences"].append(f"{backend} backend exited with code {execution['exit_code']}")
-        task_folder = _task_folder(parsed)
+        task_folder, task_folder_error = _task_folder(parsed, output_dirs[backend], backend)
+        if task_folder_error:
+            report["differences"].append(task_folder_error)
         if task_folder is not None:
             report["task_folders"][backend] = str(task_folder)
 

@@ -13,7 +13,7 @@ from scripts.parity.parity_compare import (
     validate_minutes_file,
     validate_stdout_contract,
 )
-from scripts.parity.run_parity import build_python_command
+from scripts.parity.run_parity import _task_folder, build_python_command
 
 
 def write(path: Path, content: str) -> None:
@@ -113,6 +113,9 @@ def test_minutes_validator_accepts_markdown_and_rejects_missing_empty_or_unresol
     unresolved = tmp_path / "unresolved.md"
     write(unresolved, "# {{ title }}\n")
     assert not validate_minutes_file(unresolved)["passed"]
+    literal_template_example = tmp_path / "literal_template_example.md"
+    write(literal_template_example, "# Meeting\n\nUse `{{ customer_name }}` in the email template.\n")
+    assert validate_minutes_file(literal_template_example)["passed"]
 
 
 def test_stdout_parser_and_mode_contracts() -> None:
@@ -151,3 +154,19 @@ def test_report_is_machine_readable_and_python_command_has_no_go_only_flags(tmp_
     assert "--project-root" not in command
     report = json.loads(generate_report({"checks": [], "warnings": [], "differences": [], "passed": True}))
     assert report["passed"] is True
+
+
+def test_reported_task_folder_must_be_under_the_requested_output_root(tmp_path: Path) -> None:
+    output_dir = (tmp_path / "output").resolve()
+    valid_task = output_dir / "20260711_120000_meeting"
+    parsed = parse_backend_stdout(f"Task folder: {valid_task}\n")
+    task_folder, error = _task_folder(parsed, output_dir, "python")
+    assert task_folder == valid_task
+    assert error is None
+
+    stale_task = (tmp_path / "stale" / "old_task").resolve()
+    parsed = parse_backend_stdout(f"Task folder: {stale_task}\n")
+    task_folder, error = _task_folder(parsed, output_dir, "python")
+    assert task_folder is None
+    assert error is not None
+    assert "outside its requested output directory" in error

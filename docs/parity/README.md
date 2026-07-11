@@ -14,7 +14,7 @@ This phase does not include Tauri integration, desktop or WebUI changes, packagi
 - `transcript.md`: exact `[Part 001]` header format, contiguous one-based numbering, ordered parts, non-empty parts, and trailing newline. ASR body text is not compared because independent ASR requests can differ.
 - `notes_input.md` in offline fixtures: byte-for-byte equality when both fixture inputs are deliberately identical.
 - `notes_input.md` in live checks: separator, `## Transcript` heading, common prompt section, and embedded transcript structure. The separately generated transcript body is not byte-compared.
-- `meeting_minutes.md`: each backend must write a non-empty regular Markdown file with no unresolved template placeholders. LLM text is never byte-compared. Missing headings or malformed optional frontmatter are advisory warnings because custom templates can vary.
+- `meeting_minutes.md`: each backend must write a non-empty regular Markdown file with no unresolved project template placeholders. LLM text is never byte-compared; arbitrary `{{ ... }}` text from the meeting content is allowed. Missing headings or malformed optional frontmatter are advisory warnings because custom templates can vary.
 - Stdout: known contract lines are parsed; required fields depend on the output mode. Unknown informational lines are tolerated and reported as warnings.
 
 The known stdout contract lines are `Status: ...`, `Progress: current/total`, `Transcript saved: ...`, `Notes input saved: ...`, `Meeting minutes saved: ...`, and `Task folder: ...`. A present progress line must have positive integers and satisfy `current <= total`.
@@ -44,7 +44,7 @@ python scripts/parity/run_parity.py \
   --go-binary core-go/meeting-asr-go
 ```
 
-For `notes`, use `--mode notes` and provide a valid shared prompt through the normal local configuration. For `minutes`, use `--mode minutes`; it requires both MiMo and DeepSeek credentials. Reports are JSON under `output/parity/reports/` by default and record commands, exit codes, task folders, checks, warnings, and differences. The runner does not add secrets to a command or report.
+For `notes`, use `--mode notes` and provide a valid shared prompt through the normal local configuration. For `minutes`, use `--mode minutes`; it requires both MiMo and DeepSeek credentials. Reports are JSON under `output/parity/reports/` by default and record commands, exit codes, task folders, checks, warnings, and differences. The runner accepts a task folder only when it is beneath that backend's requested output root, and does not add secrets to a command or report.
 
 ## Resume reliability validation
 

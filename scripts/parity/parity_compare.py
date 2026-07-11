@@ -18,6 +18,13 @@ NOTES_DELIMITER = "\n\n---\n\n## Transcript\n\n"
 PART_HEADER_RE = re.compile(r"(?m)^\[Part (\d{3})\]\n\n")
 PART_LIKE_LINE_RE = re.compile(r"(?m)^\[Part [^\]\r\n]+\].*$")
 UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{\s*[^{}]+\s*\}\}")
+KNOWN_TEMPLATE_PLACEHOLDERS = {
+    "{{ title }}",
+    "{{ generated_at }}",
+    "{{ generated_minutes }}",
+    "{{ transcript }}",
+    "{{ task_name }}",
+}
 PROGRESS_RE = re.compile(r"^Progress:\s*(\d+)\s*/\s*(\d+)\s*$")
 
 
@@ -209,8 +216,21 @@ def validate_minutes_file(path: str | Path) -> dict[str, Any]:
     _check(result, "minutes.nonempty", bool(text.strip()), f"minutes file is empty: {minutes_path}")
     if not text.strip():
         return result
-    placeholders = UNRESOLVED_TEMPLATE_RE.findall(text)
-    _check(result, "minutes.placeholders", not placeholders, "minutes file contains unresolved template placeholders")
+    # Raw LLM Markdown can legitimately discuss a code template such as
+    # ``{{ customer_name }}``. Only fail on placeholders that this project
+    # itself renders through the Obsidian template.
+    placeholders = set(UNRESOLVED_TEMPLATE_RE.findall(text))
+    unresolved = sorted(placeholders & KNOWN_TEMPLATE_PLACEHOLDERS)
+    _check(
+        result,
+        "minutes.placeholders",
+        not unresolved,
+        (
+            "minutes file contains unresolved project template placeholders: " + ", ".join(unresolved)
+            if unresolved
+            else "minutes file contains no unresolved project template placeholders"
+        ),
+    )
     if not re.search(r"(?m)^#{1,6}\s+\S", text):
         _warning(result, "minutes file has no Markdown heading; this is advisory because custom templates may omit headings")
     if text.startswith("---\n") and "\n---\n" not in text[4:]:
