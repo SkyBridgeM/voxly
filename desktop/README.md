@@ -72,15 +72,19 @@ This repository currently runs only the development desktop build described
 above. It requires the project checkout, `uv` for Python, a root `.env`, and a
 manually built Go binary when Go is selected.
 
-Phase 5 will later introduce a separate internal macOS Apple Silicon production
-candidate. That build is planned to default to a packaged Go sidecar, use a
-user-visible output directory under `~/Documents/Meeting ASR`, and keep Python
-available only in development builds. Python source code and regression tests
-will remain in this repository.
+Phase 5 is preparing a separate internal macOS Apple Silicon production
+candidate. The output-root foundation now distinguishes development output from
+the planned production default: development continues to use
+`<project-root>/output`, while a release build defaults to
+`~/Documents/Meeting ASR`. A future Settings UI may select a different output
+root; its non-sensitive JSON configuration lives in the app config directory,
+not in the project root.
 
-This readiness change does **not** add a sidecar, bundle an application, change
-backend selection, package ffmpeg, or change API-key storage. ffmpeg will remain
-a system prerequisite; packaging, signing, notarization, installers, and
+This PR does **not** add a sidecar, bundle an application, or change backend
+selection: Python remains the development default and Go remains experimental.
+API keys are still handled by the existing development `.env` / session flow;
+Keychain-backed credential storage is deferred to Phase 5 PR 8B. ffmpeg remains
+a system prerequisite, while packaging, signing, notarization, installers, and
 automatic updates are deferred.
 
 ## How It Works

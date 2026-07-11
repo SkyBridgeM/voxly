@@ -121,24 +121,12 @@ impl ParsedOutput {
             .task_folder
             .as_ref()
             .ok_or_else(|| "Missing 'Task folder:' in CLI output".to_string())?;
-        if !Path::new(task_dir).is_absolute() {
-            return Err(format!("Task folder must be absolute: {}", task_dir));
-        }
-
-        let tf = Path::new(task_dir)
-            .canonicalize()
-            .map_err(|_| format!("Task folder does not exist: {}", task_dir))?;
-
+        let tf = match expected_task_root {
+            Some(root) => canonicalize_path_within(root, Path::new(task_dir), "Task folder")?,
+            None => canonicalize_existing_absolute(Path::new(task_dir), "Task folder")?,
+        };
         if !tf.is_dir() {
             return Err(format!("Task folder is not a directory: {}", task_dir));
-        }
-        if let Some(root) = expected_task_root {
-            if !tf.starts_with(root) {
-                return Err(format!(
-                    "Task folder escapes expected output root: {}",
-                    task_dir
-                ));
-            }
         }
 
         // Transcript is required for all modes.
@@ -146,13 +134,8 @@ impl ParsedOutput {
             .transcript_path
             .as_ref()
             .ok_or_else(|| "Missing 'Transcript saved:' in CLI output".to_string())?;
-        if !Path::new(tp).is_absolute() {
-            return Err(format!("Transcript path must be absolute: {}", tp));
-        }
-        if !path_is_inside_or_die(&tf, tp) {
-            return Err(format!("Transcript path escapes task directory: {}", tp));
-        }
-        if !is_complete_file(tp) {
+        let transcript = canonicalize_path_within(&tf, Path::new(tp), "Transcript path")?;
+        if !is_complete_file(&transcript) {
             return Err(format!("Transcript file is missing or empty: {}", tp));
         }
 
@@ -162,13 +145,8 @@ impl ParsedOutput {
                 .notes_input_path
                 .as_ref()
                 .ok_or_else(|| "Missing 'Notes input saved:' in CLI output".to_string())?;
-            if !Path::new(np).is_absolute() {
-                return Err(format!("Notes input path must be absolute: {}", np));
-            }
-            if !path_is_inside_or_die(&tf, np) {
-                return Err(format!("Notes input path escapes task directory: {}", np));
-            }
-            if !is_complete_file(np) {
+            let notes = canonicalize_path_within(&tf, Path::new(np), "Notes input path")?;
+            if !is_complete_file(&notes) {
                 return Err(format!("Notes input file is missing or empty: {}", np));
             }
         }
@@ -179,13 +157,8 @@ impl ParsedOutput {
                 .minutes_path
                 .as_ref()
                 .ok_or_else(|| "Missing 'Meeting minutes saved:' in CLI output".to_string())?;
-            if !Path::new(mp).is_absolute() {
-                return Err(format!("Minutes path must be absolute: {}", mp));
-            }
-            if !path_is_inside_or_die(&tf, mp) {
-                return Err(format!("Minutes path escapes task directory: {}", mp));
-            }
-            if !is_complete_file(mp) {
+            let minutes = canonicalize_path_within(&tf, Path::new(mp), "Minutes path")?;
+            if !is_complete_file(&minutes) {
                 return Err(format!("Minutes file is missing or empty: {}", mp));
             }
         }
@@ -194,20 +167,10 @@ impl ParsedOutput {
     }
 }
 
-fn is_complete_file(path: &str) -> bool {
-    Path::new(path)
-        .metadata()
+fn is_complete_file(path: &Path) -> bool {
+    path.metadata()
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
         .unwrap_or(false)
-}
-
-/// Checks that `child` is inside `parent` directory.
-/// Uses canonical parent; falls back to simple prefix check on error.
-fn path_is_inside_or_die(parent_canonical: &Path, child: &str) -> bool {
-    match Path::new(child).canonicalize() {
-        Ok(abs) => abs.starts_with(parent_canonical),
-        Err(_) => false,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,22 +333,224 @@ fn resolve_project_root() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime mode and non-sensitive desktop settings
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum RuntimeMode {
+    Development,
+    Production,
+}
+
+impl RuntimeMode {
+    fn current() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Development
+        } else {
+            Self::Production
+        }
+    }
+}
+
+const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
+
+/// Deliberately non-sensitive settings. API keys, input history, transcripts,
+/// and task content must never be added to this structure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct DesktopSettings {
+    output_root: Option<String>,
+    language: Option<String>,
+    theme: Option<String>,
+    deepseek_model: Option<String>,
+    development_backend: Option<BackendKind>,
+}
+
+#[derive(serde::Serialize)]
+struct OutputRootInfo {
+    output_root: String,
+    configured: bool,
+    runtime_mode: RuntimeMode,
+}
+
+fn get_default_output_root(
+    runtime_mode: RuntimeMode,
+    documents_dir: Option<&Path>,
+) -> Result<PathBuf, BackendError> {
+    match runtime_mode {
+        RuntimeMode::Development => Ok(resolve_project_root().join("output")),
+        RuntimeMode::Production => {
+            documents_dir
+                .map(|dir| dir.join("Meeting ASR"))
+                .ok_or_else(|| {
+                    BackendError::InvalidInput {
+                message:
+                    "Could not resolve the user Documents directory for the production output root."
+                        .to_string(),
+            }
+                })
+        }
+    }
+}
+
+fn desktop_settings_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| BackendError::InvalidInput {
+            message: format!("Could not resolve the desktop settings directory: {e}"),
+        })?;
+    Ok(config_dir.join(DESKTOP_SETTINGS_FILE))
+}
+
+fn load_desktop_settings(path: &Path) -> Result<DesktopSettings, BackendError> {
+    if !path.exists() {
+        return Ok(DesktopSettings::default());
+    }
+    let content = fs::read_to_string(path).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not read desktop settings: {e}"),
+    })?;
+    serde_json::from_str(&content).map_err(|e| BackendError::InvalidInput {
+        message: format!("Desktop settings are invalid: {e}"),
+    })
+}
+
+fn save_desktop_settings(path: &Path, settings: &DesktopSettings) -> Result<(), BackendError> {
+    let parent = path.parent().ok_or_else(|| BackendError::InvalidInput {
+        message: "Desktop settings path has no parent directory.".to_string(),
+    })?;
+    fs::create_dir_all(parent).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not create the desktop settings directory: {e}"),
+    })?;
+    let json = serde_json::to_string_pretty(settings).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not serialize desktop settings: {e}"),
+    })?;
+    fs::write(path, format!("{json}\n")).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not save desktop settings: {e}"),
+    })
+}
+
+fn validate_output_root(path: &Path) -> Result<PathBuf, BackendError> {
+    if !path.is_absolute() {
+        return Err(BackendError::InvalidInput {
+            message: format!("Output root must be absolute: {}", path.display()),
+        });
+    }
+    fs::create_dir_all(path).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not create output root '{}': {e}", path.display()),
+    })?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| BackendError::InvalidInput {
+            message: format!("Could not resolve output root '{}': {e}", path.display()),
+        })?;
+    if !canonical.is_dir() {
+        return Err(BackendError::InvalidInput {
+            message: format!("Output root is not a directory: {}", canonical.display()),
+        });
+    }
+    Ok(canonical)
+}
+
+fn get_configured_output_root(settings: &DesktopSettings) -> Result<Option<PathBuf>, BackendError> {
+    match settings.output_root.as_deref() {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => Err(BackendError::InvalidInput {
+            message: "Configured output root cannot be empty.".to_string(),
+        }),
+        Some(value) => validate_output_root(Path::new(value)).map(Some),
+    }
+}
+
+fn set_configured_output_root(
+    settings_path: &Path,
+    output_root: &Path,
+) -> Result<PathBuf, BackendError> {
+    let canonical = validate_output_root(output_root)?;
+    let mut settings = load_desktop_settings(settings_path)?;
+    settings.output_root = Some(canonical.to_string_lossy().to_string());
+    save_desktop_settings(settings_path, &settings)?;
+    Ok(canonical)
+}
+
+fn resolve_output_root(app: &AppHandle) -> Result<(PathBuf, bool), BackendError> {
+    let settings_path = desktop_settings_path(app)?;
+    let settings = load_desktop_settings(&settings_path)?;
+    if let Some(configured) = get_configured_output_root(&settings)? {
+        return Ok((configured, true));
+    }
+
+    let runtime_mode = RuntimeMode::current();
+    let documents_dir = if runtime_mode == RuntimeMode::Production {
+        Some(
+            app.path()
+                .document_dir()
+                .map_err(|e| BackendError::InvalidInput {
+                    message: format!("Could not resolve the user Documents directory: {e}"),
+                })?,
+        )
+    } else {
+        None
+    };
+    let default_root = get_default_output_root(runtime_mode, documents_dir.as_deref())?;
+    validate_output_root(&default_root).map(|root| (root, false))
+}
+
+#[tauri::command]
+fn get_output_root(app: AppHandle) -> Result<OutputRootInfo, String> {
+    let runtime_mode = RuntimeMode::current();
+    let (output_root, configured) = resolve_output_root(&app).map_err(String::from)?;
+    Ok(OutputRootInfo {
+        output_root: output_root.to_string_lossy().to_string(),
+        configured,
+        runtime_mode,
+    })
+}
+
+#[tauri::command]
+fn set_output_root(app: AppHandle, output_root: String) -> Result<OutputRootInfo, String> {
+    let settings_path = desktop_settings_path(&app).map_err(String::from)?;
+    let output_root = set_configured_output_root(&settings_path, Path::new(&output_root))
+        .map_err(String::from)?;
+    Ok(OutputRootInfo {
+        output_root: output_root.to_string_lossy().to_string(),
+        configured: true,
+        runtime_mode: RuntimeMode::current(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Path validation
 // ---------------------------------------------------------------------------
 
-fn canonicalize_abs(path: &str, label: &str) -> Result<PathBuf, BackendError> {
-    let p = Path::new(path);
-    if !p.is_absolute() {
-        return Err(BackendError::InvalidInput {
-            message: format!("{} must be an absolute path, got: {}", label, path),
-        });
+fn canonicalize_existing_absolute(path: &Path, label: &str) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{label} must be absolute: {}", path.display()));
     }
-    p.canonicalize().map_err(|e| BackendError::InvalidInput {
-        message: format!(
-            "{} does not exist or is inaccessible: {} ({})",
-            label, path, e
-        ),
+    path.canonicalize().map_err(|e| {
+        format!(
+            "{label} does not exist or is inaccessible: {} ({e})",
+            path.display()
+        )
     })
+}
+
+/// Canonical containment prevents `..` traversal and symlink escapes.
+fn canonicalize_path_within(root: &Path, path: &Path, label: &str) -> Result<PathBuf, String> {
+    let canonical = canonicalize_existing_absolute(path, label)?;
+    if !canonical.starts_with(root) {
+        return Err(format!(
+            "{label} escapes its allowed root: {}",
+            path.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+fn canonicalize_abs(path: &str, label: &str) -> Result<PathBuf, BackendError> {
+    canonicalize_existing_absolute(Path::new(path), label)
+        .map_err(|message| BackendError::InvalidInput { message })
 }
 
 fn canonicalize_abs_file(path: &str, label: &str) -> Result<PathBuf, BackendError> {
@@ -865,27 +1030,8 @@ fn run_meeting_asr(
         }
     };
 
-    // Resolve and canonicalize output directory.
-    let raw_out = resolve_project_root()
-        .join("output")
-        .to_string_lossy()
-        .to_string();
-    // Ensure output directory exists.
-    let abs_out = {
-        let p = Path::new(&raw_out);
-        if !p.is_absolute() {
-            return Err(BackendError::InvalidInput {
-                message: format!("output_dir must be absolute, got: {}", raw_out),
-            }
-            .into());
-        }
-        fs::create_dir_all(p).map_err(|e| BackendError::InvalidInput {
-            message: format!("Cannot create output directory '{}': {}", raw_out, e),
-        })?;
-        p.canonicalize().map_err(|e| BackendError::InvalidInput {
-            message: format!("Cannot resolve output directory '{}': {}", raw_out, e),
-        })?
-    };
+    // Resolve the runtime-aware output root, creating it when needed.
+    let (abs_out, _) = resolve_output_root(&app).map_err(String::from)?;
     let out_dir = abs_out.to_string_lossy().to_string();
 
     let env_file = find_env_file();
@@ -980,8 +1126,14 @@ fn resume_meeting_asr(
         }
     };
 
-    // Validate and canonicalize task directory.
+    let (output_root, _) = resolve_output_root(&app).map_err(String::from)?;
+
+    // Validate and canonicalize task directory. The task must remain under the
+    // configured output root, including for resume calls that bypass the UI.
     let abs_task_dir = canonicalize_abs_dir(&task_dir, "task_dir").map_err(String::from)?;
+    let abs_task_dir = canonicalize_path_within(&output_root, &abs_task_dir, "Task folder")
+        .map_err(|message| BackendError::InvalidInput { message })
+        .map_err(String::from)?;
 
     // If caller explicitly supplies output_mode, validate it.
     if let Some(ref mode) = output_mode {
@@ -1079,7 +1231,7 @@ fn resume_meeting_asr(
         }
     }
 
-    run_and_check(&app, active.inner(), cmd, &effective_mode, &abs_task_dir)
+    run_and_check(&app, active.inner(), cmd, &effective_mode, &output_root)
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,34 +1239,16 @@ fn resume_meeting_asr(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn open_task_folder(task_folder: String) -> Result<(), String> {
+fn open_task_folder(app: AppHandle, task_folder: String) -> Result<(), String> {
     if task_folder.is_empty() {
         return Err("No task folder specified. Run a transcription first.".into());
     }
 
-    let out_dir = resolve_project_root()
-        .join("output")
-        .to_string_lossy()
-        .to_string();
-
-    let abs_output = Path::new(&out_dir)
-        .canonicalize()
-        .map_err(|_| format!("Output directory does not exist yet: {}", out_dir))?;
-
-    let candidate = Path::new(&task_folder);
-    if !candidate.is_absolute() {
-        return Err(format!(
-            "Task folder must be an absolute path: {}",
-            task_folder
-        ));
-    }
-    let abs_candidate = candidate
-        .canonicalize()
-        .map_err(|_| format!("Task folder does not exist: {}", task_folder))?;
-
-    if !abs_candidate.starts_with(&abs_output) {
-        return Err("Cannot open folders outside the output directory.".into());
-    }
+    let (abs_output, _) = resolve_output_root(&app).map_err(String::from)?;
+    let abs_candidate =
+        canonicalize_path_within(&abs_output, Path::new(&task_folder), "Task folder").map_err(
+            |_| "Cannot open folders outside the configured output directory.".to_string(),
+        )?;
 
     if !abs_candidate.is_dir() {
         return Err(format!("Path is not a directory: {}", task_folder));
@@ -1219,6 +1353,8 @@ pub fn run() {
         .manage(ActiveProcess::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            get_output_root,
+            set_output_root,
             open_task_folder,
             run_meeting_asr,
             resume_meeting_asr,
@@ -1528,6 +1664,132 @@ mod tests {
     #[test]
     fn test_canonicalize_abs_file_rejects_dir() {
         assert!(canonicalize_abs_file("/tmp", "test").is_err());
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let unique = format!("{name}-{}", std::process::id());
+        std::env::temp_dir().join(unique)
+    }
+
+    #[test]
+    fn test_production_default_output_root_uses_documents() {
+        let documents = test_dir("meeting-asr-documents");
+        let root = get_default_output_root(RuntimeMode::Production, Some(&documents)).unwrap();
+        assert_eq!(root, documents.join("Meeting ASR"));
+    }
+
+    #[test]
+    fn test_development_default_output_root_uses_project_root() {
+        let root = get_default_output_root(RuntimeMode::Development, None).unwrap();
+        assert_eq!(root, resolve_project_root().join("output"));
+    }
+
+    #[test]
+    fn test_production_default_output_root_requires_documents_directory() {
+        assert!(get_default_output_root(RuntimeMode::Production, None).is_err());
+    }
+
+    #[test]
+    fn test_validate_output_root_creates_and_canonicalizes_directory() {
+        let base = test_dir("meeting-asr-output-root");
+        let requested = base.join("nested").join("output");
+        let root = validate_output_root(&requested).unwrap();
+        assert!(root.is_dir());
+        assert_eq!(root, requested.canonicalize().unwrap());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_validate_output_root_rejects_relative_path() {
+        assert!(validate_output_root(Path::new("relative-output")).is_err());
+    }
+
+    #[test]
+    fn test_settings_store_only_persists_non_sensitive_output_root() {
+        let base = test_dir("meeting-asr-desktop-settings");
+        let settings_path = base.join(DESKTOP_SETTINGS_FILE);
+        let output_root = base.join("output");
+
+        let saved = set_configured_output_root(&settings_path, &output_root).unwrap();
+        let settings = load_desktop_settings(&settings_path).unwrap();
+        assert_eq!(get_configured_output_root(&settings).unwrap(), Some(saved));
+
+        let json = fs::read_to_string(&settings_path).unwrap();
+        assert!(json.contains("output_root"));
+        assert!(!json.contains("API_KEY"));
+        assert!(!json.contains("transcript"));
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_configured_output_root_rejects_relative_path() {
+        let settings = DesktopSettings {
+            output_root: Some("relative-output".to_string()),
+            ..Default::default()
+        };
+        assert!(get_configured_output_root(&settings).is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_path_within_rejects_relative_and_traversal_paths() {
+        let base = test_dir("meeting-asr-containment");
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        assert!(canonicalize_path_within(&canonical_root, Path::new("relative"), "Task").is_err());
+        assert!(canonicalize_path_within(
+            &canonical_root,
+            &root.join("..").join("outside"),
+            "Task"
+        )
+        .is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_canonicalize_path_within_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = test_dir("meeting-asr-symlink-containment");
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        assert!(canonicalize_path_within(&canonical_root, &root.join("escape"), "Task").is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_output_validation_rejects_symlinked_artifact_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = test_dir("meeting-asr-artifact-symlink");
+        let root = base.join("root");
+        let task = root.join("task");
+        let outside = base.join("outside.md");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(&outside, "outside transcript").unwrap();
+        let transcript = task.join("transcript.md");
+        symlink(&outside, &transcript).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let lines = vec![
+            "Status: Done".to_string(),
+            format!("Task folder: {}", task.display()),
+            format!("Transcript saved: {}", transcript.display()),
+        ];
+
+        assert!(ParsedOutput::parse_lines(&lines)
+            .validate_required_under("transcript", Some(&canonical_root))
+            .is_err());
+        fs::remove_dir_all(base).ok();
     }
 
     // --- command construction: paths stay as discrete arguments ---
