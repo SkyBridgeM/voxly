@@ -1,0 +1,38 @@
+name: Go Core
+
+on:
+  pull_request:
+    paths:
+      - "core-go/**"
+      - ".github/workflows/go-core.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "core-go/**"
+      - ".github/workflows/go-core.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core-go/go.mod
+          cache-dependency-path: core-go/go.sum
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Compile macOS tests
+        run: GOOS=darwin GOARCH=arm64 go test -c -o /tmp/meeting-asr-go-darwin.test .
+      - name: Compile Linux tests
+        run: GOOS=linux GOARCH=amd64 go test -c -o /tmp/meeting-asr-go-linux.test .
+      - name: Compile Windows tests
+        run: GOOS=windows GOARCH=amd64 go test -c -o /tmp/meeting-asr-go-windows.test.exe .

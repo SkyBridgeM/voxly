@@ -238,12 +238,16 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	fmt.Println("Status: Splitting audio")
 	chunks, err := SplitAudio(sourceCopy, filepath.Join(taskDir, "chunks"), settings.DefaultChunkMin, settings.MaxUploadBytes())
 	if err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, false)
+		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
 		return fmt.Errorf("splitting audio: %w", err)
 	}
 
 	// Build chunk items from split results.
-	chunkItems := buildChunkItems(taskDir, chunks)
+	chunkItems, err := buildChunkItems(taskDir, chunks)
+	if err != nil {
+		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
+		return err
+	}
 	chunkFormat := ""
 	if len(chunks) > 0 {
 		chunkFormat = strings.TrimPrefix(filepath.Ext(chunks[0]), ".")
@@ -261,23 +265,36 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(chunks))
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
+	var progressErr error
 	progressFn := func(action string, index, total int) {
 		if action == "transcribing" || action == "completed" {
 			fmt.Printf("Progress: %d/%d\n", index, total)
 		}
 		if action == "completed" {
-			// Update chunk state in manifest.
-			if index-1 < len(manifest.Chunks.Items) {
-				manifest.Chunks.Items[index-1].State = ChunkCompleted
-				if err := SaveManifest(taskDir, manifest); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to update manifest progress: %v\n", err)
-				}
+			if progressErr != nil || index < 1 || index > len(manifest.Chunks.Items) {
+				return
+			}
+			item := &manifest.Chunks.Items[index-1]
+			hash, err := fileSHA256(item.TranscriptPath)
+			if err != nil {
+				progressErr = fmt.Errorf("hashing transcript for %s: %w", item.ID, err)
+				return
+			}
+			item.State = ChunkCompleted
+			item.TranscriptSHA256 = hash
+			item.LastError = nil
+			if err := SaveManifest(taskDir, manifest); err != nil {
+				progressErr = fmt.Errorf("saving transcript progress for %s: %w", item.ID, err)
 			}
 		}
 	}
 	if _, err := TranscribeChunks(chunks, transcriptsDir, settings, progressFn); err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, err, false)
+		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, err, IsRetryableError(err))
 		return fmt.Errorf("transcribing: %w", err)
+	}
+	if progressErr != nil {
+		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, progressErr, IsRetryableError(progressErr))
+		return progressErr
 	}
 
 	// 6. Merge transcripts.
@@ -287,12 +304,13 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, false)
+		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, IsRetryableError(err))
 		return fmt.Errorf("merging transcripts: %w", err)
 	}
-	manifest.Artifacts.Transcript.Path = transcriptPath
-	manifest.Artifacts.Transcript.State = ArtifactReady
-	manifest.Artifacts.Transcript.SHA256 = mustFileSHA256(transcriptPath)
+	if err := markArtifactReady(transcriptPath, &manifest.Artifacts.Transcript); err != nil {
+		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, IsRetryableError(err))
+		return err
+	}
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		return fmt.Errorf("saving manifest: %w", err)
 	}
@@ -307,12 +325,13 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		promptPath := settings.ResolvePath(settings.MinutesPromptPath)
 		notesInputPath = filepath.Join(taskDir, "notes_input.md")
 		if err := CreateNotesInput(promptPath, transcriptPath, notesInputPath); err != nil {
-			_ = RecordTaskError(taskDir, manifest, TaskNotesGenerating, err, false)
+			_ = RecordTaskError(taskDir, manifest, TaskNotesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("creating notes input: %w", err)
 		}
-		manifest.Artifacts.NotesInput.Path = notesInputPath
-		manifest.Artifacts.NotesInput.State = ArtifactReady
-		manifest.Artifacts.NotesInput.SHA256 = mustFileSHA256(notesInputPath)
+		if err := markArtifactReady(notesInputPath, &manifest.Artifacts.NotesInput); err != nil {
+			_ = RecordTaskError(taskDir, manifest, TaskNotesGenerating, err, IsRetryableError(err))
+			return err
+		}
 		if err := SaveManifest(taskDir, manifest); err != nil {
 			return fmt.Errorf("saving manifest: %w", err)
 		}
@@ -327,7 +346,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		fmt.Println("Status: Generating meeting minutes")
 		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
 		if err != nil {
-			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("generating meeting minutes: %w", err)
 		}
 
@@ -338,24 +357,25 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 		transcriptData, err := os.ReadFile(transcriptPath)
 		if err != nil {
-			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("reading transcript for template: %w", err)
 		}
 
 		wrapped, err := ApplyObsidianTemplate(templatePath, rawMinutes, title, taskName, string(transcriptData))
 		if err != nil {
-			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("applying Obsidian template: %w", err)
 		}
 
 		minutesPath = filepath.Join(taskDir, "meeting_minutes.md")
 		if err := WriteFileAtomically(minutesPath, []byte(wrapped), 0600); err != nil {
-			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, false)
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("writing meeting minutes: %w", err)
 		}
-		manifest.Artifacts.Minutes.Path = minutesPath
-		manifest.Artifacts.Minutes.State = ArtifactReady
-		manifest.Artifacts.Minutes.SHA256 = mustFileSHA256(minutesPath)
+		if err := markArtifactReady(minutesPath, &manifest.Artifacts.Minutes); err != nil {
+			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
+			return err
+		}
 		if err := SaveManifest(taskDir, manifest); err != nil {
 			return fmt.Errorf("saving manifest: %w", err)
 		}
@@ -363,7 +383,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 	// 9. Validate final outputs before completing the task.
 	if err := executeValidatingOutputs(taskDir, manifest); err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskValidatingOutputs, err, false)
+		_ = RecordTaskError(taskDir, manifest, TaskValidatingOutputs, err, IsRetryableError(err))
 		return fmt.Errorf("validating outputs: %w", err)
 	}
 
@@ -387,7 +407,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 }
 
 // buildChunkItems creates ChunkItem records from split audio chunk paths.
-func buildChunkItems(taskDir string, chunks []string) []ChunkItem {
+func buildChunkItems(taskDir string, chunks []string) ([]ChunkItem, error) {
 	items := make([]ChunkItem, len(chunks))
 	for i, chunkPath := range chunks {
 		id := strings.TrimSuffix(filepath.Base(chunkPath), filepath.Ext(chunkPath))
@@ -396,16 +416,20 @@ func buildChunkItems(taskDir string, chunks []string) []ChunkItem {
 		if info != nil {
 			sizeBytes = info.Size()
 		}
+		hash, err := fileSHA256(chunkPath)
+		if err != nil {
+			return nil, fmt.Errorf("hashing audio chunk %s: %w", chunkPath, err)
+		}
 		items[i] = ChunkItem{
 			ID:             id,
 			AudioPath:      chunkPath,
 			TranscriptPath: filepath.Join(taskDir, "transcripts", id+".txt"),
 			State:          ChunkPending,
 			SizeBytes:      sizeBytes,
-			AudioSHA256:    mustFileSHA256(chunkPath),
+			AudioSHA256:    hash,
 		}
 	}
-	return items
+	return items, nil
 }
 
 func strPtr(s string) *string {

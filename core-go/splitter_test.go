@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -22,6 +24,17 @@ func TestCalculateRetryChunkSeconds(t *testing.T) {
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("CalculateRetryChunkSeconds(%d) = %v, want %v", tt.initial, got, tt.want)
 		}
+	}
+}
+
+func TestClearChunks_ReportsDirectoryError(t *testing.T) {
+	root := t.TempDir()
+	chunksPath := filepath.Join(root, "chunks")
+	if err := os.WriteFile(chunksPath, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearChunks(chunksPath, "wav"); err == nil {
+		t.Fatal("expected chunk cleanup error")
 	}
 }
 

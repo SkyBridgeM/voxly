@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,27 @@ func TestRecordTaskError(t *testing.T) {
 	}
 	if !loaded.LastError.Retryable {
 		t.Error("expected retryable error")
+	}
+}
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "rate limit", err: &httpClientError{statusCode: 429, message: "rate limit"}, want: true},
+		{name: "request timeout", err: &httpClientError{statusCode: 408, message: "timeout"}, want: true},
+		{name: "authentication", err: &httpClientError{statusCode: 401, message: "unauthorized"}, want: false},
+		{name: "server error", err: fmt.Errorf("DeepSeek server error 503"), want: true},
+		{name: "validation", err: fmt.Errorf("invalid output mode"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsRetryableError(tt.err); got != tt.want {
+				t.Fatalf("IsRetryableError() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -358,6 +380,51 @@ func TestValidateManifest(t *testing.T) {
 			name:    "invalid state",
 			m:       &Manifest{SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: "BOGUS"},
 			wantErr: "invalid task state",
+		},
+		{
+			name:    "invalid integrity version",
+			m:       &Manifest{SchemaVersion: currentSchemaVersion, IntegrityVersion: 2, TaskID: "t1", OutputMode: "transcript", State: TaskCreated},
+			wantErr: "unsupported integrity_version",
+		},
+		{
+			name: "duplicate chunk ID",
+			m: &Manifest{
+				SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: TaskCreated,
+				Chunks: ChunksInfo{Format: "wav", Total: 2, Items: []ChunkItem{{ID: "part_001", State: ChunkPending}, {ID: "part_001", State: ChunkPending}}},
+			},
+			wantErr: "duplicate chunk ID",
+		},
+		{
+			name: "invalid chunk state",
+			m: &Manifest{
+				SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: TaskCreated,
+				Chunks: ChunksInfo{Format: "wav", Total: 1, Items: []ChunkItem{{ID: "part_001", State: "BOGUS"}}},
+			},
+			wantErr: "invalid state",
+		},
+		{
+			name: "chunk count mismatch",
+			m: &Manifest{
+				SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: TaskCreated,
+				Chunks: ChunksInfo{Format: "wav", Total: 2, Items: []ChunkItem{{ID: "part_001", State: ChunkPending}}},
+			},
+			wantErr: "chunks.total",
+		},
+		{
+			name: "invalid chunk hash",
+			m: &Manifest{
+				SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: TaskCreated,
+				Chunks: ChunksInfo{Format: "wav", Total: 1, Items: []ChunkItem{{ID: "part_001", State: ChunkPending, AudioSHA256: "bad"}}},
+			},
+			wantErr: "invalid audio hash",
+		},
+		{
+			name: "invalid artifact state",
+			m: &Manifest{
+				SchemaVersion: currentSchemaVersion, TaskID: "t1", OutputMode: "transcript", State: TaskCreated,
+				Artifacts: Artifacts{Transcript: ArtifactInfo{State: "BOGUS"}},
+			},
+			wantErr: "invalid state",
 		},
 		{
 			name: "chunk ID with path traversal",

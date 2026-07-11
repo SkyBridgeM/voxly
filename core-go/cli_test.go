@@ -451,6 +451,7 @@ func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
 	}
 	m.Artifacts.Transcript.State = ArtifactReady
 	m.Artifacts.NotesInput.State = ArtifactReady
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}

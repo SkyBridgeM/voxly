@@ -43,6 +43,40 @@ func createTranscripts(t *testing.T, transcriptsDir string, numbers []int) {
 	}
 }
 
+func hashTestFile(t *testing.T, path string) string {
+	t.Helper()
+	hash, err := fileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+func sealManifestFiles(t *testing.T, m *Manifest) {
+	t.Helper()
+	taskDir := filepath.Dir(filepath.Dir(m.Source.Path))
+	for i := range m.Chunks.Items {
+		item := &m.Chunks.Items[i]
+		if item.AudioPath == "" {
+			item.AudioPath = filepath.Join(taskDir, "chunks", item.ID+"."+m.Chunks.Format)
+		}
+		if item.TranscriptPath == "" {
+			item.TranscriptPath = filepath.Join(taskDir, "transcripts", item.ID+".txt")
+		}
+		if isCompleteFile(item.AudioPath) {
+			item.AudioSHA256 = hashTestFile(t, item.AudioPath)
+		}
+		if item.State == ChunkCompleted && isCompleteFile(item.TranscriptPath) {
+			item.TranscriptSHA256 = hashTestFile(t, item.TranscriptPath)
+		}
+	}
+	for _, artifact := range []*ArtifactInfo{&m.Artifacts.Transcript, &m.Artifacts.NotesInput, &m.Artifacts.Minutes} {
+		if artifact.State == ArtifactReady && isCompleteFile(artifact.Path) {
+			artifact.SHA256 = hashTestFile(t, artifact.Path)
+		}
+	}
+}
+
 // --- Scenario 1: Killed during chunk 5/10 → retranscribes only missing chunks ---
 
 func TestResume_KilledDuringTranscription_RetranscribesOnlyMissing(t *testing.T) {
@@ -68,6 +102,7 @@ func TestResume_KilledDuringTranscription_RetranscribesOnlyMissing(t *testing.T)
 		})
 	}
 	m.State = TaskTranscribing
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +152,8 @@ func TestReconcileChunks_HashMismatchRequiresRetranscription(t *testing.T) {
 		AudioPath:        chunkPath,
 		TranscriptPath:   transcriptPath,
 		State:            ChunkCompleted,
-		AudioSHA256:      mustFileSHA256(chunkPath),
-		TranscriptSHA256: mustFileSHA256(transcriptPath),
+		AudioSHA256:      hashTestFile(t, chunkPath),
+		TranscriptSHA256: hashTestFile(t, transcriptPath),
 	}}
 	if err := os.WriteFile(chunkPath, []byte("changed audio"), 0600); err != nil {
 		t.Fatal(err)
@@ -127,6 +162,43 @@ func TestReconcileChunks_HashMismatchRequiresRetranscription(t *testing.T) {
 	ReconcileChunks(taskDir, m)
 	if m.Chunks.Items[0].State != ChunkPending {
 		t.Fatalf("changed audio must require retranscription, got %s", m.Chunks.Items[0].State)
+	}
+}
+
+func TestReconcileChunks_HashlessTranscriptIsNotTrusted(t *testing.T) {
+	taskDir := createTestTaskDir(t)
+	chunkPath := filepath.Join(taskDir, "chunks", "part_001.wav")
+	transcriptPath := filepath.Join(taskDir, "transcripts", "part_001.txt")
+	if err := os.WriteFile(chunkPath, []byte("audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte("unverified transcript"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "meeting.wav"), "transcript", 5, 10, "mimo", "model")
+	m.Chunks.Format = "wav"
+	m.Chunks.Total = 1
+	m.Chunks.Items = []ChunkItem{{
+		ID:             "part_001",
+		AudioPath:      chunkPath,
+		TranscriptPath: transcriptPath,
+		State:          ChunkCompleted,
+		AudioSHA256:    hashTestFile(t, chunkPath),
+	}}
+
+	ReconcileChunks(taskDir, m)
+	if m.Chunks.Items[0].State != ChunkPending {
+		t.Fatalf("hashless transcript must be retranscribed, got %s", m.Chunks.Items[0].State)
+	}
+}
+
+func TestCleanTranscriptParts_ReportsReadError(t *testing.T) {
+	taskDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(taskDir, "transcripts"), []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanTranscriptParts(taskDir); err == nil {
+		t.Fatal("expected transcript cleanup error")
 	}
 }
 
@@ -152,6 +224,7 @@ func TestResume_MergeFailure_RerunsMergeOnly(t *testing.T) {
 	// All chunks completed, but transcript.md is missing (merge failed).
 	m.Artifacts.Transcript.State = ArtifactPending
 	m.State = TaskFailed
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +277,7 @@ func TestResume_DeepSeekFailure_RerunsMinutesOnly(t *testing.T) {
 	m.Artifacts.NotesInput.Path = filepath.Join(taskDir, "notes_input.md")
 	m.Artifacts.Minutes.State = ArtifactPending
 	m.State = TaskFailed
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +313,7 @@ func TestResume_DeletedTranscriptChunk_InvalidatesDownstream(t *testing.T) {
 	}
 	m.Artifacts.Transcript.State = ArtifactReady
 	m.State = TaskCompleted
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +355,7 @@ func TestResume_CompletedTask_NoWorkNeeded(t *testing.T) {
 	}
 	m.Artifacts.Transcript.State = ArtifactReady
 	m.State = TaskCompleted
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +393,7 @@ func TestResume_CountersReconciledFromDisk(t *testing.T) {
 		})
 	}
 	// Stale manifest says 5 completed, but only 2 exist on disk.
+	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
 		t.Fatal(err)
 	}
@@ -737,6 +814,7 @@ func TestReconcileArtifacts_NotesInputMissing_InvalidatesMinutes(t *testing.T) {
 			Minutes:    ArtifactInfo{Path: filepath.Join(taskDir, "meeting_minutes.md"), State: ArtifactReady},
 		},
 	}
+	sealManifestFiles(t, m)
 
 	ReconcileArtifacts(taskDir, m)
 

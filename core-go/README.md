@@ -101,7 +101,7 @@ go test ./...
 ## Design decisions
 
 - Flat package structure (single `main` package) — appropriate for a spike.
-- No external Go dependencies — standard library only.
+- One platform dependency: `golang.org/x/sys` for native Windows locking and durable file replacement.
 - Matches Python behavior: task directory layout, chunk naming, transcript format, stdout output lines.
 - Audio format handling: mp3/wav sent directly; m4a converted to 16kHz mono wav via ffmpeg.
 - Flags can appear before or after the audio path (args are reordered before parsing).

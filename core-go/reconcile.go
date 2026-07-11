@@ -37,13 +37,11 @@ func ReconcileChunks(taskDir string, m *Manifest) {
 			item.State = ChunkPending
 			continue
 		}
-		if item.AudioSHA256 == "" && m.IntegrityVersion == 0 {
+		if item.AudioSHA256 == "" {
 			item.State = ChunkPending
 			continue
 		}
-		if item.AudioSHA256 == "" {
-			item.AudioSHA256 = audioHash // One-time upgrade for pre-hash manifests.
-		} else if item.AudioSHA256 != audioHash {
+		if item.AudioSHA256 != audioHash {
 			item.AudioSHA256 = audioHash
 			item.TranscriptSHA256 = ""
 			item.State = ChunkPending
@@ -54,8 +52,7 @@ func ReconcileChunks(taskDir string, m *Manifest) {
 		transcriptPath := filepath.Join(transcriptsDir, item.ID+".txt")
 		item.TranscriptPath = transcriptPath
 
-		if transcriptHash, err := fileSHA256(transcriptPath); err == nil && (item.TranscriptSHA256 != "" && item.TranscriptSHA256 == transcriptHash || m.IntegrityVersion != 0 && item.TranscriptSHA256 == "") {
-			item.TranscriptSHA256 = transcriptHash
+		if transcriptHash, err := fileSHA256(transcriptPath); err == nil && item.TranscriptSHA256 != "" && item.TranscriptSHA256 == transcriptHash {
 			item.State = ChunkCompleted
 		} else {
 			// Missing, empty, or temp file — reclassify as PENDING.
@@ -71,7 +68,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	// Transcript artifact.
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	m.Artifacts.Transcript.Path = transcriptPath
-	if artifactMatches(transcriptPath, &m.Artifacts.Transcript, m.IntegrityVersion) {
+	if artifactMatches(transcriptPath, &m.Artifacts.Transcript) {
 		m.Artifacts.Transcript.State = ArtifactReady
 	} else {
 		m.Artifacts.Transcript.State = ArtifactPending
@@ -85,7 +82,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	if m.OutputMode == "notes" || m.OutputMode == "minutes" {
 		notesPath := filepath.Join(taskDir, "notes_input.md")
 		m.Artifacts.NotesInput.Path = notesPath
-		if artifactMatches(notesPath, &m.Artifacts.NotesInput, m.IntegrityVersion) {
+		if artifactMatches(notesPath, &m.Artifacts.NotesInput) {
 			m.Artifacts.NotesInput.State = ArtifactReady
 		} else {
 			m.Artifacts.NotesInput.State = ArtifactPending
@@ -100,7 +97,7 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	if m.OutputMode == "minutes" {
 		minutesPath := filepath.Join(taskDir, "meeting_minutes.md")
 		m.Artifacts.Minutes.Path = minutesPath
-		if artifactMatches(minutesPath, &m.Artifacts.Minutes, m.IntegrityVersion) {
+		if artifactMatches(minutesPath, &m.Artifacts.Minutes) {
 			m.Artifacts.Minutes.State = ArtifactReady
 		} else {
 			m.Artifacts.Minutes.State = ArtifactPending
@@ -190,28 +187,24 @@ func fileSHA256(path string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-func artifactMatches(path string, artifact *ArtifactInfo, integrityVersion int) bool {
-	if artifact.State != ArtifactReady || !isCompleteFile(path) {
+func artifactMatches(path string, artifact *ArtifactInfo) bool {
+	if artifact.State != ArtifactReady || artifact.SHA256 == "" || !isCompleteFile(path) {
 		return false
 	}
 	hash, err := fileSHA256(path)
 	if err != nil {
 		return false
-	}
-	if artifact.SHA256 == "" && integrityVersion == 0 {
-		return false
-	}
-	if artifact.SHA256 == "" {
-		artifact.SHA256 = hash // One-time upgrade for pre-hash manifests.
-		return true
 	}
 	return hash == artifact.SHA256
 }
 
-func mustFileSHA256(path string) string {
+func markArtifactReady(path string, artifact *ArtifactInfo) error {
 	hash, err := fileSHA256(path)
 	if err != nil {
-		return ""
+		return fmt.Errorf("hashing artifact %s: %w", path, err)
 	}
-	return hash
+	artifact.Path = path
+	artifact.State = ArtifactReady
+	artifact.SHA256 = hash
+	return nil
 }

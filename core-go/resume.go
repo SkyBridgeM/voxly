@@ -173,7 +173,7 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 		}
 
 		if err != nil {
-			_ = RecordTaskError(taskDir, m, stage, err, false)
+			_ = RecordTaskError(taskDir, m, stage, err, IsRetryableError(err))
 			return fmt.Errorf("%s failed: %w", stage, err)
 		}
 
@@ -208,15 +208,19 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 
 	// Clean stale transcript parts before re-splitting.
 	// Old part_*.txt files may not correspond to the new chunk set.
-	cleanTranscriptParts(taskDir)
+	if err := cleanTranscriptParts(taskDir); err != nil {
+		return err
+	}
 
 	// Invalidate all downstream artifacts since chunks are being rebuilt.
 	m.Artifacts.Transcript.State = ArtifactPending
 	m.Artifacts.NotesInput.State = ArtifactPending
 	m.Artifacts.Minutes.State = ArtifactPending
-	removeArtifactFile(m.Artifacts.Transcript.Path)
-	removeArtifactFile(m.Artifacts.NotesInput.Path)
-	removeArtifactFile(m.Artifacts.Minutes.Path)
+	for _, path := range []string{m.Artifacts.Transcript.Path, m.Artifacts.NotesInput.Path, m.Artifacts.Minutes.Path} {
+		if err := removeArtifactFile(path); err != nil {
+			return err
+		}
+	}
 
 	chunksDir := filepath.Join(taskDir, "chunks")
 	chunks, err := SplitAudio(sourceAudio, chunksDir, m.Chunks.ChunkMinutes, int64(m.Chunks.MaxUploadMB*1024*1024))
@@ -233,13 +237,17 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 		if info != nil {
 			sizeBytes = info.Size()
 		}
+		audioHash, err := fileSHA256(chunkPath)
+		if err != nil {
+			return fmt.Errorf("hashing audio chunk %s: %w", chunkPath, err)
+		}
 		items[i] = ChunkItem{
 			ID:             id,
 			AudioPath:      chunkPath,
 			TranscriptPath: filepath.Join(taskDir, "transcripts", id+".txt"),
 			State:          ChunkPending,
 			SizeBytes:      sizeBytes,
-			AudioSHA256:    mustFileSHA256(chunkPath),
+			AudioSHA256:    audioHash,
 		}
 	}
 
@@ -255,24 +263,32 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 }
 
 // cleanTranscriptParts removes all part_*.txt files from the transcripts directory.
-func cleanTranscriptParts(taskDir string) {
+func cleanTranscriptParts(taskDir string) error {
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	entries, err := os.ReadDir(transcriptsDir)
 	if err != nil {
-		return
+		return fmt.Errorf("reading transcripts directory for cleanup: %w", err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasPrefix(e.Name(), "part_") && strings.HasSuffix(e.Name(), ".txt") {
-			os.Remove(filepath.Join(transcriptsDir, e.Name()))
+			path := filepath.Join(transcriptsDir, e.Name())
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("removing stale transcript %s: %w", path, err)
+			}
 		}
 	}
+	return nil
 }
 
 // removeArtifactFile removes an artifact file if it exists.
-func removeArtifactFile(path string) {
-	if path != "" {
-		os.Remove(path)
+func removeArtifactFile(path string) error {
+	if path == "" {
+		return nil
 	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing stale artifact %s: %w", path, err)
+	}
+	return nil
 }
 
 // executeTranscribing transcribes only the PENDING chunks.
@@ -342,7 +358,15 @@ func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error 
 
 		chunk.State = ChunkCompleted
 		chunk.TranscriptPath = transcriptPath
-		chunk.TranscriptSHA256 = mustFileSHA256(transcriptPath)
+		transcriptHash, err := fileSHA256(transcriptPath)
+		if err != nil {
+			chunk.State = ChunkFailed
+			msg := err.Error()
+			chunk.LastError = &msg
+			_ = SaveManifest(taskDir, m)
+			return fmt.Errorf("hashing transcript for %s: %w", chunkID, err)
+		}
+		chunk.TranscriptSHA256 = transcriptHash
 		chunk.LastError = nil
 		if err := SaveManifest(taskDir, m); err != nil {
 			return fmt.Errorf("saving manifest after transcription: %w", err)
@@ -366,9 +390,9 @@ func executeMerging(taskDir string, m *Manifest) error {
 		return err
 	}
 
-	m.Artifacts.Transcript.Path = transcriptPath
-	m.Artifacts.Transcript.State = ArtifactReady
-	m.Artifacts.Transcript.SHA256 = mustFileSHA256(transcriptPath)
+	if err := markArtifactReady(transcriptPath, &m.Artifacts.Transcript); err != nil {
+		return err
+	}
 	return SaveManifest(taskDir, m)
 }
 
@@ -387,9 +411,9 @@ func executeNotesGenerating(taskDir string, m *Manifest, settings *Settings) err
 		return err
 	}
 
-	m.Artifacts.NotesInput.Path = notesPath
-	m.Artifacts.NotesInput.State = ArtifactReady
-	m.Artifacts.NotesInput.SHA256 = mustFileSHA256(notesPath)
+	if err := markArtifactReady(notesPath, &m.Artifacts.NotesInput); err != nil {
+		return err
+	}
 	return SaveManifest(taskDir, m)
 }
 
@@ -434,9 +458,9 @@ func executeMinutesGenerating(taskDir string, m *Manifest, settings *Settings) e
 		return err
 	}
 
-	m.Artifacts.Minutes.Path = minutesPath
-	m.Artifacts.Minutes.State = ArtifactReady
-	m.Artifacts.Minutes.SHA256 = mustFileSHA256(minutesPath)
+	if err := markArtifactReady(minutesPath, &m.Artifacts.Minutes); err != nil {
+		return err
+	}
 	return SaveManifest(taskDir, m)
 }
 

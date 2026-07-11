@@ -54,7 +54,9 @@ func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes in
 	var attempted []int
 	for _, chunkSeconds := range CalculateRetryChunkSeconds(initialSeconds) {
 		attempted = append(attempted, chunkSeconds)
-		clearChunks(chunksDir, chunkFormat)
+		if err := clearChunks(chunksDir, chunkFormat); err != nil {
+			return nil, err
+		}
 		if err := splitOnce(inputPath, chunksDir, inputFormat, chunkSeconds); err != nil {
 			return nil, err
 		}
@@ -93,14 +95,24 @@ func chunkAudioFormat(inputFormat string) string {
 	return inputFormat
 }
 
-func clearChunks(chunksDir, format string) {
-	_ = os.MkdirAll(chunksDir, 0700)
-	entries, _ := os.ReadDir(chunksDir)
+func clearChunks(chunksDir, format string) error {
+	if err := os.MkdirAll(chunksDir, 0700); err != nil {
+		return fmt.Errorf("creating chunks directory: %w", err)
+	}
+	entries, err := os.ReadDir(chunksDir)
+	if err != nil {
+		return fmt.Errorf("reading chunks directory for cleanup: %w", err)
+	}
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "part_") && strings.HasSuffix(e.Name(), "."+format) {
-			_ = os.Remove(filepath.Join(chunksDir, e.Name()))
+		isChunkFile := strings.HasPrefix(e.Name(), "part_") || strings.HasPrefix(e.Name(), ".renaming_")
+		if !e.IsDir() && isChunkFile && strings.HasSuffix(e.Name(), "."+format) {
+			path := filepath.Join(chunksDir, e.Name())
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("removing stale chunk %s: %w", path, err)
+			}
 		}
 	}
+	return nil
 }
 
 func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error {
@@ -128,8 +140,7 @@ func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error
 			outputPattern,
 		}
 		if err := runFFmpeg(args); err == nil {
-			renumberChunks(chunksDir, chunkFmt)
-			return nil
+			return renumberChunks(chunksDir, chunkFmt)
 		}
 		// Fallback: re-encode.
 		args = []string{
@@ -144,13 +155,15 @@ func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error
 	if err := runFFmpeg(args); err != nil {
 		return err
 	}
-	renumberChunks(chunksDir, chunkFmt)
-	return nil
+	return renumberChunks(chunksDir, chunkFmt)
 }
 
 // renumberChunks renames ffmpeg's 0-based part files to 1-based.
-func renumberChunks(chunksDir, format string) {
-	entries, _ := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf("part_*.%s", format)))
+func renumberChunks(chunksDir, format string) error {
+	entries, err := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf("part_*.%s", format)))
+	if err != nil {
+		return fmt.Errorf("listing chunks for renumbering: %w", err)
+	}
 	sort.Strings(entries)
 
 	type rename struct {
@@ -172,22 +185,33 @@ func renumberChunks(chunksDir, format string) {
 
 	// Phase 1: rename originals to temp names.
 	for _, r := range renames {
-		_ = os.Rename(r.temp, r.target)
+		if err := os.Rename(r.temp, r.target); err != nil {
+			return fmt.Errorf("preparing chunk renumber %s: %w", r.temp, err)
+		}
 	}
 
 	// Phase 2: collect all files and rename to 1-based.
-	allFiles, _ := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf("part_*.%s", format)))
+	allFiles, err := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf("part_*.%s", format)))
+	if err != nil {
+		return fmt.Errorf("listing chunks after renumber preparation: %w", err)
+	}
 	// Also include temp files.
-	tempFiles, _ := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf(".renaming_*.%s", format)))
+	tempFiles, err := filepath.Glob(filepath.Join(chunksDir, fmt.Sprintf(".renaming_*.%s", format)))
+	if err != nil {
+		return fmt.Errorf("listing temporary chunk names: %w", err)
+	}
 	allFiles = append(allFiles, tempFiles...)
 	sort.Strings(allFiles)
 
 	for i, path := range allFiles {
 		target := filepath.Join(chunksDir, fmt.Sprintf("part_%03d.%s", i+1, format))
 		if path != target {
-			_ = os.Rename(path, target)
+			if err := os.Rename(path, target); err != nil {
+				return fmt.Errorf("renumbering chunk %s: %w", path, err)
+			}
 		}
 	}
+	return nil
 }
 
 func findChunks(chunksDir, format string) ([]string, error) {

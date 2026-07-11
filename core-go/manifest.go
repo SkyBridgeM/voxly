@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +241,19 @@ func RecordTaskError(taskDir string, m *Manifest, stage TaskState, err error, re
 	return SaveManifest(taskDir, m)
 }
 
+func IsRetryableError(err error) bool {
+	var clientErr *httpClientError
+	if errors.As(err, &clientErr) {
+		return clientErr.isRetriable()
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return networkErr.Timeout() || networkErr.Temporary()
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "rate limit") || strings.Contains(message, "server error") || strings.Contains(message, "timeout")
+}
+
 // MarkTaskCompleted transitions the task to COMPLETED and records the completion time.
 func MarkTaskCompleted(taskDir string, m *Manifest) error {
 	now := nowFunc().Format(time.RFC3339)
@@ -273,6 +290,9 @@ func ValidateManifest(taskDir string, m *Manifest) error {
 	if m.SchemaVersion != currentSchemaVersion {
 		return fmt.Errorf("unsupported schema version %d (expected %d)", m.SchemaVersion, currentSchemaVersion)
 	}
+	if m.IntegrityVersion != 0 && m.IntegrityVersion != 1 {
+		return fmt.Errorf("unsupported integrity_version %d", m.IntegrityVersion)
+	}
 	if m.TaskID == "" {
 		return fmt.Errorf("manifest missing task_id")
 	}
@@ -295,9 +315,23 @@ func ValidateManifest(taskDir string, m *Manifest) error {
 		}
 	}
 
-	// Validate chunk IDs and paths.
+	// Validate chunk IDs, states, integrity metadata, and paths.
+	seenChunkIDs := make(map[string]struct{}, len(m.Chunks.Items))
 	for _, item := range m.Chunks.Items {
 		if err := validateChunkID(item.ID); err != nil {
+			return err
+		}
+		if _, exists := seenChunkIDs[item.ID]; exists {
+			return fmt.Errorf("duplicate chunk ID %q", item.ID)
+		}
+		seenChunkIDs[item.ID] = struct{}{}
+		if !validChunkStates[item.State] {
+			return fmt.Errorf("invalid state %q for chunk %s", item.State, item.ID)
+		}
+		if err := validateSHA256(item.AudioSHA256, "audio hash for "+item.ID); err != nil {
+			return err
+		}
+		if err := validateSHA256(item.TranscriptSHA256, "transcript hash for "+item.ID); err != nil {
 			return err
 		}
 		if item.AudioPath != "" {
@@ -311,20 +345,45 @@ func ValidateManifest(taskDir string, m *Manifest) error {
 			}
 		}
 	}
+	if m.Chunks.Total != len(m.Chunks.Items) {
+		return fmt.Errorf("chunks.total is %d but manifest contains %d items", m.Chunks.Total, len(m.Chunks.Items))
+	}
+	if len(m.Chunks.Items) > 0 && m.Chunks.Format != "mp3" && m.Chunks.Format != "wav" {
+		return fmt.Errorf("invalid chunk format %q", m.Chunks.Format)
+	}
 
-	// Validate artifact paths.
-	for name, p := range map[string]string{
-		"transcript":  m.Artifacts.Transcript.Path,
-		"notes_input": m.Artifacts.NotesInput.Path,
-		"minutes":     m.Artifacts.Minutes.Path,
+	// Validate artifact states, hashes, and paths.
+	for name, artifact := range map[string]ArtifactInfo{
+		"transcript":  m.Artifacts.Transcript,
+		"notes_input": m.Artifacts.NotesInput,
+		"minutes":     m.Artifacts.Minutes,
 	} {
-		if p != "" {
-			if err := pathIsInside(absTaskDir, p, name); err != nil {
+		if artifact.State != "" && !validArtifactStates[artifact.State] {
+			return fmt.Errorf("invalid state %q for %s artifact", artifact.State, name)
+		}
+		if err := validateSHA256(artifact.SHA256, name+" artifact hash"); err != nil {
+			return err
+		}
+		if artifact.Path != "" {
+			if err := pathIsInside(absTaskDir, artifact.Path, name); err != nil {
 				return err
 			}
 		}
 	}
 
+	return nil
+}
+
+func validateSHA256(value, label string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) != sha256.Size*2 {
+		return fmt.Errorf("invalid %s: expected 64 hexadecimal characters", label)
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("invalid %s: %w", label, err)
+	}
 	return nil
 }
 

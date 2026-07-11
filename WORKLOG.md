@@ -2,8 +2,8 @@
 
 ## 现状
 
-**分支：** `experiment/go-core-spike`
-**阶段：** Resume state machine 重设计完成，等待 review
+**分支：** `experiment/go-core-phase2b`
+**阶段：** Go-only resume baseline 已加固，等待最终 review
 
 Go CLI spike (`core-go/`) 已实现：
 - 音频切割（ffmpeg，含减半重试）
@@ -18,8 +18,8 @@ Go CLI spike (`core-go/`) 已实现：
 - **Manifest 支持** — `task_manifest.json`（schema_version=1），嵌套 chunk 逐条状态和 artifact 状态
 - **Prompt/Template 标志** — `--prompt-path` 和 `--obsidian-template-path`
 - **原子写入** — 所有生成文件通过 temp+rename 写入
-- **独占锁** — `.resume.lock` 防止并发 resume，含 PID 和 stale 检测
-- 132 个 Go 单元测试全通过（含 race detector）
+- **独占锁** — `.resume.lock` 使用平台原生文件锁，进程退出后由操作系统自动释放
+- 150 个 Go 单元测试全通过（含 race detector）
 - Python 114 个测试无回归
 
 ## 当前任务
@@ -32,7 +32,8 @@ Go CLI spike (`core-go/`) 已实现：
 - [x] Phase 1: resume 命令、manifest 支持、prompt/template 标志
 - [x] Review fixes: gofmt、chunk 严格三位编号校验、README 更新
 - [x] Resume state machine 重设计（state.go、artifact.go、tasklock.go、reconcile.go、manifest 重写、resume 重写）
-- [ ] 等待 Codex review
+- [x] Codex review：修复 hashless transcript 信任与 re-split 静默清理失败
+- [ ] 等待 Go-only baseline 最终 review
 - [ ] 可选：端到端手动验证（需要真实 API key + 音频文件）
 
 ---
@@ -100,7 +101,7 @@ Go CLI spike (`core-go/`) 已实现：
 - **新增文件：**
   - `state.go`：TaskState 枚举（CREATED/VALIDATING_AUDIO/SPLITTING/TRANSCRIBING/MERGING/NOTES_GENERATING/MINUTES_GENERATING/VALIDATING_OUTPUTS/COMPLETED/FAILED）、ChunkState 枚举（PENDING/IN_PROGRESS/COMPLETED/FAILED）、ArtifactState 枚举、`ResumeStage()` 阶段选择逻辑
   - `artifact.go`：`WriteFileAtomically()` — temp file + fsync + atomic rename，所有生成文件使用此方式写入
-  - `tasklock.go`：`AcquireTaskLock()`/`Release()` — `.resume.lock` 独占锁，含 PID 和 stale 检测
+  - `tasklock.go`：`AcquireTaskLock()`/`Release()` — `.resume.lock` 使用 Unix `flock` / Windows `LockFileEx` 原生独占锁
   - `reconcile.go`：`ReconcileChunks()` — 校验 chunk 音频和转写文件，重置 IN_PROGRESS/缺失/空文件为 PENDING；`ReconcileArtifacts()` — 校验产物并级联失效下游；`BuildChunkItemsFromDisk()` — legacy manifest 迁移用
 
 - **重写文件：**
@@ -118,5 +119,12 @@ Go CLI spike (`core-go/`) 已实现：
   7. 损坏 manifest → 拒绝不安全恢复，保留文件
   8. 并发 resume → 被锁拒绝
 
-- 其他测试：stale lock 清理、锁释放、legacy manifest 迁移、ResumeStage 边界、ReconcileArtifacts 级联失效、WriteFileAtomically、BuildChunkItemsFromDisk
-- 总测试数：132 个 Go 测试全通过（含 race detector），Python 114 个无回归
+- 其他测试：锁竞争与释放、legacy manifest 迁移、ResumeStage 边界、ReconcileArtifacts 级联失效、WriteFileAtomically、BuildChunkItemsFromDisk
+- 总测试数：150 个 Go 测试全通过（含 race detector），Python 114 个无回归
+
+**Session 9 — Go-only baseline final hardening**
+- hashless chunk transcript 不再被 reconcile 自动信任；正常转写在标记完成前持久化 SHA-256
+- re-split、chunk 清理和重编号失败会中止任务，不再静默保留旧文件
+- `ValidateManifest()` 增加 integrity version、重复 chunk ID、状态、计数、格式与哈希校验
+- manifest error 记录保留 API 超时、429 与服务端错误的 retryable 属性
+- 新增 Go Core GitHub Actions：test、vet、race 和 macOS/Linux/Windows 编译
