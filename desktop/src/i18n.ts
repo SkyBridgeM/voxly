@@ -8,6 +8,8 @@ export interface Translations {
   noFileSelected: string;
   modeTranscript: string;
   modeTranscriptDesc: string;
+  modeNotes: string;
+  modeNotesDesc: string;
   modeMinutes: string;
   modeMinutesDesc: string;
   start: string;
@@ -28,7 +30,11 @@ export interface Translations {
   exitedWithCode: string;
   terminatedBySignal: string;
   transcriptWarning: string;
+  notesWarning: string;
   llmWarning: string;
+  backend: string;
+  backendPython: string;
+  backendGoExperimental: string;
   settingsTitle: string;
   language: string;
   mimoApiKey: string;
@@ -57,6 +63,8 @@ export const translations: Record<Locale, Translations> = {
     noFileSelected: "未选择文件",
     modeTranscript: "转写文本",
     modeTranscriptDesc: "仅转写",
+    modeNotes: "笔记输入",
+    modeNotesDesc: "转写与笔记输入",
     modeMinutes: "LLM 总结",
     modeMinutesDesc: "AI 生成纪要",
     start: "开始",
@@ -78,8 +86,13 @@ export const translations: Record<Locale, Translations> = {
     terminatedBySignal: "被信号终止",
     transcriptWarning:
       "transcript 模式会将音频发送至 MiMo ASR 进行转写。请勿上传未授权的敏感会议内容。\n\nTranscript mode sends audio to MiMo ASR for transcription.",
+    notesWarning:
+      "notes 模式会将音频发送至 MiMo ASR 转写，并在本地生成 notes_input.md；不会将转写文本发送至 DeepSeek。\n\nNotes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
     llmWarning:
       "minutes 模式会将转写文本发送至 DeepSeek 生成会议总结。请勿上传未授权的敏感会议内容。\n\nMinutes mode sends transcript text to DeepSeek for summary generation.",
+    backend: "后端",
+    backendPython: "Python（稳定，默认）",
+    backendGoExperimental: "Go（实验性）",
     settingsTitle: "设置",
     language: "语言",
     mimoApiKey: "MIMO API Key",
@@ -106,6 +119,8 @@ export const translations: Record<Locale, Translations> = {
     noFileSelected: "No file selected",
     modeTranscript: "Transcript",
     modeTranscriptDesc: "Text only",
+    modeNotes: "Notes input",
+    modeNotesDesc: "Transcript + notes input",
     modeMinutes: "LLM Summary",
     modeMinutesDesc: "AI minutes",
     start: "Start",
@@ -127,8 +142,13 @@ export const translations: Record<Locale, Translations> = {
     terminatedBySignal: "Terminated by signal",
     transcriptWarning:
       "Transcript mode sends audio to MiMo ASR for transcription. Do not upload unauthorized sensitive meeting content.",
+    notesWarning:
+      "Notes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
     llmWarning:
       "Minutes mode sends transcript text to DeepSeek for summary generation. Do not upload unauthorized sensitive meeting content.",
+    backend: "Backend",
+    backendPython: "Python (stable, default)",
+    backendGoExperimental: "Go (experimental)",
     settingsTitle: "Settings",
     language: "Language",
     mimoApiKey: "MIMO API Key",
