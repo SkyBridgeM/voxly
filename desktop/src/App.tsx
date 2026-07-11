@@ -4,7 +4,10 @@ import {
   runMeetingAsr,
   openTaskFolder,
   saveEnvKey,
+  parseBackendError,
+  type BackendKind,
   type LogEntry,
+  type OutputMode,
   type ProgressEvent,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
@@ -21,8 +24,9 @@ function App() {
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
-  const [outputMode, setOutputMode] = useState<"transcript" | "minutes">(
-    "transcript"
+  const [outputMode, setOutputMode] = useState<OutputMode>("transcript");
+  const [backend, setBackend] = useState<BackendKind>(() =>
+    localStorage.getItem("backend") === "go" ? "go" : "python"
   );
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -58,6 +62,10 @@ function App() {
     setLocale(locale);
   }, [locale]);
 
+  useEffect(() => {
+    localStorage.setItem("backend", backend);
+  }, [backend]);
+
   const startRun = useCallback(async () => {
     if (!audioPath || isRunning) return;
 
@@ -76,29 +84,11 @@ function App() {
       const result = await runMeetingAsr(
         audioPath,
         outputMode,
-        { mimoApiKey, deepseekApiKey, deepseekModel },
+        { mimoApiKey, deepseekApiKey, deepseekModel, backend },
         {
-          onLog: (entry) => {
-            setLogs((prev) => [...prev, entry]);
-            if (entry.stream === "stderr" && entry.line.trim()) {
-              setErrorMessage((prev) =>
-                prev ? prev + "\n" + entry.line : entry.line
-              );
-            }
-          },
+          onLog: (entry) => setLogs((prev) => [...prev, entry]),
           onProgress: (event) => setProgress(event),
-          onDone: (code) => {
-            if (code === 0) {
-              setStatus(t.completedSuccessfully);
-              setStatusOk(true);
-            } else if (code !== null) {
-              setStatus(`${t.exitedWithCode} ${code}.`);
-              setStatusOk(false);
-            } else {
-              setStatus(t.terminatedBySignal);
-              setStatusOk(false);
-            }
-          },
+          onDone: () => {},
         }
       );
 
@@ -107,25 +97,13 @@ function App() {
       if (result.notes_input_path) setNotesInputPath(result.notes_input_path);
       if (result.minutes_path) setMinutesPath(result.minutes_path);
 
-      if (result.status === "success") {
-        if (!status) {
-          setStatus(t.completedSuccessfully);
-          setStatusOk(true);
-        }
-      } else if (!status) {
-        setStatus(result.status);
-        setStatusOk(false);
-      }
+      setStatus(t.completedSuccessfully);
+      setStatusOk(true);
     } catch (e) {
-      const err = String(e);
-      const stderrLines = logs
-        .filter((l) => l.stream === "stderr")
-        .map((l) => l.line)
-        .join("\n");
-      const displayError = stderrLines || err;
-      setErrorMessage(displayError);
+      const error = parseBackendError(String(e));
+      setErrorMessage(error.message);
       setShowError(true);
-      setStatus(err);
+      setStatus(error.message);
       setStatusOk(false);
     } finally {
       setIsRunning(false);
@@ -135,12 +113,11 @@ function App() {
     audioPath,
     isRunning,
     outputMode,
-    status,
     mimoApiKey,
     deepseekApiKey,
     deepseekModel,
+    backend,
     t,
-    logs,
   ]);
 
   const handleOpenFolder = useCallback(async () => {
@@ -207,12 +184,15 @@ function App() {
             labels={{
               modeTranscript: t.modeTranscript,
               modeTranscriptDesc: t.modeTranscriptDesc,
+              modeNotes: t.modeNotes,
+              modeNotesDesc: t.modeNotesDesc,
               modeMinutes: t.modeMinutes,
               modeMinutesDesc: t.modeMinutesDesc,
               start: t.start,
               processing: t.processing,
               llmWarning: t.llmWarning,
               transcriptWarning: t.transcriptWarning,
+              notesWarning: t.notesWarning,
             }}
           />
         </div>
@@ -288,6 +268,16 @@ function App() {
                 >
                   <option value="zh">中文</option>
                   <option value="en">English</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>{t.backend}</label>
+                <select
+                  value={backend}
+                  onChange={(e) => setBackend(e.target.value === "go" ? "go" : "python")}
+                >
+                  <option value="python">{t.backendPython}</option>
+                  <option value="go">{t.backendGoExperimental}</option>
                 </select>
               </div>
               <div className="form-group">

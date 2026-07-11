@@ -1,13 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
+export type BackendKind = "python" | "go";
+export type OutputMode = "transcript" | "notes" | "minutes";
+
 export interface RunResult {
-  status: string;
-  code: number | null;
-  task_folder: string | null;
-  transcript_path: string | null;
+  task_folder: string;
+  transcript_path: string;
   notes_input_path: string | null;
   minutes_path: string | null;
+}
+
+export interface BackendErrorInfo {
+  category: string;
+  message: string;
+  code?: number;
 }
 
 export interface ProgressEvent {
@@ -24,13 +31,83 @@ export interface LogEntry {
 export interface RunCallbacks {
   onLog: (entry: LogEntry) => void;
   onProgress: (event: ProgressEvent) => void;
-  onDone: (code: number | null) => void;
+  onDone: () => void;
+}
+
+export interface RunOptions {
+  mimoApiKey?: string;
+  deepseekApiKey?: string;
+  deepseekModel?: string;
+  backend?: BackendKind;
+}
+
+export function parseBackendError(raw: string): BackendErrorInfo {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.category === "string") {
+      return {
+        category: parsed.category,
+        message: parsed.message || raw,
+        code: parsed.code,
+      };
+    }
+  } catch {
+    // not JSON, return as generic error
+  }
+  return {
+    category: "process_failed",
+    message: raw,
+  };
 }
 
 export async function runMeetingAsr(
   audioPath: string,
-  outputMode: "transcript" | "minutes",
+  outputMode: OutputMode,
+  options: RunOptions,
+  callbacks: RunCallbacks
+): Promise<RunResult> {
+  const unlisteners: UnlistenFn[] = [];
+
+  const unlistenLog = await listen<LogEntry>("log-line", (event) => {
+    callbacks.onLog(event.payload);
+  });
+  unlisteners.push(unlistenLog);
+
+  const unlistenProgress = await listen<ProgressEvent>("progress", (event) => {
+    callbacks.onProgress(event.payload);
+  });
+  unlisteners.push(unlistenProgress);
+
+  const unlistenDone = await listen<{ code: number | null }>(
+    "process-done",
+    () => {
+      callbacks.onDone();
+    }
+  );
+  unlisteners.push(unlistenDone);
+
+  try {
+    const result = await invoke<RunResult>("run_meeting_asr", {
+      audioPath,
+      outputMode,
+      backend: options.backend || "python",
+      mimoApiKey: options.mimoApiKey || undefined,
+      deepseekApiKey: options.deepseekApiKey || undefined,
+      deepseekModel: options.deepseekModel || undefined,
+    });
+    return result;
+  } finally {
+    for (const fn of unlisteners) {
+      fn();
+    }
+  }
+}
+
+export async function resumeMeetingAsr(
+  taskDir: string,
   options: {
+    outputMode?: OutputMode;
+    backend?: BackendKind;
     mimoApiKey?: string;
     deepseekApiKey?: string;
     deepseekModel?: string;
@@ -51,16 +128,17 @@ export async function runMeetingAsr(
 
   const unlistenDone = await listen<{ code: number | null }>(
     "process-done",
-    (event) => {
-      callbacks.onDone(event.payload.code);
+    () => {
+      callbacks.onDone();
     }
   );
   unlisteners.push(unlistenDone);
 
   try {
-    const result = await invoke<RunResult>("run_meeting_asr", {
-      audioPath,
-      outputMode,
+    const result = await invoke<RunResult>("resume_meeting_asr", {
+      taskDir,
+      outputMode: options.outputMode || undefined,
+      backend: options.backend || "python",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
       deepseekModel: options.deepseekModel || undefined,

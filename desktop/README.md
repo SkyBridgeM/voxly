@@ -1,23 +1,20 @@
 # meeting-asr Desktop Prototype
 
-> **EXPERIMENTAL** — This is a Tauri desktop shell prototype for `meeting-asr`.
-> It is NOT a production app and is NOT intended for merge into `main`.
+> **EXPERIMENTAL** — Python is the stable default backend; Go is available only
+> as an explicitly experimental development backend.
 
 ## What This Is
 
-A thin Tauri + React + TypeScript desktop wrapper that calls the existing Python CLI
-via `uv run meeting-asr`. All business logic (ASR, LLM, workflow, resume, ffmpeg)
-remains in the Python core under `src/meeting_asr/`.
+A thin Tauri + React + TypeScript desktop wrapper that calls either Python via
+`uv run meeting-asr` or the experimental Go CLI. Rust validates paths, streams
+the stable stdout contract, and validates final artifacts before reporting success.
 
 ## Architecture
 
 ```
 desktop/ (Tauri + React)
-  └── spawns: uv run meeting-asr transcribe <audio> --output-mode <mode>
-                │
-                ├── reads .env from project root
-                ├── runs ASR / LLM
-                └── writes to output/
+  ├── Python (default): uv run meeting-asr transcribe ...
+  └── Go (experimental): core-go/meeting-asr-go transcribe ...
 ```
 
 ## Prerequisites
@@ -26,8 +23,9 @@ desktop/ (Tauri + React)
 |---|---|
 | **Node.js + npm** | Frontend build and Tauri CLI |
 | **Rust** (rustc, cargo) | Tauri Rust backend |
-| **[uv](https://docs.astral.sh/uv/)** | Python package manager and CLI runner |
-| **ffmpeg** | Audio splitting (required by Python CLI) |
+| **[uv](https://docs.astral.sh/uv/)** | Python backend only |
+| **Go 1.21+** | Build the experimental Go backend |
+| **ffmpeg** | Audio splitting (required by both backends; not bundled) |
 | **`.env` at project root** | API keys |
 
 ## Setup
@@ -45,8 +43,21 @@ npm install
 
 # 4. Configure API keys in project-root .env
 #    transcript mode needs: MIMO_API_KEY
-#    minutes mode needs:    MIMO_API_KEY + DEEPSEEK_API_KEY
+#    notes/minutes need:    MIMO_API_KEY
+#    minutes additionally:  DEEPSEEK_API_KEY
 ```
+
+### Go backend (experimental)
+
+```bash
+cd core-go
+go build -o meeting-asr-go .
+```
+
+Rust discovers Go through the absolute `MEETING_ASR_GO_BINARY` override or the
+development fallback `<project-root>/core-go/meeting-asr-go` (`.exe` on Windows).
+It validates `<binary> version`; it does not search PATH, auto-build, package, or
+bundle the binary.
 
 ## Running
 
@@ -58,14 +69,14 @@ npm run tauri dev
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.
-2. User chooses output mode: `transcript` or `minutes`.
-3. On "Start", the app runs:
-   ```
-   uv run meeting-asr transcribe <audio_path> --output-mode <mode>
-   ```
-4. stdout/stderr stream in real time to the UI.
-5. On completion, the task folder and output file paths are displayed.
-6. "Open Output Folder" opens the task directory in the system file manager.
+2. User chooses `transcript`, `notes`, or `minutes`.
+3. In Settings, Python remains the default; Go is clearly labeled experimental.
+4. On "Start", the app runs the selected backend with structured arguments.
+   Python keeps its normal root `.env` lookup. Go receives `--env-file` for the
+   root `.env` when present, otherwise `--project-root`.
+5. stdout/stderr stream in real time to the UI.
+6. On completion, canonical task/artifact paths must validate inside root `output/`.
+7. "Open Output Folder" opens only a validated task directory.
 
 ## API Key Handling
 
@@ -80,6 +91,8 @@ npm run tauri dev
 ## Privacy Warnings
 
 - **transcript mode**: Sends audio to MiMo ASR for transcription.
+- **notes mode**: Sends audio to MiMo ASR and creates `notes_input.md` locally;
+  no transcript is sent to DeepSeek.
 - **minutes mode**: Sends transcript text to DeepSeek for summary generation.
 - Do not upload unauthorized sensitive meeting content.
 
@@ -104,28 +117,32 @@ No filesystem, shell, network, or opener permissions are granted.
 
 ## Security Notes
 
-- No arbitrary shell command execution — only `uv run meeting-asr` with fixed arguments.
+- No arbitrary shell command execution — commands use validated, discrete arguments.
 - `open_task_folder` validates that the path is inside the `output/` directory.
 - CSP is `null` (experiment-phase simplification).
 - Bundle is disabled (`"active": false` in `tauri.conf.json`).
 
 ## What Is NOT Implemented
 
-- No PyInstaller, bundled Python, or bundled ffmpeg.
+- No PyInstaller, bundled Python/Go, or bundled ffmpeg.
 - No auto-update, system tray, or menu bar.
 - No FastAPI, database, task queue, or server backend.
 - No LAN mode, PWA, or browser recording.
-- No production packaging or distribution.
+- No production packaging, sidecars, or distribution.
+- No normal resume or cancellation UI. Rust exposes resume for a future UI and
+  terminates the active child process during app shutdown.
 
 ## Manual Verification Checklist
 
 - [ ] Tauri window opens with title "meeting-asr Desktop Prototype"
 - [ ] Subtitle shows "Experimental Tauri prototype"
 - [ ] File picker allows `.mp3`, `.wav`, and `.m4a`
-- [ ] Output mode shows `transcript` and `minutes` only
-- [ ] Privacy warning shown for both modes
+- [ ] Output mode shows `transcript`, `notes`, and `minutes`
+- [ ] Python is the default and Go is labeled experimental in Settings
+- [ ] Privacy warning is accurate for all modes
 - [ ] `transcript` mode starts without DeepSeek key
 - [ ] `minutes` mode calls CLI with `--output-mode minutes`
+- [ ] Go binary discovery failure shows the manual build instruction
 - [ ] stdout/stderr appear in real time in the log panel
 - [ ] Logs auto-expand when stderr arrives or on failure
 - [ ] On success, task folder and output paths are displayed
