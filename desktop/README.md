@@ -66,6 +66,23 @@ cd desktop
 npm run tauri dev
 ```
 
+## Development vs. Planned Production Candidate
+
+This repository currently runs only the development desktop build described
+above. It requires the project checkout, `uv` for Python, a root `.env`, and a
+manually built Go binary when Go is selected.
+
+Phase 5 will later introduce a separate internal macOS Apple Silicon production
+candidate. That build is planned to default to a packaged Go sidecar, use a
+user-visible output directory under `~/Documents/Meeting ASR`, and keep Python
+available only in development builds. Python source code and regression tests
+will remain in this repository.
+
+This readiness change does **not** add a sidecar, bundle an application, change
+backend selection, package ffmpeg, or change API-key storage. ffmpeg will remain
+a system prerequisite; packaging, signing, notarization, installers, and
+automatic updates are deferred.
+
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.

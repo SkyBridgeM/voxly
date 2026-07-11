@@ -1,0 +1,75 @@
+name: Desktop Readiness
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "core-go/**"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "core-go/**"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Offline desktop readiness
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Build desktop frontend
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check Rust desktop code
+        working-directory: desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo test
+          cargo clippy -- -D warnings
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core-go/go.mod
+          cache-dependency-path: core-go/go.sum
+      - name: Check Go core
+        working-directory: core-go
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Check Python regression suite
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest
+
+      - name: Check diff whitespace
+        run: git diff --check
