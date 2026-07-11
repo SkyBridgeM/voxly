@@ -358,6 +358,9 @@ const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
 /// Deliberately non-sensitive settings. API keys, input history, transcripts,
 /// and task content must never be added to this structure.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+// Reject unknown fields so unsupported or potentially sensitive values are
+// never silently accepted and later persisted. Future schema changes require
+// an explicit, reviewed migration rather than implicit forward compatibility.
 #[serde(default, deny_unknown_fields)]
 struct DesktopSettings {
     output_root: Option<String>,
@@ -1685,6 +1688,16 @@ mod tests {
     }
 
     #[test]
+    fn test_current_runtime_mode_matches_build_profile() {
+        let expected = if cfg!(debug_assertions) {
+            RuntimeMode::Development
+        } else {
+            RuntimeMode::Production
+        };
+        assert_eq!(RuntimeMode::current(), expected);
+    }
+
+    #[test]
     fn test_production_default_output_root_requires_documents_directory() {
         assert!(get_default_output_root(RuntimeMode::Production, None).is_err());
     }
@@ -1728,6 +1741,14 @@ mod tests {
             ..Default::default()
         };
         assert!(get_configured_output_root(&settings).is_err());
+    }
+
+    #[test]
+    fn test_settings_reject_unknown_fields() {
+        assert!(serde_json::from_str::<DesktopSettings>(
+            r#"{"output_root":"/tmp/output","unexpected_value":"ignored"}"#
+        )
+        .is_err());
     }
 
     #[test]
