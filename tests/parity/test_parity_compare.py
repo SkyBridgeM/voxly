@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from argparse import Namespace
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.parity.parity_compare import (
     compare_notes_input,
@@ -13,6 +15,7 @@ from scripts.parity.parity_compare import (
     validate_minutes_file,
     validate_stdout_contract,
 )
+from scripts.parity import run_parity as parity_runner
 from scripts.parity.run_parity import _task_folder, build_python_command
 
 
@@ -170,3 +173,36 @@ def test_reported_task_folder_must_be_under_the_requested_output_root(tmp_path: 
     assert task_folder is None
     assert error is not None
     assert "outside its requested output directory" in error
+
+
+def test_runner_report_uses_parsed_stdout_without_persisting_raw_output(tmp_path: Path, monkeypatch) -> None:
+    python_task = make_task(tmp_path / "python-output" / "20260711_120000_python", "transcript")
+    go_task = make_task(tmp_path / "go-output" / "20260711_120000_go", "transcript")
+    outputs = iter(
+        [
+            f"Status: Done\nTranscript saved: {python_task / 'transcript.md'}\nTask folder: {python_task}\n",
+            f"Status: Done\nTranscript saved: {go_task / 'transcript.md'}\nTask folder: {go_task}\n",
+        ]
+    )
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=next(outputs), stderr="super-secret diagnostic")
+
+    monkeypatch.setattr(parity_runner.subprocess, "run", fake_run)
+    report = parity_runner.run_parity(
+        Namespace(
+            audio=tmp_path / "input.m4a",
+            mode="transcript",
+            python_output=tmp_path / "python-output",
+            go_output=tmp_path / "go-output",
+            go_binary=tmp_path / "meeting-asr-go",
+            env_file=None,
+            report_dir=tmp_path / "reports",
+        )
+    )
+
+    saved_report = Path(report["report_path"]).read_text(encoding="utf-8")
+    assert report["passed"], report
+    assert "super-secret diagnostic" not in saved_report
+    assert '"stdout"' not in saved_report
+    assert '"stderr"' not in saved_report

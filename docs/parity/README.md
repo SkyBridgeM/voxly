@@ -8,6 +8,10 @@ Parity means both implementations produce the shared task layout and output shap
 
 This phase does not include Tauri integration, desktop or WebUI changes, packaging, ffmpeg bundling, Python removal, or live API calls in CI.
 
+Phase 4 remains out of scope until this PR is merged. Its implementation must
+not make Go the default backend; complete the documented manual live checks
+before relying on Go for desktop integration decisions.
+
 ## What is compared
 
 - Shared task layout: `audio/`, `chunks/`, `transcripts/`, `transcript.md`, and the mode-required artifacts. Backend-specific files such as Go's `task_manifest.json` and `.resume.lock` are allowed.
