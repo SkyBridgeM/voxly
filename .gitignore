@@ -1,4 +1,5 @@
 .env
+.DS_Store
 .venv/
 __pycache__/
 *.py[cod]
@@ -10,3 +11,8 @@ __pycache__/
 dist/
 build/
 output/
+
+# Go spike
+core-go/meeting-asr-go
+core-go/core-go
+core-go/*.test
