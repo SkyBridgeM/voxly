@@ -14,7 +14,8 @@ the stable stdout contract, and validates final artifacts before reporting succe
 ```
 desktop/ (Tauri + React)
   ├── Python (default): uv run meeting-asr transcribe ...
-  └── Go (experimental): core-go/meeting-asr-go transcribe ...
+  ├── Go (development): core-go/meeting-asr-go transcribe ...
+  └── Go (production candidate): packaged meeting-asr-go sidecar
 ```
 
 ## Prerequisites
@@ -24,7 +25,7 @@ desktop/ (Tauri + React)
 | **Node.js + npm** | Frontend build and Tauri CLI |
 | **Rust** (rustc, cargo) | Tauri Rust backend |
 | **[uv](https://docs.astral.sh/uv/)** | Python backend only |
-| **Go 1.21+** | Build the experimental Go backend |
+| **Go 1.21+** | Build the experimental Go backend or desktop sidecar |
 | **ffmpeg** | Audio splitting (required by both backends; not bundled) |
 | **`.env` at project root (development only)** | Development API-key compatibility |
 
@@ -54,14 +55,36 @@ cd core-go
 go build -o meeting-asr-go .
 ```
 
-Rust discovers Go through the absolute `MEETING_ASR_GO_BINARY` override or the
-development fallback `<project-root>/core-go/meeting-asr-go` (`.exe` on Windows).
-It validates `<binary> version`; it does not search PATH, auto-build, package, or
-bundle the binary.
+In development, Rust discovers Go through the absolute `MEETING_ASR_GO_BINARY`
+override or the fallback `<project-root>/core-go/meeting-asr-go` (`.exe` on
+Windows). It validates `<binary> version`; it does not search PATH or
+auto-build the binary.
+
+### Desktop sidecar candidate (macOS)
+
+PR 10 adds the Tauri sidecar layout for the primary macOS targets. Build the
+current macOS host target with:
+
+```bash
+./scripts/build_desktop_sidecar.sh
+```
+
+This writes a generated file such as
+`desktop/src-tauri/binaries/meeting-asr-go-aarch64-apple-darwin`. The generated
+binary is ignored and must not be committed. The Tauri configuration declares
+the logical sidecar name `meeting-asr-go`; a production/release Go run resolves
+only the packaged sidecar next to the application executable, validates its
+`version` output, and never falls back to `MEETING_ASR_GO_BINARY`, the project
+checkout, or `PATH`. The full application bundle and distribution workflow are
+still deferred. Tauri removes the target suffix while copying the sidecar; the
+Rust resolver follows the current executable's parent directory, matching
+Tauri's supported sidecar path on macOS.
 
 ## Running
 
 ```bash
+# Tauri's externalBin declaration requires the generated host sidecar input.
+./scripts/build_desktop_sidecar.sh
 cd desktop
 npm run tauri dev
 ```
@@ -88,9 +111,10 @@ never returned to the frontend. Development/debug resolution is session,
 secure store, then project-root `.env`. Release resolution is session, then
 secure store, and never the project-root `.env`.
 
-This PR does **not** add a sidecar, bundle an application, or change backend
-selection: Python remains the development default and Go remains experimental.
-The current Settings UI keeps its existing "Save to .env" development
+PR 10 adds only the generated sidecar layout, Tauri `externalBin` declaration,
+and production resolver foundation; it does not build or distribute a full
+application bundle. Python remains the development default and Go remains
+experimental in development. The current Settings UI keeps its existing "Save to .env" development
 compatibility flow; a `.env` migration UI is deferred. ffmpeg remains a system
 prerequisite, while packaging, signing, notarization, installers, and automatic
 updates are deferred.
@@ -104,7 +128,7 @@ updates are deferred.
    backend with structured arguments. Credentials are passed only through child
    process environment variables. In development, Python/Go retain their
    project-root `.env` compatibility; in release, Python disables dotenv
-   loading and Go receives an isolated runtime project root.
+   loading and a packaged Go sidecar receives an isolated runtime project root.
 5. stdout/stderr stream in real time to the UI.
 6. On completion, canonical task/artifact paths must validate inside root `output/`.
 7. "Open Output Folder" opens only a validated task directory.
@@ -167,11 +191,13 @@ No filesystem, shell, network, or opener permissions are granted.
 
 ## What Is NOT Implemented
 
-- No PyInstaller, bundled Python/Go, or bundled ffmpeg.
+- No PyInstaller, bundled Python, or bundled ffmpeg. The generated Go sidecar
+  candidate is not committed.
 - No auto-update, system tray, or menu bar.
 - No FastAPI, database, task queue, or server backend.
 - No LAN mode, PWA, or browser recording.
-- No production packaging, sidecars, or distribution.
+- No full production app bundle, installer, or public distribution; sidecar
+  packaging remains an internal follow-up.
 - No normal resume or cancellation UI. Rust exposes resume for a future UI and
   terminates the active child process during app shutdown.
 

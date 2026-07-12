@@ -716,44 +716,116 @@ fn canonicalize_abs_dir(path: &str, label: &str) -> Result<PathBuf, BackendError
 // Go binary discovery
 // ---------------------------------------------------------------------------
 
-fn discover_go_binary() -> Result<PathBuf, BackendError> {
-    if let Ok(p) = std::env::var("MEETING_ASR_GO_BINARY") {
-        if !p.is_empty() {
-            let path = Path::new(&p);
-            if !path.is_absolute() {
-                return Err(BackendError::BackendNotFound {
-                    message: format!("MEETING_ASR_GO_BINARY must be an absolute path, got: {}", p),
-                });
-            }
-            return canonicalize_abs_file(&p, "Go binary");
-        }
-    }
+const GO_SIDECAR_NAME: &str = "meeting-asr-go";
 
-    let root = resolve_project_root();
-    let binary_name = if cfg!(target_os = "windows") {
+fn go_binary_filename() -> &'static str {
+    if cfg!(target_os = "windows") {
         "meeting-asr-go.exe"
     } else {
-        "meeting-asr-go"
-    };
-    let candidate = root.join("core-go").join(binary_name);
-    let candidate = candidate
+        GO_SIDECAR_NAME
+    }
+}
+
+fn canonicalize_go_binary(
+    candidate: &Path,
+    not_found_message: String,
+) -> Result<PathBuf, BackendError> {
+    let canonical = candidate
         .canonicalize()
-        .map_err(|_| BackendError::BackendNotFound {
-            message: format!(
-                "Go binary not found at {}. Build it with: cd core-go && go build -o meeting-asr-go .\n\
-                 Or set MEETING_ASR_GO_BINARY to the absolute path of the binary.",
-                candidate.display()
-            ),
+        .map_err(|error| BackendError::BackendNotFound {
+            message: format!("{not_found_message} ({error})"),
         })?;
-    if !candidate.is_file() {
+    if !canonical.is_file() {
         return Err(BackendError::BackendNotFound {
             message: format!(
-                "Go binary not found at {}. Build it with: cd core-go && go build -o meeting-asr-go .",
+                "{not_found_message}: {} is not a regular file.",
                 candidate.display()
             ),
         });
     }
-    Ok(candidate)
+    Ok(canonical)
+}
+
+fn discover_development_go_binary() -> Result<PathBuf, BackendError> {
+    let override_path = std::env::var("MEETING_ASR_GO_BINARY").ok();
+    discover_development_go_binary_from(
+        override_path.as_deref().filter(|path| !path.is_empty()),
+        &resolve_project_root(),
+    )
+}
+
+fn discover_development_go_binary_from(
+    override_path: Option<&str>,
+    project_root: &Path,
+) -> Result<PathBuf, BackendError> {
+    if let Some(p) = override_path {
+        let path = Path::new(p);
+        if !path.is_absolute() {
+            return Err(BackendError::BackendNotFound {
+                message: format!("MEETING_ASR_GO_BINARY must be an absolute path, got: {p}"),
+            });
+        }
+        return canonicalize_go_binary(
+            path,
+            format!("Go binary override was not found at {}", path.display()),
+        );
+    }
+
+    let candidate = project_root.join("core-go").join(go_binary_filename());
+    canonicalize_go_binary(
+        &candidate,
+        format!(
+            "Go development binary not found at {}. Build it with: cd core-go && go build -o meeting-asr-go .\n\
+             Or set MEETING_ASR_GO_BINARY to the absolute path of the binary",
+            candidate.display()
+        ),
+    )
+}
+
+fn discover_production_go_binary(executable_dir: &Path) -> Result<PathBuf, BackendError> {
+    let candidate = executable_dir.join(go_binary_filename());
+    canonicalize_go_binary(
+        &candidate,
+        format!(
+            "Packaged Go sidecar not found at {}. Build the sidecar with ./scripts/build_desktop_sidecar.sh and rebuild the desktop app",
+            candidate.display()
+        ),
+    )
+}
+
+fn discover_go_binary(
+    runtime_mode: RuntimeMode,
+    packaged_executable_dir: Option<&Path>,
+) -> Result<PathBuf, BackendError> {
+    match runtime_mode {
+        RuntimeMode::Development => discover_development_go_binary(),
+        RuntimeMode::Production => {
+            let executable_dir =
+                packaged_executable_dir.ok_or_else(|| BackendError::BackendNotFound {
+                    message:
+                        "Could not resolve the packaged application directory for the Go sidecar."
+                            .to_string(),
+                })?;
+            discover_production_go_binary(executable_dir)
+        }
+    }
+}
+
+fn packaged_go_executable_dir() -> Result<PathBuf, BackendError> {
+    // Tauri v2's macOS bundler places external binaries in Contents/MacOS
+    // beside the application executable. PathResolver::executable_dir() is
+    // unsupported on macOS, so use the same current-executable-parent
+    // strategy as Tauri's shell sidecar resolver.
+    let executable = std::env::current_exe().map_err(|error| BackendError::BackendNotFound {
+        message: format!("Could not resolve the running application path: {error}"),
+    })?;
+    executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| BackendError::BackendNotFound {
+            message: "Could not resolve the running application directory for the Go sidecar."
+                .to_string(),
+        })
 }
 
 fn validate_go_binary(binary: &Path) -> Result<(), BackendError> {
@@ -1083,8 +1155,9 @@ fn build_go_command(
     deepseek_model: Option<&str>,
     env_file: Option<&PathBuf>,
     runtime_mode: RuntimeMode,
+    packaged_executable_dir: Option<&Path>,
 ) -> Result<Command, BackendError> {
-    let binary = discover_go_binary()?;
+    let binary = discover_go_binary(runtime_mode, packaged_executable_dir)?;
     validate_go_binary(&binary)?;
 
     let mut cmd = Command::new(binary);
@@ -1253,6 +1326,12 @@ fn run_meeting_asr(
     let env_file = (runtime_mode == RuntimeMode::Development)
         .then(find_env_file)
         .flatten();
+    let packaged_executable_dir =
+        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+            Some(packaged_go_executable_dir().map_err(String::from)?)
+        } else {
+            None
+        };
 
     let cmd = match backend_kind {
         BackendKind::Python => build_python_command(
@@ -1273,6 +1352,7 @@ fn run_meeting_asr(
             deepseek_model.as_deref(),
             env_file.as_ref(),
             runtime_mode,
+            packaged_executable_dir.as_deref(),
         )
         .map_err(String::from)?,
     };
@@ -1407,6 +1487,12 @@ fn resume_meeting_asr(
         .then(find_env_file)
         .flatten();
     let root = resolve_project_root();
+    let packaged_executable_dir =
+        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+            Some(packaged_go_executable_dir().map_err(String::from)?)
+        } else {
+            None
+        };
 
     let cmd = match backend_kind {
         BackendKind::Python => {
@@ -1431,7 +1517,8 @@ fn resume_meeting_asr(
             c
         }
         BackendKind::Go => {
-            let binary = discover_go_binary().map_err(String::from)?;
+            let binary = discover_go_binary(runtime_mode, packaged_executable_dir.as_deref())
+                .map_err(String::from)?;
             validate_go_binary(&binary).map_err(String::from)?;
 
             let mut c = Command::new(binary);
@@ -2216,11 +2303,142 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_go_binary_env_var_nonexistent() {
-        std::env::set_var("MEETING_ASR_GO_BINARY", "/nonexistent/go-binary");
-        let result = discover_go_binary();
-        std::env::remove_var("MEETING_ASR_GO_BINARY");
-        assert!(result.is_err());
+    fn test_development_resolver_honors_absolute_override() {
+        let base = test_dir("meeting-asr-go-dev-override");
+        let binary = base.join("custom-go");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(&binary, b"placeholder").unwrap();
+
+        let previous = std::env::var_os("MEETING_ASR_GO_BINARY");
+        std::env::set_var("MEETING_ASR_GO_BINARY", &binary);
+        let result = discover_development_go_binary();
+        match previous {
+            Some(value) => std::env::set_var("MEETING_ASR_GO_BINARY", value),
+            None => std::env::remove_var("MEETING_ASR_GO_BINARY"),
+        }
+
+        let resolved = result.unwrap();
+        assert_eq!(resolved, binary.canonicalize().unwrap());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_development_resolver_rejects_relative_override() {
+        let result = discover_development_go_binary_from(
+            Some("relative/meeting-asr-go"),
+            Path::new("/tmp/project"),
+        );
+        match result {
+            Err(BackendError::BackendNotFound { message }) => {
+                assert!(message.contains("MEETING_ASR_GO_BINARY"));
+                assert!(message.contains("absolute"));
+            }
+            other => panic!("expected a backend_not_found error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_development_resolver_rejects_missing_binary() {
+        let base = test_dir("meeting-asr-go-dev-missing");
+        let result = discover_development_go_binary_from(None, &base);
+        match result {
+            Err(BackendError::BackendNotFound { message }) => {
+                assert!(message.contains("Go development binary not found"));
+                assert!(message.contains("meeting-asr-go"));
+            }
+            other => panic!("expected a backend_not_found error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_production_resolver_ignores_development_sources() {
+        let base = test_dir("meeting-asr-go-production-sources");
+        let project_root = base.join("project");
+        let project_binary = project_root.join("core-go").join(go_binary_filename());
+        let executable_dir = base.join("packaged");
+        fs::create_dir_all(project_binary.parent().unwrap()).unwrap();
+        fs::create_dir_all(&executable_dir).unwrap();
+        fs::write(&project_binary, b"development binary").unwrap();
+
+        let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
+        match result {
+            Err(BackendError::BackendNotFound { message }) => {
+                assert!(message.contains("Packaged Go sidecar not found"));
+                assert!(!message.contains(project_binary.to_string_lossy().as_ref()));
+            }
+            other => panic!("expected a backend_not_found error, got {other:?}"),
+        }
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_production_missing_sidecar_is_backend_not_found() {
+        let executable_dir = test_dir("meeting-asr-go-production-missing");
+        fs::create_dir_all(&executable_dir).unwrap();
+        let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
+        assert!(matches!(result, Err(BackendError::BackendNotFound { .. })));
+        fs::remove_dir_all(executable_dir).ok();
+    }
+
+    #[test]
+    fn test_production_resolver_matches_tauri_normalized_sidecar_name() {
+        let executable_dir = test_dir("meeting-asr-go-tauri-normalized-name");
+        fs::create_dir_all(&executable_dir).unwrap();
+
+        // Tauri consumes the target suffix while copying an externalBin into
+        // the app executable directory. A suffix left in the runtime directory
+        // must not be mistaken for the packaged sidecar.
+        let target_suffixed = executable_dir.join(format!(
+            "{}-{}{}",
+            GO_SIDECAR_NAME,
+            option_env!("TAURI_ENV_TARGET_TRIPLE").unwrap_or("unknown-target"),
+            if cfg!(target_os = "windows") {
+                ".exe"
+            } else {
+                ""
+            }
+        ));
+        fs::write(&target_suffixed, b"target-suffixed input").unwrap();
+        assert!(matches!(
+            discover_go_binary(RuntimeMode::Production, Some(&executable_dir)),
+            Err(BackendError::BackendNotFound { .. })
+        ));
+
+        let normalized = executable_dir.join(go_binary_filename());
+        fs::write(&normalized, b"normalized packaged sidecar").unwrap();
+        let resolved = discover_go_binary(RuntimeMode::Production, Some(&executable_dir)).unwrap();
+        assert_eq!(resolved, normalized.canonicalize().unwrap());
+        fs::remove_dir_all(executable_dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_go_version_validation_remains_enforced() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = test_dir("meeting-asr-go-version");
+        fs::create_dir_all(&base).unwrap();
+        let valid = base.join("valid-go");
+        fs::write(
+            &valid,
+            b"#!/bin/sh\nprintf '%s\\n' 'meeting-asr-go version test'\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&valid).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&valid, permissions).unwrap();
+        assert!(validate_go_binary(&valid).is_ok());
+
+        let invalid = base.join("invalid-go");
+        fs::write(&invalid, b"#!/bin/sh\nprintf '%s\\n' 'another binary'\n").unwrap();
+        let mut permissions = fs::metadata(&invalid).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&invalid, permissions).unwrap();
+        assert!(matches!(
+            validate_go_binary(&invalid),
+            Err(BackendError::BackendNotFound { .. })
+        ));
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]

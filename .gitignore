@@ -16,3 +16,6 @@ output/
 core-go/meeting-asr-go
 core-go/core-go
 core-go/*.test
+
+# Generated Tauri sidecar binaries
+desktop/src-tauri/binaries/meeting-asr-go-*

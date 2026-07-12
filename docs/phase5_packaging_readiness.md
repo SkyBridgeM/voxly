@@ -37,12 +37,46 @@ being removed from source code or regression tests.
 ## This PR's CI Baseline
 
 The `Desktop Readiness` workflow runs on a macOS runner and remains fully
-offline. It checks the frontend build, Rust desktop formatting/tests/clippy, Go
-tests/vet, Python regression tests, and whitespace errors.
+offline. It checks the frontend build, Go sidecar build/version smoke, Rust
+desktop formatting/tests/clippy, Go tests/vet, Python regression tests, and
+whitespace errors.
 
-The workflow deliberately does not require an Apple Silicon runner or produce
-an arm64 package. Sidecar construction and an Apple Silicon packaging smoke
-test begin only after the sidecar implementation PR exists.
+The sidecar smoke builds the current macOS host architecture; Apple Silicon is
+the primary production target and Intel macOS remains supported for CI smoke.
+The workflow does not produce a public package, upload a release, or require
+credentials or live API calls.
+
+## PR 10 Go Sidecar Foundation
+
+The Tauri configuration declares the logical sidecar name
+`binaries/meeting-asr-go` through `bundle.externalBin`. On macOS Apple Silicon,
+`./scripts/build_desktop_sidecar.sh` builds from `core-go/` to the generated
+path:
+
+```text
+desktop/src-tauri/binaries/meeting-asr-go-aarch64-apple-darwin
+```
+
+The script also supports the Intel macOS host target for offline CI smoke. All
+generated sidecar binaries are ignored and must not be committed. Tauri copies
+the target-suffixed input to the packaged application executable directory.
+
+The Rust resolver is runtime-aware:
+
+- Development/debug keeps the absolute `MEETING_ASR_GO_BINARY` override and
+  project-root `core-go/meeting-asr-go` fallback, with no PATH search or
+  auto-build.
+- Production/release resolves only the packaged `meeting-asr-go` next to the
+  application executable, validates `version`, and returns structured
+  `backend_not_found` when it is absent or invalid. On macOS, the resolver
+  uses the current executable's parent directory because Tauri's
+  `PathResolver::executable_dir()` is not supported on macOS.
+- Production does not read `MEETING_ASR_GO_BINARY` or use a project-root Go
+  binary, and it does not silently fall back to Python.
+
+Python remains the development default and reference implementation. This PR
+does not change Go or Python core behavior, bundle ffmpeg, or enable full
+application packaging.
 
 ## PR 8B Secure Credential Foundation
 
@@ -70,7 +104,7 @@ The existing development "Save to .env" compatibility flow remains, while a
 
 ## Explicitly Deferred
 
-- Tauri `externalBin` configuration and generated Go sidecar binaries.
+- Full Tauri application-bundle smoke and generated distribution artifacts.
 - `.app`, DMG, installer, signing, notarization, release, and updater work.
 - ffmpeg bundling, download, automatic installation, or custom-path UI.
 - `.env` migration UX; secure credential storage is provided by PR 8B.
