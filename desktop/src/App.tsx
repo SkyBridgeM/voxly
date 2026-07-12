@@ -4,8 +4,10 @@ import {
   runMeetingAsr,
   openTaskFolder,
   saveEnvKey,
+  getRuntimeInfo,
   parseBackendError,
   type BackendKind,
+  type RuntimeMode,
   type LogEntry,
   type OutputMode,
   type ProgressEvent,
@@ -19,14 +21,20 @@ import "./App.css";
 type Theme = "light" | "dark" | "system";
 
 function App() {
+  const buildRuntimeMode: RuntimeMode = import.meta.env.DEV ? "development" : "production";
   const [locale, setLocaleState] = useState<Locale>(getLocale());
   const [theme, setTheme] = useState<Theme>(
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript");
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
-    localStorage.getItem("backend") === "go" ? "go" : "python"
+    buildRuntimeMode === "production"
+      ? "go"
+      : localStorage.getItem("backend") === "go"
+        ? "go"
+        : "python"
   );
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -63,8 +71,27 @@ function App() {
   }, [locale]);
 
   useEffect(() => {
-    localStorage.setItem("backend", backend);
-  }, [backend]);
+    if (runtimeMode === "development") {
+      localStorage.setItem("backend", backend);
+    }
+  }, [backend, runtimeMode]);
+
+  useEffect(() => {
+    let active = true;
+    getRuntimeInfo()
+      .then((info) => {
+        if (!active) return;
+        setRuntimeMode(info.runtime_mode);
+        setBackend(info.backend);
+      })
+      .catch(() => {
+        // Standalone frontend builds do not have a Tauri command bridge.
+        // The build-time default remains safe, and Rust enforces the policy.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const startRun = useCallback(async () => {
     if (!audioPath || isRunning) return;
@@ -270,16 +297,23 @@ function App() {
                   <option value="en">English</option>
                 </select>
               </div>
-              <div className="form-group">
-                <label>{t.backend}</label>
-                <select
-                  value={backend}
-                  onChange={(e) => setBackend(e.target.value === "go" ? "go" : "python")}
-                >
-                  <option value="python">{t.backendPython}</option>
-                  <option value="go">{t.backendGoExperimental}</option>
-                </select>
-              </div>
+              {runtimeMode === "production" ? (
+                <div className="form-group">
+                  <label>{t.backend}</label>
+                  <div>{t.backendGoProduction}</div>
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label>{t.backend}</label>
+                  <select
+                    value={backend}
+                    onChange={(e) => setBackend(e.target.value === "go" ? "go" : "python")}
+                  >
+                    <option value="python">{t.backendPython}</option>
+                    <option value="go">{t.backendGoExperimental}</option>
+                  </select>
+                </div>
+              )}
               <div className="form-group">
                 <label>{locale === "zh" ? "主题" : "Theme"}</label>
                 <select

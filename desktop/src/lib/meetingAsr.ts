@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type BackendKind = "python" | "go";
+export type RuntimeMode = "development" | "production";
 export type OutputMode = "transcript" | "notes" | "minutes";
 export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
 export type CredentialSource = "session" | "secure_store" | "env" | "missing";
@@ -17,6 +18,11 @@ export interface RunResult {
   transcript_path: string;
   notes_input_path: string | null;
   minutes_path: string | null;
+}
+
+export interface RuntimeInfo {
+  runtime_mode: RuntimeMode;
+  backend: BackendKind;
 }
 
 export interface BackendErrorInfo {
@@ -40,6 +46,11 @@ export interface RunCallbacks {
   onLog: (entry: LogEntry) => void;
   onProgress: (event: ProgressEvent) => void;
   onDone: () => void;
+}
+
+/** Returns runtime/backend policy metadata only; no credentials are included. */
+export async function getRuntimeInfo(): Promise<RuntimeInfo> {
+  return invoke<RuntimeInfo>("get_runtime_info");
 }
 
 export interface RunOptions {

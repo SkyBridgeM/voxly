@@ -35,6 +35,7 @@ export interface Translations {
   backend: string;
   backendPython: string;
   backendGoExperimental: string;
+  backendGoProduction: string;
   settingsTitle: string;
   language: string;
   mimoApiKey: string;
@@ -93,6 +94,7 @@ export const translations: Record<Locale, Translations> = {
     backend: "后端",
     backendPython: "Python（稳定，默认）",
     backendGoExperimental: "Go（实验性）",
+    backendGoProduction: "Go（已打包的生产 sidecar）",
     settingsTitle: "设置",
     language: "语言",
     mimoApiKey: "MIMO API Key",
@@ -149,6 +151,7 @@ export const translations: Record<Locale, Translations> = {
     backend: "Backend",
     backendPython: "Python (stable, default)",
     backendGoExperimental: "Go (experimental)",
+    backendGoProduction: "Go (packaged production sidecar)",
     settingsTitle: "Settings",
     language: "Language",
     mimoApiKey: "MIMO API Key",

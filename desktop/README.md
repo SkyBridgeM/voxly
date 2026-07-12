@@ -1,7 +1,8 @@
 # meeting-asr Desktop Prototype
 
-> **EXPERIMENTAL** — Python is the stable default backend; Go is available only
-> as an explicitly experimental development backend.
+> **EXPERIMENTAL** — Python is the stable default in development; Go is
+> available as an explicitly experimental development backend and as the
+> packaged production-candidate sidecar.
 
 ## What This Is
 
@@ -75,10 +76,24 @@ binary is ignored and must not be committed. The Tauri configuration declares
 the logical sidecar name `meeting-asr-go`; a production/release Go run resolves
 only the packaged sidecar next to the application executable, validates its
 `version` output, and never falls back to `MEETING_ASR_GO_BINARY`, the project
-checkout, or `PATH`. The full application bundle and distribution workflow are
-still deferred. Tauri removes the target suffix while copying the sidecar; the
-Rust resolver follows the current executable's parent directory, matching
+checkout, or `PATH`. Tauri removes the target suffix while copying the sidecar;
+the Rust resolver follows the current executable's parent directory, matching
 Tauri's supported sidecar path on macOS.
+
+### Internal app-bundle smoke (macOS)
+
+PR 11 adds an offline-only unsigned `.app` smoke. It builds the host sidecar
+first, runs a Tauri app-only bundle build, verifies
+`<App>.app/Contents/MacOS/meeting-asr-go`, and runs that bundled sidecar's
+`version` command:
+
+```bash
+./scripts/smoke_desktop_app_bundle.sh
+```
+
+This is an internal validation path only. It does not create a DMG or
+installer, upload artifacts, or perform signing/notarization. The Tauri bundle
+configuration enables only the `app` target for this smoke.
 
 ## Running
 
@@ -88,6 +103,9 @@ Tauri's supported sidecar path on macOS.
 cd desktop
 npm run tauri dev
 ```
+
+For the internal release-style bundle smoke, run the script above from the
+repository root after installing the desktop dependencies.
 
 ## Development vs. Planned Production Candidate
 
@@ -111,19 +129,21 @@ never returned to the frontend. Development/debug resolution is session,
 secure store, then project-root `.env`. Release resolution is session, then
 secure store, and never the project-root `.env`.
 
-PR 10 adds only the generated sidecar layout, Tauri `externalBin` declaration,
-and production resolver foundation; it does not build or distribute a full
-application bundle. Python remains the development default and Go remains
-experimental in development. The current Settings UI keeps its existing "Save to .env" development
-compatibility flow; a `.env` migration UI is deferred. ffmpeg remains a system
-prerequisite, while packaging, signing, notarization, installers, and automatic
-updates are deferred.
+PR 11 adds only an internal app-only bundle smoke and production backend policy
+cleanup. Release builds use the packaged Go sidecar only; Python remains the
+development fallback/reference and is not a production fallback. The backend
+selector remains visible in development and is replaced by the packaged Go
+label in production. The current Settings UI keeps its existing "Save to .env"
+development compatibility flow; a `.env` migration UI is deferred. ffmpeg
+remains a system prerequisite, while public packaging, signing, notarization,
+installers, and automatic updates are deferred.
 
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.
 2. User chooses `transcript`, `notes`, or `minutes`.
-3. In Settings, Python remains the default; Go is clearly labeled experimental.
+3. In Settings, development shows Python as the default and Go as experimental;
+   a release build shows the packaged Go sidecar policy.
 4. On "Start", Rust resolves the required credentials and runs the selected
    backend with structured arguments. Credentials are passed only through child
    process environment variables. In development, Python/Go retain their
@@ -187,7 +207,9 @@ No filesystem, shell, network, or opener permissions are granted.
 - Unknown settings fields are rejected deliberately. Future schema changes must
   use `schema_version` with an explicit migration.
 - CSP is `null` (experiment-phase simplification).
-- Bundle is disabled (`"active": false` in `tauri.conf.json`).
+- Bundle configuration is limited to the unsigned internal macOS `app` smoke;
+  no DMG, installer, signing, notarization, updater, or public release target
+  is configured.
 
 ## What Is NOT Implemented
 
@@ -196,8 +218,8 @@ No filesystem, shell, network, or opener permissions are granted.
 - No auto-update, system tray, or menu bar.
 - No FastAPI, database, task queue, or server backend.
 - No LAN mode, PWA, or browser recording.
-- No full production app bundle, installer, or public distribution; sidecar
-  packaging remains an internal follow-up.
+- No public production distribution. The only bundle path is the internal
+  unsigned app-only smoke; installers and release artifacts remain deferred.
 - No normal resume or cancellation UI. Rust exposes resume for a future UI and
   terminates the active child process during app shutdown.
 
@@ -207,7 +229,9 @@ No filesystem, shell, network, or opener permissions are granted.
 - [ ] Subtitle shows "Experimental Tauri prototype"
 - [ ] File picker allows `.mp3`, `.wav`, and `.m4a`
 - [ ] Output mode shows `transcript`, `notes`, and `minutes`
-- [ ] Python is the default and Go is labeled experimental in Settings
+- [ ] Development Settings show Python as default and Go as experimental
+- [ ] Internal bundle smoke finds `Contents/MacOS/meeting-asr-go` and its
+      `version` command succeeds
 - [ ] Privacy warning is accurate for all modes
 - [ ] `transcript` mode starts without DeepSeek key
 - [ ] `minutes` mode calls CLI with `--output-mode minutes`
