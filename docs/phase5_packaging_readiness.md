@@ -1,7 +1,8 @@
 # Phase 5 Packaging Readiness
 
 Phase 5 moves the desktop application toward an internal macOS Apple Silicon
-production candidate. It does not package or distribute an application yet.
+production candidate. It does not distribute a public application yet; PR 11
+adds only an internal unsigned app-bundle smoke.
 
 ## Runtime Direction
 
@@ -37,14 +38,16 @@ being removed from source code or regression tests.
 ## This PR's CI Baseline
 
 The `Desktop Readiness` workflow runs on a macOS runner and remains fully
-offline. It checks the frontend build, Go sidecar build/version smoke, Rust
-desktop formatting/tests/clippy, Go tests/vet, Python regression tests, and
-whitespace errors.
+offline. It checks the frontend build, Go sidecar build/version smoke, Tauri
+sidecar normalization, an unsigned internal app-bundle smoke, Rust desktop
+formatting/tests/clippy, Go tests/vet, Python regression tests, and whitespace
+errors.
 
 The sidecar smoke builds the current macOS host architecture; Apple Silicon is
 the primary production target and Intel macOS remains supported for CI smoke.
 The workflow does not produce a public package, upload a release, or require
-credentials or live API calls.
+credentials or live API calls. The app-bundle smoke is limited to the macOS
+`app` target and uses `--no-sign`.
 
 ## PR 10 Go Sidecar Foundation
 
@@ -74,9 +77,27 @@ The Rust resolver is runtime-aware:
 - Production does not read `MEETING_ASR_GO_BINARY` or use a project-root Go
   binary, and it does not silently fall back to Python.
 
-Python remains the development default and reference implementation. This PR
-does not change Go or Python core behavior, bundle ffmpeg, or enable full
-application packaging.
+Python remains the development default and reference implementation. PR 11 adds
+only an internal app-only smoke and production policy enforcement; it does not
+change Go or Python core behavior, bundle ffmpeg, or create a public
+distribution artifact.
+
+## PR 11 Internal App-Bundle Smoke and Production Policy
+
+`./scripts/smoke_desktop_app_bundle.sh` first generates the host sidecar, then
+runs an app-only Tauri release build with signing disabled. It verifies that an
+`.app` exists and that the normalized sidecar is at:
+
+```text
+<App>.app/Contents/MacOS/meeting-asr-go
+```
+
+The script runs the bundled sidecar's `version` command. It does not require
+API keys, call MiMo or DeepSeek, upload artifacts, or create DMG/installer
+outputs. The production backend policy is enforced in Rust and surfaced to the
+frontend through safe runtime metadata: release runs use the packaged Go
+sidecar only, while development retains the Python default and visible Go
+experimental selector.
 
 ## PR 8B Secure Credential Foundation
 
@@ -104,8 +125,9 @@ The existing development "Save to .env" compatibility flow remains, while a
 
 ## Explicitly Deferred
 
-- Full Tauri application-bundle smoke and generated distribution artifacts.
-- `.app`, DMG, installer, signing, notarization, release, and updater work.
+- Public/generated distribution artifacts.
+- DMG, installer, signing, notarization, release, and updater work. The
+  unsigned internal `.app` smoke is covered by PR 11.
 - ffmpeg bundling, download, automatic installation, or custom-path UI.
 - `.env` migration UX; secure credential storage is provided by PR 8B.
 - Production output-directory Settings UI. PR 8A provides the Rust foundation

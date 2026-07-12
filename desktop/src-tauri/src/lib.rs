@@ -380,6 +380,55 @@ impl RuntimeMode {
     }
 }
 
+fn parse_backend_kind(value: &str) -> Result<BackendKind, BackendError> {
+    match value {
+        "python" => Ok(BackendKind::Python),
+        "go" => Ok(BackendKind::Go),
+        other => Err(BackendError::InvalidInput {
+            message: format!("Invalid backend: {other}. Must be 'python' or 'go'."),
+        }),
+    }
+}
+
+fn resolve_backend_kind(
+    requested: Option<&str>,
+    runtime_mode: RuntimeMode,
+) -> Result<BackendKind, BackendError> {
+    match runtime_mode {
+        RuntimeMode::Development => parse_backend_kind(requested.unwrap_or("python")),
+        RuntimeMode::Production => match requested.unwrap_or("go") {
+            "go" => Ok(BackendKind::Go),
+            "python" => Err(BackendError::InvalidInput {
+                message:
+                    "The production backend is fixed to the packaged Go sidecar; Python is development-only."
+                        .to_string(),
+            }),
+            other => parse_backend_kind(other),
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+struct RuntimeInfo {
+    runtime_mode: RuntimeMode,
+    backend: BackendKind,
+}
+
+fn runtime_info_for(runtime_mode: RuntimeMode) -> RuntimeInfo {
+    RuntimeInfo {
+        runtime_mode,
+        backend: match runtime_mode {
+            RuntimeMode::Development => BackendKind::Python,
+            RuntimeMode::Production => BackendKind::Go,
+        },
+    }
+}
+
+#[tauri::command]
+fn get_runtime_info() -> RuntimeInfo {
+    runtime_info_for(RuntimeMode::current())
+}
+
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
 
 /// Deliberately non-sensitive settings. API keys, input history, transcripts,
@@ -1270,6 +1319,8 @@ fn run_meeting_asr(
     deepseek_api_key: Option<String>,
     deepseek_model: Option<String>,
 ) -> Result<RunResult, String> {
+    let runtime_mode = RuntimeMode::current();
+
     // Validate output mode.
     if output_mode != "transcript" && output_mode != "notes" && output_mode != "minutes" {
         return Err(BackendError::InvalidInput {
@@ -1297,22 +1348,24 @@ fn run_meeting_asr(
     let abs_audio_str = abs_audio.to_string_lossy().to_string();
 
     // Resolve backend.
-    let backend_kind = match backend.as_deref().unwrap_or("python") {
-        "python" => BackendKind::Python,
-        "go" => BackendKind::Go,
-        other => {
-            return Err(BackendError::InvalidInput {
-                message: format!("Invalid backend: {}. Must be 'python' or 'go'.", other),
-            }
-            .into())
-        }
-    };
+    let backend_kind =
+        resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+
+    let packaged_executable_dir =
+        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+            Some(packaged_go_executable_dir().map_err(String::from)?)
+        } else {
+            None
+        };
+    if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+        discover_go_binary(runtime_mode, packaged_executable_dir.as_deref())
+            .map_err(String::from)?;
+    }
 
     // Resolve the runtime-aware output root, creating it when needed.
     let (abs_out, _) = resolve_output_root(&app).map_err(String::from)?;
     let out_dir = abs_out.to_string_lossy().to_string();
 
-    let runtime_mode = RuntimeMode::current();
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
@@ -1326,13 +1379,6 @@ fn run_meeting_asr(
     let env_file = (runtime_mode == RuntimeMode::Development)
         .then(find_env_file)
         .flatten();
-    let packaged_executable_dir =
-        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
-            Some(packaged_go_executable_dir().map_err(String::from)?)
-        } else {
-            None
-        };
-
     let cmd = match backend_kind {
         BackendKind::Python => build_python_command(
             &abs_audio_str,
@@ -1418,16 +1464,20 @@ fn resume_meeting_asr(
     deepseek_api_key: Option<String>,
     deepseek_model: Option<String>,
 ) -> Result<RunResult, String> {
-    let backend_kind = match backend.as_deref().unwrap_or("python") {
-        "python" => BackendKind::Python,
-        "go" => BackendKind::Go,
-        other => {
-            return Err(BackendError::InvalidInput {
-                message: format!("Invalid backend: {}. Must be 'python' or 'go'.", other),
-            }
-            .into())
-        }
-    };
+    let runtime_mode = RuntimeMode::current();
+    let backend_kind =
+        resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+
+    let packaged_executable_dir =
+        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+            Some(packaged_go_executable_dir().map_err(String::from)?)
+        } else {
+            None
+        };
+    if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
+        discover_go_binary(runtime_mode, packaged_executable_dir.as_deref())
+            .map_err(String::from)?;
+    }
 
     let (output_root, _) = resolve_output_root(&app).map_err(String::from)?;
 
@@ -1472,7 +1522,6 @@ fn resume_meeting_asr(
     let effective_mode = effective_mode.map_err(String::from)?;
     validate_output_mode(&effective_mode).map_err(String::from)?;
 
-    let runtime_mode = RuntimeMode::current();
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
@@ -1487,12 +1536,6 @@ fn resume_meeting_asr(
         .then(find_env_file)
         .flatten();
     let root = resolve_project_root();
-    let packaged_executable_dir =
-        if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
-            Some(packaged_go_executable_dir().map_err(String::from)?)
-        } else {
-            None
-        };
 
     let cmd = match backend_kind {
         BackendKind::Python => {
@@ -1687,6 +1730,7 @@ pub fn run() {
         .manage(ActiveProcess::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            get_runtime_info,
             get_output_root,
             set_output_root,
             open_task_folder,
@@ -2087,6 +2131,55 @@ mod tests {
         assert!(serde_json::from_str::<BackendKind>("\"rust\"").is_err());
     }
 
+    #[test]
+    fn test_development_backend_policy_preserves_selector_and_default() {
+        assert_eq!(
+            resolve_backend_kind(None, RuntimeMode::Development).unwrap(),
+            BackendKind::Python
+        );
+        assert_eq!(
+            resolve_backend_kind(Some("python"), RuntimeMode::Development).unwrap(),
+            BackendKind::Python
+        );
+        assert_eq!(
+            resolve_backend_kind(Some("go"), RuntimeMode::Development).unwrap(),
+            BackendKind::Go
+        );
+    }
+
+    #[test]
+    fn test_production_backend_policy_uses_packaged_go_by_default() {
+        assert_eq!(
+            resolve_backend_kind(None, RuntimeMode::Production).unwrap(),
+            BackendKind::Go
+        );
+        assert_eq!(
+            resolve_backend_kind(Some("go"), RuntimeMode::Production).unwrap(),
+            BackendKind::Go
+        );
+    }
+
+    #[test]
+    fn test_production_backend_policy_rejects_python() {
+        match resolve_backend_kind(Some("python"), RuntimeMode::Production) {
+            Err(BackendError::InvalidInput { message }) => {
+                assert!(message.contains("packaged Go sidecar"));
+                assert!(message.contains("development-only"));
+            }
+            other => panic!("expected production Python rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_runtime_info_exposes_only_safe_policy_metadata() {
+        let info = runtime_info_for(RuntimeMode::Production);
+        assert_eq!(info.backend, BackendKind::Go);
+        let json = serde_json::to_string(&info).unwrap();
+        assert_eq!(json, r#"{"runtime_mode":"production","backend":"go"}"#);
+        assert!(!json.contains("API_KEY"));
+        assert!(!json.contains("secret"));
+    }
+
     // --- path validation ---
 
     #[test]
@@ -2372,9 +2465,43 @@ mod tests {
     }
 
     #[test]
+    fn test_production_resolver_ignores_meeting_asr_go_binary() {
+        let base = test_dir("meeting-asr-go-production-env");
+        let executable_dir = base.join("packaged");
+        let override_path = base.join("override-go");
+        let packaged = executable_dir.join(go_binary_filename());
+        fs::create_dir_all(&executable_dir).unwrap();
+        fs::write(&override_path, b"development override").unwrap();
+        fs::write(&packaged, b"packaged sidecar").unwrap();
+
+        let previous = std::env::var_os("MEETING_ASR_GO_BINARY");
+        std::env::set_var("MEETING_ASR_GO_BINARY", &override_path);
+        let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
+        match previous {
+            Some(value) => std::env::set_var("MEETING_ASR_GO_BINARY", value),
+            None => std::env::remove_var("MEETING_ASR_GO_BINARY"),
+        }
+
+        assert_eq!(result.unwrap(), packaged.canonicalize().unwrap());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
     fn test_production_missing_sidecar_is_backend_not_found() {
         let executable_dir = test_dir("meeting-asr-go-production-missing");
         fs::create_dir_all(&executable_dir).unwrap();
+        let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
+        assert!(matches!(result, Err(BackendError::BackendNotFound { .. })));
+        fs::remove_dir_all(executable_dir).ok();
+    }
+
+    #[test]
+    fn test_production_missing_sidecar_does_not_fall_back_to_python() {
+        let executable_dir = test_dir("meeting-asr-go-production-no-python-fallback");
+        fs::create_dir_all(&executable_dir).unwrap();
+
+        let backend = resolve_backend_kind(None, RuntimeMode::Production).unwrap();
+        assert_eq!(backend, BackendKind::Go);
         let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
         assert!(matches!(result, Err(BackendError::BackendNotFound { .. })));
         fs::remove_dir_all(executable_dir).ok();
