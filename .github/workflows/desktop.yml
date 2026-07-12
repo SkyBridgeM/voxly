@@ -27,10 +27,6 @@ jobs:
   verify:
     name: Offline desktop readiness
     runs-on: macos-latest
-    env:
-      GOCACHE: ${{ runner.temp }}/go-build
-      GOPATH: ${{ runner.temp }}/go
-      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
 
@@ -59,6 +55,10 @@ jobs:
           go-version: "1.26.5"
           cache: false
       - name: Diagnose macOS and Go
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build
+          GOPATH: ${{ runner.temp }}/go
+          GOTOOLCHAIN: local
         run: |
           rm -rf "$GOCACHE"
           mkdir -p "$GOCACHE" "$GOPATH"
@@ -68,6 +68,10 @@ jobs:
           go env GOOS GOARCH GOTOOLCHAIN GOROOT GOPATH GOCACHE
       - name: Check Go core
         working-directory: core-go
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build
+          GOPATH: ${{ runner.temp }}/go
+          GOTOOLCHAIN: local
         run: |
           go test ./...
           go vet ./...
