@@ -26,7 +26,7 @@ desktop/ (Tauri + React)
 | **[uv](https://docs.astral.sh/uv/)** | Python backend only |
 | **Go 1.21+** | Build the experimental Go backend |
 | **ffmpeg** | Audio splitting (required by both backends; not bundled) |
-| **`.env` at project root** | API keys |
+| **`.env` at project root (development only)** | Development API-key compatibility |
 
 ## Setup
 
@@ -41,7 +41,7 @@ uv sync --all-extras
 cd desktop
 npm install
 
-# 4. Configure API keys in project-root .env
+# 4. Optional development compatibility: configure API keys in project-root .env
 #    transcript mode needs: MIMO_API_KEY
 #    notes/minutes need:    MIMO_API_KEY
 #    minutes additionally:  DEEPSEEK_API_KEY
@@ -68,9 +68,10 @@ npm run tauri dev
 
 ## Development vs. Planned Production Candidate
 
-This repository currently runs only the development desktop build described
-above. It requires the project checkout, `uv` for Python, a root `.env`, and a
-manually built Go binary when Go is selected.
+This repository currently runs the development desktop build described above.
+It requires the project checkout, `uv` for Python, and a manually built Go
+binary when Go is selected. A project-root `.env` remains a development
+compatibility source, but is not a production credential store.
 
 Phase 5 is preparing a separate internal macOS Apple Silicon production
 candidate. The output-root foundation now distinguishes development output from
@@ -80,34 +81,50 @@ the planned production default: development continues to use
 root; its non-sensitive JSON configuration lives in the app config directory,
 not in the project root.
 
+PR 8B adds a Rust credential abstraction backed by the platform secure store
+(macOS Keychain on the primary target). The frontend can request only safe
+status metadata and can ask Rust to save or delete a key; stored values are
+never returned to the frontend. Development/debug resolution is session,
+secure store, then project-root `.env`. Release resolution is session, then
+secure store, and never the project-root `.env`.
+
 This PR does **not** add a sidecar, bundle an application, or change backend
 selection: Python remains the development default and Go remains experimental.
-API keys are still handled by the existing development `.env` / session flow;
-Keychain-backed credential storage is deferred to Phase 5 PR 8B. ffmpeg remains
-a system prerequisite, while packaging, signing, notarization, installers, and
-automatic updates are deferred.
+The current Settings UI keeps its existing "Save to .env" development
+compatibility flow; a `.env` migration UI is deferred. ffmpeg remains a system
+prerequisite, while packaging, signing, notarization, installers, and automatic
+updates are deferred.
 
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.
 2. User chooses `transcript`, `notes`, or `minutes`.
 3. In Settings, Python remains the default; Go is clearly labeled experimental.
-4. On "Start", the app runs the selected backend with structured arguments.
-   Python keeps its normal root `.env` lookup. Go receives `--env-file` for the
-   root `.env` when present, otherwise `--project-root`.
+4. On "Start", Rust resolves the required credentials and runs the selected
+   backend with structured arguments. Credentials are passed only through child
+   process environment variables. In development, Python/Go retain their
+   project-root `.env` compatibility; in release, Python disables dotenv
+   loading and Go receives an isolated runtime project root.
 5. stdout/stderr stream in real time to the UI.
 6. On completion, canonical task/artifact paths must validate inside root `output/`.
 7. "Open Output Folder" opens only a validated task directory.
 
 ## API Key Handling
 
-- API keys are **never** embedded in source code, logs, or CLI arguments.
-- The Python CLI reads keys from the project-root `.env` file (preferred).
+- API keys are **never** embedded in source code, logs, CLI arguments, JSON
+  settings, task folders, or output artifacts. Backend output is redacted at
+  the Rust/frontend boundary before it is logged or included in an error.
+- Secure credential commands use OS secure storage where available. They expose
+  only `configured` and a safe source (`session`, `secure_store`, `env`, or
+  `missing`), never a stored key value.
+- The Python CLI may read keys from the project-root `.env` only in development
+  compatibility mode.
 - Temporary keys can be entered in the Settings panel for the current session only.
   They are passed as environment variables to the CLI process.
-- Keys can be saved to `.env` from the Settings panel ("Save to .env").
-  Rust writes `.env` directly — keys never appear in process argv.
-- If both `.env` and Settings are empty, the Python CLI will report the missing key error.
+- The existing Settings action can save to `.env` for development compatibility;
+  it does not put keys in `desktop-settings.json` and is not a production source.
+- If no allowed source is configured, Rust returns a structured missing-key or
+  secure-storage-unavailable error without including the key value.
 
 ## Privacy Warnings
 
@@ -132,14 +149,19 @@ No filesystem, shell, network, or opener permissions are granted.
 | `uv is not installed` | uv not in PATH | Install uv and restart |
 | `No module named meeting_asr` | Dependencies not installed | Run `uv sync --all-extras` |
 | `ffmpeg not found` | ffmpeg not installed | Install ffmpeg separately |
-| `.env` missing | No API keys configured | Create `.env` with required keys |
-| `MIMO_API_KEY not set` | Key missing in `.env` | Add key to `.env` |
-| `DEEPSEEK_API_KEY not set` | Key missing for minutes mode | Add key to `.env` |
+| `.env` missing | No development compatibility keys configured | Configure secure credentials or enter a session key; development may also create `.env` |
+| `MIMO_API_KEY not configured` | MIMO key missing from the allowed sources | Configure secure credentials or enter a session key |
+| `DEEPSEEK_API_KEY not configured` | DeepSeek key missing for minutes mode | Configure secure credentials or enter a session key |
+| `secure_storage_unavailable` | OS secure storage cannot be accessed | Fix Keychain/secure-store availability; plaintext fallback is not used |
 
 ## Security Notes
 
 - No arbitrary shell command execution — commands use validated, discrete arguments.
 - `open_task_folder` validates that the path is inside the `output/` directory.
+- `desktop-settings.json` contains non-sensitive settings only; API keys,
+  transcript content, task content, and audio history are not persisted there.
+- Unknown settings fields are rejected deliberately. Future schema changes must
+  use `schema_version` with an explicit migration.
 - CSP is `null` (experiment-phase simplification).
 - Bundle is disabled (`"active": false` in `tauri.conf.json`).
 
@@ -170,5 +192,6 @@ No filesystem, shell, network, or opener permissions are granted.
 - [ ] "Open Output Folder" opens the correct folder
 - [ ] Missing uv shows clear error message
 - [ ] No API keys appear in logs or UI output
+- [ ] Credential status shows only configured/source metadata, never key values
 - [ ] Existing CLI (`uv run meeting-asr`) still works
 - [ ] Existing Streamlit WebUI still works

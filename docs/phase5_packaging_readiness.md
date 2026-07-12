@@ -26,8 +26,9 @@ being removed from source code or regression tests.
   experimental.
 - ffmpeg: required as a system dependency. It will not be bundled, downloaded,
   or installed by the application.
-- API keys: Phase 5 PR 8B will use macOS Keychain. Production candidates must
-  not depend on a project-root `.env` file.
+- API keys: Phase 5 PR 8B introduces a Rust credential abstraction backed by
+  macOS Keychain on the primary target. Production candidates must not depend
+  on a project-root `.env` file.
 - Output: Phase 5 PR 8A introduces runtime-aware output roots. Development
   continues to default to `<project-root>/output`; release builds default to
   `~/Documents/Meeting ASR`. Configured output roots and non-sensitive settings
@@ -43,12 +44,36 @@ The workflow deliberately does not require an Apple Silicon runner or produce
 an arm64 package. Sidecar construction and an Apple Silicon packaging smoke
 test begin only after the sidecar implementation PR exists.
 
+## PR 8B Secure Credential Foundation
+
+Desktop credentials use the platform secure store where available (`keyring`,
+with macOS Keychain as the primary target). Rust exposes only credential status
+metadata and save/delete operations; stored API-key values are never returned to
+the frontend.
+
+Credential resolution is explicit:
+
+- Development/debug: current-run session value, secure store, then the
+  project-root `.env` compatibility source.
+- Production/release: current-run session value, then secure store. The
+  project-root `.env` is not read.
+
+Keys are passed to backend child processes through environment variables only.
+They are not placed in argv, logs, structured errors, `desktop-settings.json`,
+task folders, or output artifacts. Transcript and notes require only
+`MIMO_API_KEY`; minutes additionally requires `DEEPSEEK_API_KEY`.
+
+`desktop-settings.json` remains non-sensitive and rejects unknown fields.
+Future schema changes must add `schema_version` and an explicit migration.
+The existing development "Save to .env" compatibility flow remains, while a
+`.env` migration UX is deferred.
+
 ## Explicitly Deferred
 
 - Tauri `externalBin` configuration and generated Go sidecar binaries.
 - `.app`, DMG, installer, signing, notarization, release, and updater work.
 - ffmpeg bundling, download, automatic installation, or custom-path UI.
-- Keychain implementation and `.env` migration UX (PR 8B).
+- `.env` migration UX; secure credential storage is provided by PR 8B.
 - Production output-directory Settings UI. PR 8A provides the Rust foundation
   and command API only; it does not add a large frontend settings flow.
 - Visible resume and cancellation UI.

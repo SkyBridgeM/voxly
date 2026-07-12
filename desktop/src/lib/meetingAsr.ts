@@ -3,6 +3,14 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type BackendKind = "python" | "go";
 export type OutputMode = "transcript" | "notes" | "minutes";
+export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
+export type CredentialSource = "session" | "secure_store" | "env" | "missing";
+
+export interface CredentialStatus {
+  key: CredentialKey;
+  configured: boolean;
+  source: CredentialSource;
+}
 
 export interface RunResult {
   task_folder: string;
@@ -157,4 +165,32 @@ export async function openTaskFolder(taskFolder: string): Promise<void> {
 
 export async function saveEnvKey(key: string, value: string): Promise<void> {
   await invoke("save_env_key", { key, value });
+}
+
+/**
+ * Returns safe credential metadata only; Rust never returns the stored value.
+ */
+export async function getCredentialStatus(
+  key: CredentialKey
+): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>("get_credential_status", { key });
+}
+
+/**
+ * Saves a credential to the OS secure store and returns safe status metadata.
+ */
+export async function saveCredential(
+  key: CredentialKey,
+  value: string
+): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>("save_credential", { key, value });
+}
+
+/**
+ * Deletes a credential from the OS secure store and returns safe status metadata.
+ */
+export async function deleteCredential(
+  key: CredentialKey
+): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>("delete_credential", { key });
 }

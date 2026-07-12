@@ -7,6 +7,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
+mod credentials;
+use credentials::{
+    resolve_credential, status_for, CredentialError, CredentialKey, CredentialStatus,
+    CredentialStore, EnvironmentValues, KeyringCredentialStore,
+};
+
 // ---------------------------------------------------------------------------
 // Shared event payloads
 // ---------------------------------------------------------------------------
@@ -186,6 +192,8 @@ enum BackendError {
     DependencyMissing { message: String },
     #[serde(rename = "missing_api_key")]
     MissingApiKey { message: String },
+    #[serde(rename = "secure_storage_unavailable")]
+    SecureStorageUnavailable { message: String },
     #[serde(rename = "invalid_input")]
     InvalidInput { message: String },
     #[serde(rename = "manifest_error")]
@@ -212,12 +220,31 @@ impl From<BackendError> for String {
     }
 }
 
+impl From<CredentialError> for BackendError {
+    fn from(error: CredentialError) -> Self {
+        let message = error.to_string();
+        match error {
+            CredentialError::SecureStoreUnavailable { .. } => {
+                Self::SecureStorageUnavailable { message }
+            }
+            CredentialError::InvalidKey
+            | CredentialError::InvalidValue
+            | CredentialError::EnvironmentUnavailable => Self::InvalidInput { message },
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stderr-based error classification
 // ---------------------------------------------------------------------------
 
-fn classify_stderr(stderr_lines: &[String], exit_code: Option<i32>) -> BackendError {
-    let combined = stderr_lines.join("\n").to_lowercase();
+fn classify_stderr(
+    stderr_lines: &[String],
+    exit_code: Option<i32>,
+    secrets: &[String],
+) -> BackendError {
+    let safe_lines = redact_lines(stderr_lines, secrets);
+    let combined = safe_lines.join("\n").to_lowercase();
 
     // Check explicit structured error patterns first.
     if combined.contains("manifest")
@@ -267,13 +294,13 @@ fn classify_stderr(stderr_lines: &[String], exit_code: Option<i32>) -> BackendEr
 
     // Fallback: generic process failure.
     BackendError::ProcessFailed {
-        message: if stderr_lines.is_empty() {
+        message: if safe_lines.is_empty() {
             format!(
                 "Process exited with code {} and no stderr output.",
                 exit_code.unwrap_or(-1)
             )
         } else {
-            let first = stderr_lines
+            let first = safe_lines
                 .iter()
                 .filter(|l| !l.trim().is_empty())
                 .take(3)
@@ -338,7 +365,7 @@ fn resolve_project_root() -> PathBuf {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum RuntimeMode {
+pub(crate) enum RuntimeMode {
     Development,
     Production,
 }
@@ -524,6 +551,115 @@ fn set_output_root(app: AppHandle, output_root: String) -> Result<OutputRootInfo
 }
 
 // ---------------------------------------------------------------------------
+// Secure credential commands and run-time resolution
+// ---------------------------------------------------------------------------
+
+struct RunCredentials {
+    mimo: String,
+    deepseek: Option<String>,
+}
+
+fn credential_environment(runtime_mode: RuntimeMode) -> Result<EnvironmentValues, BackendError> {
+    if runtime_mode == RuntimeMode::Production {
+        // Release runs deliberately do not inspect process environment or the
+        // project-root .env. Session values and the secure store are the only
+        // production credential sources.
+        return Ok(EnvironmentValues::default());
+    }
+
+    let env_path = find_env_file();
+    EnvironmentValues::for_development(env_path.as_deref()).map_err(BackendError::from)
+}
+
+fn missing_api_key(key: CredentialKey) -> BackendError {
+    BackendError::MissingApiKey {
+        message: format!(
+            "{} is not configured. Configure it in desktop credentials or for this session.",
+            key.env_name()
+        ),
+    }
+}
+
+fn resolve_run_credentials<S: CredentialStore>(
+    store: &S,
+    output_mode: &str,
+    runtime_mode: RuntimeMode,
+    mimo_session: Option<&str>,
+    deepseek_session: Option<&str>,
+    environment: &EnvironmentValues,
+) -> Result<RunCredentials, BackendError> {
+    let mimo_key = CredentialKey::MimoApiKey;
+    let mimo = resolve_credential(store, mimo_key, mimo_session, runtime_mode, environment)?
+        .ok_or_else(|| missing_api_key(mimo_key))?;
+
+    let should_resolve_deepseek =
+        output_mode == "minutes" || deepseek_session.is_some_and(|value| !value.trim().is_empty());
+    let deepseek = if should_resolve_deepseek {
+        let key = CredentialKey::DeepseekApiKey;
+        let resolved = resolve_credential(store, key, deepseek_session, runtime_mode, environment)?;
+        if output_mode == "minutes" {
+            Some(resolved.ok_or_else(|| missing_api_key(key))?.value)
+        } else {
+            resolved.map(|credential| credential.value)
+        }
+    } else {
+        None
+    };
+
+    Ok(RunCredentials {
+        mimo: mimo.value,
+        deepseek,
+    })
+}
+
+fn parse_credential_key(value: &str) -> Result<CredentialKey, String> {
+    CredentialKey::parse(value).map_err(|error| String::from(BackendError::from(error)))
+}
+
+#[tauri::command]
+fn get_credential_status(key: String) -> Result<CredentialStatus, String> {
+    let key = parse_credential_key(&key)?;
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    status_for(
+        &KeyringCredentialStore,
+        key,
+        None,
+        runtime_mode,
+        &environment,
+    )
+    .map_err(|error| String::from(BackendError::from(error)))
+}
+
+#[tauri::command]
+fn save_credential(key: String, value: String) -> Result<CredentialStatus, String> {
+    let key = parse_credential_key(&key)?;
+    let store = KeyringCredentialStore;
+    store
+        .save(key, value.trim())
+        .map_err(|error| String::from(BackendError::from(error)))?;
+
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    status_for(&store, key, None, runtime_mode, &environment)
+        .map_err(|error| String::from(BackendError::from(error)))
+}
+
+#[tauri::command]
+fn delete_credential(key: String) -> Result<CredentialStatus, String> {
+    let key = parse_credential_key(&key)?;
+    let store = KeyringCredentialStore;
+    store
+        .delete(key)
+        .map_err(|error| String::from(BackendError::from(error)))?;
+
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    status_for(&store, key, None, runtime_mode, &environment)
+        .map_err(|error| String::from(BackendError::from(error)))
+}
+
+// ---------------------------------------------------------------------------
 // Path validation
 // ---------------------------------------------------------------------------
 
@@ -691,10 +827,30 @@ struct ProcessRunner {
     stderr_handle: Option<JoinHandle<()>>,
 }
 
+/// Replace credential values before they cross the Rust/frontend log or error
+/// boundary. Values are passed to child processes through their environment,
+/// never through argv, but a backend could still echo them on stdout/stderr.
+fn redact_secrets(text: &str, secrets: &[String]) -> String {
+    secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .fold(text.to_string(), |redacted, secret| {
+            redacted.replace(secret, "[REDACTED]")
+        })
+}
+
+fn redact_lines(lines: &[String], secrets: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| redact_secrets(line, secrets))
+        .collect()
+}
+
 fn spawn_and_watch(
     app: &AppHandle,
     active: &ActiveProcess,
     mut cmd: Command,
+    secrets: &[String],
 ) -> Result<ProcessRunner, BackendError> {
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -732,6 +888,8 @@ fn spawn_and_watch(
     let stderr_lines = Arc::new(Mutex::new(Vec::new()));
     let stdout_for_thread = stdout_lines.clone();
     let stderr_for_thread = stderr_lines.clone();
+    let stdout_secrets = secrets.to_vec();
+    let stderr_secrets = secrets.to_vec();
 
     let app_stdout = app.clone();
     let stdout_handle: JoinHandle<()> = thread::spawn(move || {
@@ -739,7 +897,8 @@ fn spawn_and_watch(
         for line in reader.lines() {
             match line {
                 Ok(text) => {
-                    let trimmed = text.trim();
+                    let safe_text = redact_secrets(&text, &stdout_secrets);
+                    let trimmed = safe_text.trim();
 
                     // Status: lines → progress events with normalized status.
                     if let Some(status_val) = trimmed.strip_prefix("Status: ") {
@@ -772,10 +931,10 @@ fn spawn_and_watch(
                         "log-line",
                         LogEvent {
                             stream: "stdout".into(),
-                            line: text.clone(),
+                            line: safe_text.clone(),
                         },
                     );
-                    stdout_for_thread.lock().unwrap().push(text);
+                    stdout_for_thread.lock().unwrap().push(safe_text);
                 }
                 Err(_) => break,
             }
@@ -788,14 +947,15 @@ fn spawn_and_watch(
         for line in reader.lines() {
             match line {
                 Ok(text) => {
+                    let safe_text = redact_secrets(&text, &stderr_secrets);
                     let _ = app_stderr.emit(
                         "log-line",
                         LogEvent {
                             stream: "stderr".into(),
-                            line: text.clone(),
+                            line: safe_text.clone(),
                         },
                     );
-                    stderr_for_thread.lock().unwrap().push(text);
+                    stderr_for_thread.lock().unwrap().push(safe_text);
                 }
                 Err(_) => break,
             }
@@ -854,6 +1014,7 @@ fn build_python_command(
     mimo_key: Option<&str>,
     deepseek_key: Option<&str>,
     deepseek_model: Option<&str>,
+    runtime_mode: RuntimeMode,
 ) -> Command {
     let root = resolve_project_root();
     let mut cmd = Command::new("uv");
@@ -867,6 +1028,10 @@ fn build_python_command(
         .arg(output_dir)
         .current_dir(&root);
 
+    // Resolve all credentials in Rust first so inherited values cannot bypass
+    // the runtime-specific resolution policy.
+    cmd.env_remove("MIMO_API_KEY");
+    cmd.env_remove("DEEPSEEK_API_KEY");
     if let Some(key) = mimo_key {
         if !key.is_empty() {
             cmd.env("MIMO_API_KEY", key);
@@ -883,9 +1048,32 @@ fn build_python_command(
         }
     }
 
+    if runtime_mode == RuntimeMode::Production {
+        // The Python core explicitly calls load_settings(ROOT / ".env").
+        // python-dotenv supports this switch and therefore keeps release runs
+        // independent of a checkout's project-root .env.
+        cmd.env("PYTHON_DOTENV_DISABLED", "1");
+    }
+
     cmd
 }
 
+fn isolated_go_project_root() -> Result<PathBuf, BackendError> {
+    let root = std::env::temp_dir().join(format!("meeting-asr-runtime-{}", std::process::id()));
+    fs::create_dir_all(&root).map_err(|error| BackendError::InvalidInput {
+        message: format!("Could not create the isolated Go runtime directory: {error}"),
+    })?;
+    // The Go core applies process-environment overrides while loading settings
+    // only after it has found a .env file. This empty marker contains no
+    // credentials; it keeps secure/session values environment-only while
+    // preventing upward search from reaching the checkout's .env.
+    fs::write(root.join(".env"), b"").map_err(|error| BackendError::InvalidInput {
+        message: format!("Could not initialize the isolated Go runtime directory: {error}"),
+    })?;
+    Ok(root)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_go_command(
     audio_path: &str,
     output_mode: &str,
@@ -894,11 +1082,11 @@ fn build_go_command(
     deepseek_key: Option<&str>,
     deepseek_model: Option<&str>,
     env_file: Option<&PathBuf>,
+    runtime_mode: RuntimeMode,
 ) -> Result<Command, BackendError> {
     let binary = discover_go_binary()?;
     validate_go_binary(&binary)?;
 
-    let root = resolve_project_root();
     let mut cmd = Command::new(binary);
     cmd.arg("transcribe")
         .arg(audio_path)
@@ -907,12 +1095,25 @@ fn build_go_command(
         .arg("--output-dir")
         .arg(output_dir);
 
-    if let Some(env) = env_file {
-        cmd.arg("--env-file").arg(env);
+    if runtime_mode == RuntimeMode::Development {
+        if let Some(env) = env_file {
+            cmd.arg("--env-file").arg(env);
+        } else {
+            let isolated_root = isolated_go_project_root()?;
+            cmd.arg("--project-root").arg(&isolated_root);
+            cmd.current_dir(&isolated_root);
+        }
     } else {
-        cmd.arg("--project-root").arg(&root);
+        // Go searches upward for .env when --env-file is absent. Point it at a
+        // dedicated temp root so release runs cannot discover the checkout's
+        // project-root .env. No credential is written to this directory.
+        let isolated_root = isolated_go_project_root()?;
+        cmd.arg("--project-root").arg(&isolated_root);
+        cmd.current_dir(&isolated_root);
     }
 
+    cmd.env_remove("MIMO_API_KEY");
+    cmd.env_remove("DEEPSEEK_API_KEY");
     if let Some(key) = mimo_key {
         if !key.is_empty() {
             cmd.env("MIMO_API_KEY", key);
@@ -942,8 +1143,9 @@ fn run_and_check(
     cmd: Command,
     output_mode: &str,
     expected_task_root: &Path,
+    secrets: &[String],
 ) -> Result<RunResult, String> {
-    let runner = spawn_and_watch(app, active, cmd).map_err(String::from)?;
+    let runner = spawn_and_watch(app, active, cmd, secrets).map_err(String::from)?;
     let (code, stdout_lines, stderr_lines) = runner.wait()?;
 
     // Always emit process-done so the UI stops its progress view.
@@ -973,7 +1175,7 @@ fn run_and_check(
             })
         }
         Some(c) => {
-            let err = classify_stderr(&stderr_lines, Some(c));
+            let err = classify_stderr(&stderr_lines, Some(c), secrets);
             Err(err.into())
         }
     }
@@ -1037,30 +1239,48 @@ fn run_meeting_asr(
     let (abs_out, _) = resolve_output_root(&app).map_err(String::from)?;
     let out_dir = abs_out.to_string_lossy().to_string();
 
-    let env_file = find_env_file();
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    let credentials = resolve_run_credentials(
+        &KeyringCredentialStore,
+        &output_mode,
+        runtime_mode,
+        mimo_api_key.as_deref(),
+        deepseek_api_key.as_deref(),
+        &environment,
+    )
+    .map_err(String::from)?;
+    let env_file = (runtime_mode == RuntimeMode::Development)
+        .then(find_env_file)
+        .flatten();
 
     let cmd = match backend_kind {
         BackendKind::Python => build_python_command(
             &abs_audio_str,
             &output_mode,
             &out_dir,
-            mimo_api_key.as_deref(),
-            deepseek_api_key.as_deref(),
+            Some(&credentials.mimo),
+            credentials.deepseek.as_deref(),
             deepseek_model.as_deref(),
+            runtime_mode,
         ),
         BackendKind::Go => build_go_command(
             &abs_audio_str,
             &output_mode,
             &out_dir,
-            mimo_api_key.as_deref(),
-            deepseek_api_key.as_deref(),
+            Some(&credentials.mimo),
+            credentials.deepseek.as_deref(),
             deepseek_model.as_deref(),
             env_file.as_ref(),
+            runtime_mode,
         )
         .map_err(String::from)?,
     };
 
-    run_and_check(&app, active.inner(), cmd, &output_mode, &abs_out)
+    let secrets = std::iter::once(credentials.mimo.clone())
+        .chain(credentials.deepseek.iter().cloned())
+        .collect::<Vec<_>>();
+    run_and_check(&app, active.inner(), cmd, &output_mode, &abs_out, &secrets)
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,10 +1392,23 @@ fn resume_meeting_asr(
     let effective_mode = effective_mode.map_err(String::from)?;
     validate_output_mode(&effective_mode).map_err(String::from)?;
 
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    let credentials = resolve_run_credentials(
+        &KeyringCredentialStore,
+        &effective_mode,
+        runtime_mode,
+        mimo_api_key.as_deref(),
+        deepseek_api_key.as_deref(),
+        &environment,
+    )
+    .map_err(String::from)?;
+    let env_file = (runtime_mode == RuntimeMode::Development)
+        .then(find_env_file)
+        .flatten();
     let root = resolve_project_root();
-    let env_file = find_env_file();
 
-    let mut cmd = match backend_kind {
+    let cmd = match backend_kind {
         BackendKind::Python => {
             let mut c = Command::new("uv");
             c.arg("run")
@@ -1185,6 +1418,15 @@ fn resume_meeting_asr(
                 .current_dir(&root);
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
+            }
+            c.env_remove("MIMO_API_KEY");
+            c.env_remove("DEEPSEEK_API_KEY");
+            c.env("MIMO_API_KEY", &credentials.mimo);
+            if let Some(key) = credentials.deepseek.as_deref() {
+                c.env("DEEPSEEK_API_KEY", key);
+            }
+            if runtime_mode == RuntimeMode::Production {
+                c.env("PYTHON_DOTENV_DISABLED", "1");
             }
             c
         }
@@ -1197,20 +1439,24 @@ fn resume_meeting_asr(
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
-            if let Some(env) = env_file.as_ref() {
-                c.arg("--env-file").arg(env);
+            if runtime_mode == RuntimeMode::Development {
+                if let Some(env) = env_file.as_ref() {
+                    c.arg("--env-file").arg(env);
+                } else {
+                    let isolated_root = isolated_go_project_root()?;
+                    c.arg("--project-root").arg(&isolated_root);
+                    c.current_dir(&isolated_root);
+                }
             } else {
-                c.arg("--project-root").arg(&root);
+                let isolated_root = isolated_go_project_root()?;
+                c.arg("--project-root").arg(&isolated_root);
+                c.current_dir(&isolated_root);
             }
-            if let Some(key) = mimo_api_key.as_deref() {
-                if !key.is_empty() {
-                    c.env("MIMO_API_KEY", key);
-                }
-            }
-            if let Some(key) = deepseek_api_key.as_deref() {
-                if !key.is_empty() {
-                    c.env("DEEPSEEK_API_KEY", key);
-                }
+            c.env_remove("MIMO_API_KEY");
+            c.env_remove("DEEPSEEK_API_KEY");
+            c.env("MIMO_API_KEY", &credentials.mimo);
+            if let Some(key) = credentials.deepseek.as_deref() {
+                c.env("DEEPSEEK_API_KEY", key);
             }
             if let Some(model) = deepseek_model.as_deref() {
                 if !model.is_empty() {
@@ -1221,20 +1467,18 @@ fn resume_meeting_asr(
         }
     };
 
-    if backend_kind == BackendKind::Python {
-        if let Some(key) = mimo_api_key.as_deref() {
-            if !key.is_empty() {
-                cmd.env("MIMO_API_KEY", key);
-            }
-        }
-        if let Some(key) = deepseek_api_key.as_deref() {
-            if !key.is_empty() {
-                cmd.env("DEEPSEEK_API_KEY", key);
-            }
-        }
-    }
+    let secrets = std::iter::once(credentials.mimo.clone())
+        .chain(credentials.deepseek.iter().cloned())
+        .collect::<Vec<_>>();
 
-    run_and_check(&app, active.inner(), cmd, &effective_mode, &output_root)
+    run_and_check(
+        &app,
+        active.inner(),
+        cmd,
+        &effective_mode,
+        &output_root,
+        &secrets,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1361,6 +1605,9 @@ pub fn run() {
             open_task_folder,
             run_meeting_asr,
             resume_meeting_asr,
+            get_credential_status,
+            save_credential,
+            delete_credential,
             save_env_key,
         ])
         .build(tauri::generate_context!())
@@ -1380,6 +1627,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestCredentialStore {
+        values: Mutex<HashMap<CredentialKey, String>>,
+    }
+
+    impl CredentialStore for TestCredentialStore {
+        fn get(&self, key: CredentialKey) -> Result<Option<String>, CredentialError> {
+            Ok(self.values.lock().unwrap().get(&key).cloned())
+        }
+
+        fn save(&self, key: CredentialKey, value: &str) -> Result<(), CredentialError> {
+            self.values.lock().unwrap().insert(key, value.to_string());
+            Ok(())
+        }
+
+        fn delete(&self, key: CredentialKey) -> Result<(), CredentialError> {
+            self.values.lock().unwrap().remove(&key);
+            Ok(())
+        }
+    }
 
     // --- stdout parsing ---
 
@@ -1541,7 +1811,7 @@ mod tests {
 
     #[test]
     fn test_classify_manifest_error() {
-        let err = classify_stderr(&["Error: no manifest found".to_string()], Some(1));
+        let err = classify_stderr(&["Error: no manifest found".to_string()], Some(1), &[]);
         match err {
             BackendError::ManifestError { .. } => {}
             _ => panic!("expected ManifestError, got {:?}", err),
@@ -1553,6 +1823,7 @@ mod tests {
         let err = classify_stderr(
             &["Error: acquiring task lock: task is already being resumed".to_string()],
             Some(1),
+            &[],
         );
         match err {
             BackendError::TaskLocked { .. } => {}
@@ -1565,6 +1836,7 @@ mod tests {
         let err = classify_stderr(
             &["Error: ffmpeg was not found on PATH".to_string()],
             Some(1),
+            &[],
         );
         match err {
             BackendError::DependencyMissing { .. } => {}
@@ -1577,6 +1849,7 @@ mod tests {
         let err = classify_stderr(
             &["Error: MIMO_API_KEY is not configured".to_string()],
             Some(1),
+            &[],
         );
         match err {
             BackendError::MissingApiKey { .. } => {}
@@ -1586,7 +1859,7 @@ mod tests {
 
     #[test]
     fn test_classify_invalid_input() {
-        let err = classify_stderr(&["Error: invalid --output-mode".to_string()], Some(2));
+        let err = classify_stderr(&["Error: invalid --output-mode".to_string()], Some(2), &[]);
         match err {
             BackendError::InvalidInput { .. } => {}
             _ => panic!("expected InvalidInput, got {:?}", err),
@@ -1595,7 +1868,7 @@ mod tests {
 
     #[test]
     fn test_classify_process_failed_unknown() {
-        let err = classify_stderr(&["some random error".to_string()], Some(3));
+        let err = classify_stderr(&["some random error".to_string()], Some(3), &[]);
         match err {
             BackendError::ProcessFailed { code, .. } => {
                 assert_eq!(code, Some(3));
@@ -1606,13 +1879,88 @@ mod tests {
 
     #[test]
     fn test_classify_process_failed_no_stderr() {
-        let err = classify_stderr(&[], Some(1));
+        let err = classify_stderr(&[], Some(1), &[]);
         match err {
             BackendError::ProcessFailed { code, .. } => {
                 assert_eq!(code, Some(1));
             }
             _ => panic!("expected ProcessFailed, got {:?}", err),
         }
+    }
+
+    #[test]
+    fn test_run_credentials_notes_require_only_mimo() {
+        let store = TestCredentialStore::default();
+        store
+            .save(CredentialKey::MimoApiKey, "mimo-secret")
+            .unwrap();
+
+        let credentials = resolve_run_credentials(
+            &store,
+            "notes",
+            RuntimeMode::Development,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        )
+        .unwrap();
+
+        assert_eq!(credentials.mimo, "mimo-secret");
+        assert!(credentials.deepseek.is_none());
+    }
+
+    #[test]
+    fn test_run_credentials_minutes_require_both_keys() {
+        let store = TestCredentialStore::default();
+        store
+            .save(CredentialKey::MimoApiKey, "mimo-secret")
+            .unwrap();
+
+        let missing = match resolve_run_credentials(
+            &store,
+            "minutes",
+            RuntimeMode::Development,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        ) {
+            Ok(_) => panic!("minutes should require DEEPSEEK_API_KEY"),
+            Err(error) => error,
+        };
+        match missing {
+            BackendError::MissingApiKey { message } => {
+                assert!(message.contains("DEEPSEEK_API_KEY"));
+                assert!(!message.contains("mimo-secret"));
+            }
+            other => panic!("expected MissingApiKey, got {other:?}"),
+        }
+
+        store
+            .save(CredentialKey::DeepseekApiKey, "deepseek-secret")
+            .unwrap();
+        let credentials = resolve_run_credentials(
+            &store,
+            "minutes",
+            RuntimeMode::Development,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        )
+        .unwrap();
+        assert_eq!(credentials.deepseek.as_deref(), Some("deepseek-secret"));
+    }
+
+    #[test]
+    fn test_secret_values_are_redacted_from_errors() {
+        let secret = "mimo-secret-value".to_string();
+        let err = classify_stderr(
+            &[format!("backend echoed {secret}")],
+            Some(1),
+            std::slice::from_ref(&secret),
+        );
+        let json = err.to_json_string();
+        assert!(!json.contains(&secret));
+        assert!(json.contains("[REDACTED]"));
     }
 
     // --- error JSON serialisation ---
@@ -1819,13 +2167,15 @@ mod tests {
     fn test_build_go_command_paths_are_discrete() {
         // The build_go_command requires a real Go binary, but we can test
         // the Python command construction pattern for discrete arg safety.
+        let secret = "mimo-secret-value";
         let cmd = build_python_command(
             "/path/with spaces/audio.mp3",
             "transcript",
             "/output/dir",
+            Some(secret),
             None,
             None,
-            None,
+            RuntimeMode::Development,
         );
         let args: Vec<_> = cmd.get_args().collect();
         // Verify that a path with spaces is NOT split into multiple args.
@@ -1837,6 +2187,10 @@ mod tests {
         // Verify output dir arg is also discrete.
         let out_arg_found = args.iter().any(|a| a.to_string_lossy() == "/output/dir");
         assert!(out_arg_found, "output dir should be one discrete arg");
+        assert!(
+            !args.iter().any(|a| a.to_string_lossy().contains(secret)),
+            "credential values must never be passed through argv"
+        );
     }
 
     // --- misc ---
@@ -1850,6 +2204,15 @@ mod tests {
     fn test_resolve_project_root_returns_path() {
         let root = resolve_project_root();
         assert!(!root.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_isolated_go_runtime_root_has_no_credentials() {
+        let root = isolated_go_project_root().unwrap();
+        let marker = fs::read_to_string(root.join(".env")).unwrap();
+        assert!(marker.is_empty());
+        assert!(!marker.contains("API_KEY"));
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
