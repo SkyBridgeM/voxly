@@ -40,8 +40,8 @@ being removed from source code or regression tests.
 The `Desktop Readiness` workflow runs on a macOS runner and remains fully
 offline. It checks the frontend build, Go sidecar build/version smoke, Tauri
 sidecar normalization, an unsigned internal app-bundle smoke, Rust desktop
-formatting/tests/clippy, Go tests/vet, Python regression tests, and whitespace
-errors.
+formatting/tests/clippy (including preflight unit tests), Go tests/vet, Python
+regression tests, and whitespace errors.
 
 The sidecar smoke builds the current macOS host architecture; Apple Silicon is
 the primary production target and Intel macOS remains supported for CI smoke.
@@ -98,6 +98,32 @@ outputs. The production backend policy is enforced in Rust and surfaced to the
 frontend through safe runtime metadata: release runs use the packaged Go
 sidecar only, while development retains the Python default and visible Go
 experimental selector.
+
+## PR 12 Production Preflight and Internal Acceptance
+
+PR 12 adds the Rust `get_runtime_preflight` command and a compact Settings
+readiness panel. The command performs local checks only: it reports runtime and
+backend policy, validates the packaged Go sidecar and its `version` output in
+production, checks whether `ffmpeg` is available on `PATH`, reports the output
+root path and availability, and returns credential configured/source metadata.
+Credential values are accepted only for the current invocation so unsaved
+session values can be reflected in the status; they are never returned. The
+command does not call an API, transcribe audio, create task folders, write
+artifacts, download ffmpeg, or mutate settings or credentials. A missing ffmpeg
+is reported as a system prerequisite.
+
+Readiness is split into transcript/notes readiness and minutes readiness because
+minutes additionally requires `DEEPSEEK_API_KEY`. Development continues to show
+Python as the default with Go as an experimental choice; production remains
+packaged-Go-only with no Python, project-root `.env`, or
+`MEETING_ASR_GO_BINARY` fallback.
+The Settings panel keeps the existing `Save to .env` action development-only;
+release builds do not offer that compatibility action.
+
+The manual offline and optional-live acceptance steps are recorded in
+[`docs/phase5_internal_acceptance.md`](phase5_internal_acceptance.md). Live
+transcript, notes, and minutes checks require intentionally supplied keys and a
+test recording; they are never part of GitHub Actions.
 
 ## PR 8B Secure Credential Foundation
 

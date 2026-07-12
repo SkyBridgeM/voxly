@@ -9,8 +9,8 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 mod credentials;
 use credentials::{
-    resolve_credential, status_for, CredentialError, CredentialKey, CredentialStatus,
-    CredentialStore, EnvironmentValues, KeyringCredentialStore,
+    resolve_credential, status_for, CredentialError, CredentialKey, CredentialSource,
+    CredentialStatus, CredentialStore, EnvironmentValues, KeyringCredentialStore,
 };
 
 // ---------------------------------------------------------------------------
@@ -427,6 +427,293 @@ fn runtime_info_for(runtime_mode: RuntimeMode) -> RuntimeInfo {
 #[tauri::command]
 fn get_runtime_info() -> RuntimeInfo {
     runtime_info_for(RuntimeMode::current())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PreflightCheck {
+    ready: bool,
+    message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct OutputRootPreflight {
+    path: String,
+    configured: bool,
+    ready: bool,
+    message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CredentialPreflight {
+    status: CredentialStatus,
+    message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RuntimePreflight {
+    runtime_mode: RuntimeMode,
+    backend: BackendKind,
+    /// Ready for transcript and notes mode. Minutes readiness is separate
+    /// because it additionally requires DEEPSEEK_API_KEY.
+    ready: bool,
+    ready_for_minutes: bool,
+    sidecar: PreflightCheck,
+    ffmpeg: PreflightCheck,
+    output_root: OutputRootPreflight,
+    mimo_api_key: CredentialPreflight,
+    deepseek_api_key: CredentialPreflight,
+}
+
+fn preflight_check(ready: bool, message: impl Into<String>) -> PreflightCheck {
+    PreflightCheck {
+        ready,
+        message: message.into(),
+    }
+}
+
+fn preflight_sidecar_at(executable_dir: &Path) -> PreflightCheck {
+    let binary = match discover_production_go_binary(executable_dir) {
+        Ok(binary) => binary,
+        Err(BackendError::BackendNotFound { message }) => return preflight_check(false, message),
+        Err(_) => {
+            return preflight_check(false, "Packaged Go sidecar is not ready.");
+        }
+    };
+
+    match validate_go_binary(&binary) {
+        Ok(()) => preflight_check(true, "Packaged Go sidecar is available and version-valid."),
+        Err(BackendError::BackendNotFound { message }) => preflight_check(false, message),
+        Err(_) => preflight_check(false, "Packaged Go sidecar is not ready."),
+    }
+}
+
+fn preflight_sidecar(runtime_mode: RuntimeMode) -> PreflightCheck {
+    if runtime_mode == RuntimeMode::Development {
+        return preflight_check(
+            true,
+            "Not required in development; Go remains experimental.",
+        );
+    }
+
+    match packaged_go_executable_dir() {
+        Ok(executable_dir) => preflight_sidecar_at(&executable_dir),
+        Err(BackendError::BackendNotFound { message }) => preflight_check(false, message),
+        Err(_) => preflight_check(
+            false,
+            "Could not resolve the packaged Go sidecar directory.",
+        ),
+    }
+}
+
+fn check_ffmpeg_at(binary: &Path) -> PreflightCheck {
+    match Command::new(binary)
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => preflight_check(true, "ffmpeg is available on PATH."),
+        _ => preflight_check(
+            false,
+            "ffmpeg is a system prerequisite and is not installed or not on PATH.",
+        ),
+    }
+}
+
+fn output_root_preflight_for(path: &Path, configured: bool) -> OutputRootPreflight {
+    let display_path = path.to_string_lossy().to_string();
+    if !path.is_absolute() {
+        return OutputRootPreflight {
+            path: display_path,
+            configured,
+            ready: false,
+            message: "Output root must be an absolute path.".to_string(),
+        };
+    }
+
+    if path.exists() {
+        if !path.is_dir() {
+            return OutputRootPreflight {
+                path: display_path,
+                configured,
+                ready: false,
+                message: "Output root exists but is not a directory.".to_string(),
+            };
+        }
+
+        return match path.canonicalize() {
+            Ok(canonical) => OutputRootPreflight {
+                path: canonical.to_string_lossy().to_string(),
+                configured,
+                ready: true,
+                message: "Output root is available.".to_string(),
+            },
+            Err(_) => OutputRootPreflight {
+                path: display_path,
+                configured,
+                ready: false,
+                message: "Output root could not be canonicalized.".to_string(),
+            },
+        };
+    }
+
+    let parent_ready = path.parent().is_some_and(Path::is_dir);
+    OutputRootPreflight {
+        path: display_path,
+        configured,
+        ready: parent_ready,
+        message: if parent_ready {
+            "Output root is ready and will be created on the first run.".to_string()
+        } else {
+            "Output root and its parent directory are not available.".to_string()
+        },
+    }
+}
+
+fn configured_output_root_path(
+    settings: &DesktopSettings,
+) -> Result<Option<PathBuf>, BackendError> {
+    match settings.output_root.as_deref() {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => Err(BackendError::InvalidInput {
+            message: "Configured output root cannot be empty.".to_string(),
+        }),
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(BackendError::InvalidInput {
+                    message: format!("Output root must be absolute: {}", path.display()),
+                });
+            }
+            Ok(Some(path))
+        }
+    }
+}
+
+fn output_root_preflight(app: &AppHandle) -> Result<OutputRootPreflight, BackendError> {
+    let settings_path = desktop_settings_path(app)?;
+    let settings = load_desktop_settings(&settings_path)?;
+    if let Some(configured) = configured_output_root_path(&settings)? {
+        return Ok(output_root_preflight_for(&configured, true));
+    }
+
+    let runtime_mode = RuntimeMode::current();
+    let documents_dir = if runtime_mode == RuntimeMode::Production {
+        Some(
+            app.path()
+                .document_dir()
+                .map_err(|error| BackendError::InvalidInput {
+                    message: format!("Could not resolve the user Documents directory: {error}"),
+                })?,
+        )
+    } else {
+        None
+    };
+    let default_root = get_default_output_root(runtime_mode, documents_dir.as_deref())?;
+    Ok(output_root_preflight_for(&default_root, false))
+}
+
+fn credential_status_message(status: &CredentialStatus) -> String {
+    if !status.configured {
+        return format!("{} is not configured.", status.key);
+    }
+    match status.source {
+        CredentialSource::Session => format!("{} is configured for this session.", status.key),
+        CredentialSource::SecureStore => format!("{} is configured in secure storage.", status.key),
+        CredentialSource::Env => {
+            format!(
+                "{} is configured through the development .env source.",
+                status.key
+            )
+        }
+        CredentialSource::Missing => format!("{} is not configured.", status.key),
+    }
+}
+
+fn preflight_credential_status<S: CredentialStore>(
+    store: &S,
+    key: CredentialKey,
+    session_value: Option<&str>,
+    runtime_mode: RuntimeMode,
+    environment: &EnvironmentValues,
+) -> CredentialPreflight {
+    match status_for(store, key, session_value, runtime_mode, environment) {
+        Ok(status) => {
+            let message = credential_status_message(&status);
+            CredentialPreflight { status, message }
+        }
+        Err(error) => CredentialPreflight {
+            status: CredentialStatus {
+                key: key.env_name().to_string(),
+                configured: false,
+                source: CredentialSource::Missing,
+            },
+            message: error.to_string(),
+        },
+    }
+}
+
+fn runtime_preflight_for(
+    runtime_mode: RuntimeMode,
+    backend: BackendKind,
+    sidecar: PreflightCheck,
+    ffmpeg: PreflightCheck,
+    output_root: OutputRootPreflight,
+    mimo_api_key: CredentialPreflight,
+    deepseek_api_key: CredentialPreflight,
+) -> RuntimePreflight {
+    let ready =
+        sidecar.ready && ffmpeg.ready && output_root.ready && mimo_api_key.status.configured;
+    RuntimePreflight {
+        runtime_mode,
+        backend,
+        ready,
+        ready_for_minutes: ready && deepseek_api_key.status.configured,
+        sidecar,
+        ffmpeg,
+        output_root,
+        mimo_api_key,
+        deepseek_api_key,
+    }
+}
+
+#[tauri::command]
+fn get_runtime_preflight(
+    app: AppHandle,
+    mimo_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
+) -> Result<RuntimePreflight, String> {
+    let runtime_mode = RuntimeMode::current();
+    let backend = runtime_info_for(runtime_mode).backend;
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    let sidecar = preflight_sidecar(runtime_mode);
+    let ffmpeg = check_ffmpeg_at(Path::new("ffmpeg"));
+    let output_root = output_root_preflight(&app).map_err(String::from)?;
+    let store = KeyringCredentialStore;
+    let mimo_api_key = preflight_credential_status(
+        &store,
+        CredentialKey::MimoApiKey,
+        mimo_api_key.as_deref(),
+        runtime_mode,
+        &environment,
+    );
+    let deepseek_api_key = preflight_credential_status(
+        &store,
+        CredentialKey::DeepseekApiKey,
+        deepseek_api_key.as_deref(),
+        runtime_mode,
+        &environment,
+    );
+
+    Ok(runtime_preflight_for(
+        runtime_mode,
+        backend,
+        sidecar,
+        ffmpeg,
+        output_root,
+        mimo_api_key,
+        deepseek_api_key,
+    ))
 }
 
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
@@ -1656,8 +1943,16 @@ fn open_task_folder(app: AppHandle, task_folder: String) -> Result<(), String> {
 
 const ALLOWED_ENV_KEYS: &[&str] = &["MIMO_API_KEY", "DEEPSEEK_API_KEY"];
 
+fn ensure_development_env_compatibility(runtime_mode: RuntimeMode) -> Result<(), String> {
+    if runtime_mode == RuntimeMode::Production {
+        return Err("Saving credentials to the project-root .env is development-only.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn save_env_key(key: String, value: String) -> Result<(), String> {
+    ensure_development_env_compatibility(RuntimeMode::current())?;
     if key.is_empty() {
         return Err("Key name cannot be empty.".into());
     }
@@ -1731,6 +2026,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
+            get_runtime_preflight,
             get_output_root,
             set_output_root,
             open_task_folder,
@@ -2180,6 +2476,75 @@ mod tests {
         assert!(!json.contains("secret"));
     }
 
+    #[test]
+    fn test_runtime_preflight_metadata_exposes_no_secrets() {
+        let secret = "preflight-secret";
+        let preflight = runtime_preflight_for(
+            RuntimeMode::Production,
+            BackendKind::Go,
+            preflight_check(true, "sidecar ready"),
+            preflight_check(true, "ffmpeg ready"),
+            OutputRootPreflight {
+                path: "/tmp/meeting-asr-output".to_string(),
+                configured: false,
+                ready: true,
+                message: "output ready".to_string(),
+            },
+            CredentialPreflight {
+                status: CredentialStatus {
+                    key: "MIMO_API_KEY".to_string(),
+                    configured: true,
+                    source: CredentialSource::Session,
+                },
+                message: "MIMO_API_KEY is configured for this session.".to_string(),
+            },
+            CredentialPreflight {
+                status: CredentialStatus {
+                    key: "DEEPSEEK_API_KEY".to_string(),
+                    configured: false,
+                    source: CredentialSource::Missing,
+                },
+                message: "DEEPSEEK_API_KEY is not configured.".to_string(),
+            },
+        );
+        let json = serde_json::to_string(&preflight).unwrap();
+        assert!(!json.contains(secret));
+        assert!(!json.contains("\"value\""));
+        assert!(json.contains("MIMO_API_KEY"));
+        assert!(json.contains("session"));
+        assert!(!json.contains("\"ready_for_minutes\":true"));
+    }
+
+    #[test]
+    fn test_preflight_missing_sidecar_is_not_ready() {
+        let executable_dir = test_dir("meeting-asr-preflight-sidecar-missing");
+        fs::create_dir_all(&executable_dir).unwrap();
+        let check = preflight_sidecar_at(&executable_dir);
+        assert!(!check.ready);
+        assert!(check.message.contains("Packaged Go sidecar"));
+        fs::remove_dir_all(executable_dir).ok();
+    }
+
+    #[test]
+    fn test_preflight_missing_ffmpeg_is_not_ready() {
+        let missing = test_dir("meeting-asr-preflight-ffmpeg-missing").join("ffmpeg");
+        let check = check_ffmpeg_at(&missing);
+        assert!(!check.ready);
+        assert!(check.message.contains("system prerequisite"));
+    }
+
+    #[test]
+    fn test_preflight_output_root_does_not_create_directory() {
+        let base = test_dir("meeting-asr-preflight-output-root");
+        fs::create_dir_all(&base).unwrap();
+        let requested = base.join("output");
+        assert!(!requested.exists());
+        let check = output_root_preflight_for(&requested, false);
+        assert!(check.ready);
+        assert!(!requested.exists());
+        fs::remove_dir_all(base).ok();
+    }
+
     // --- path validation ---
 
     #[test]
@@ -2223,6 +2588,12 @@ mod tests {
             RuntimeMode::Production
         };
         assert_eq!(RuntimeMode::current(), expected);
+    }
+
+    #[test]
+    fn test_env_compatibility_save_is_development_only() {
+        assert!(ensure_development_env_compatibility(RuntimeMode::Development).is_ok());
+        assert!(ensure_development_env_compatibility(RuntimeMode::Production).is_err());
     }
 
     #[test]

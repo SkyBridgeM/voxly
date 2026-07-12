@@ -25,6 +25,35 @@ export interface RuntimeInfo {
   backend: BackendKind;
 }
 
+export interface PreflightCheck {
+  ready: boolean;
+  message: string;
+}
+
+export interface OutputRootPreflight {
+  path: string;
+  configured: boolean;
+  ready: boolean;
+  message: string;
+}
+
+export interface CredentialPreflight {
+  status: CredentialStatus;
+  message: string;
+}
+
+export interface RuntimePreflight {
+  runtime_mode: RuntimeMode;
+  backend: BackendKind;
+  ready: boolean;
+  ready_for_minutes: boolean;
+  sidecar: PreflightCheck;
+  ffmpeg: PreflightCheck;
+  output_root: OutputRootPreflight;
+  mimo_api_key: CredentialPreflight;
+  deepseek_api_key: CredentialPreflight;
+}
+
 export interface BackendErrorInfo {
   category: string;
   message: string;
@@ -51,6 +80,20 @@ export interface RunCallbacks {
 /** Returns runtime/backend policy metadata only; no credentials are included. */
 export async function getRuntimeInfo(): Promise<RuntimeInfo> {
   return invoke<RuntimeInfo>("get_runtime_info");
+}
+
+/**
+ * Returns local runtime readiness metadata only. Credential values are sent
+ * only for the current invocation and are never returned by Rust.
+ */
+export async function getRuntimePreflight(options: {
+  mimoApiKey?: string;
+  deepseekApiKey?: string;
+} = {}): Promise<RuntimePreflight> {
+  return invoke<RuntimePreflight>("get_runtime_preflight", {
+    mimoApiKey: options.mimoApiKey || undefined,
+    deepseekApiKey: options.deepseekApiKey || undefined,
+  });
 }
 
 export interface RunOptions {
