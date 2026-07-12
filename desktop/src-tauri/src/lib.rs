@@ -811,11 +811,20 @@ fn discover_go_binary(
     }
 }
 
-fn packaged_go_executable_dir(app: &AppHandle) -> Result<PathBuf, BackendError> {
-    app.path()
-        .executable_dir()
-        .map_err(|error| BackendError::BackendNotFound {
-            message: format!("Could not resolve the packaged application directory: {error}"),
+fn packaged_go_executable_dir() -> Result<PathBuf, BackendError> {
+    // Tauri v2's macOS bundler places external binaries in Contents/MacOS
+    // beside the application executable. PathResolver::executable_dir() is
+    // unsupported on macOS, so use the same current-executable-parent
+    // strategy as Tauri's shell sidecar resolver.
+    let executable = std::env::current_exe().map_err(|error| BackendError::BackendNotFound {
+        message: format!("Could not resolve the running application path: {error}"),
+    })?;
+    executable
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| BackendError::BackendNotFound {
+            message: "Could not resolve the running application directory for the Go sidecar."
+                .to_string(),
         })
 }
 
@@ -1319,7 +1328,7 @@ fn run_meeting_asr(
         .flatten();
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
-            Some(packaged_go_executable_dir(&app).map_err(String::from)?)
+            Some(packaged_go_executable_dir().map_err(String::from)?)
         } else {
             None
         };
@@ -1480,7 +1489,7 @@ fn resume_meeting_asr(
     let root = resolve_project_root();
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
-            Some(packaged_go_executable_dir(&app).map_err(String::from)?)
+            Some(packaged_go_executable_dir().map_err(String::from)?)
         } else {
             None
         };
@@ -2368,6 +2377,37 @@ mod tests {
         fs::create_dir_all(&executable_dir).unwrap();
         let result = discover_go_binary(RuntimeMode::Production, Some(&executable_dir));
         assert!(matches!(result, Err(BackendError::BackendNotFound { .. })));
+        fs::remove_dir_all(executable_dir).ok();
+    }
+
+    #[test]
+    fn test_production_resolver_matches_tauri_normalized_sidecar_name() {
+        let executable_dir = test_dir("meeting-asr-go-tauri-normalized-name");
+        fs::create_dir_all(&executable_dir).unwrap();
+
+        // Tauri consumes the target suffix while copying an externalBin into
+        // the app executable directory. A suffix left in the runtime directory
+        // must not be mistaken for the packaged sidecar.
+        let target_suffixed = executable_dir.join(format!(
+            "{}-{}{}",
+            GO_SIDECAR_NAME,
+            option_env!("TAURI_ENV_TARGET_TRIPLE").unwrap_or("unknown-target"),
+            if cfg!(target_os = "windows") {
+                ".exe"
+            } else {
+                ""
+            }
+        ));
+        fs::write(&target_suffixed, b"target-suffixed input").unwrap();
+        assert!(matches!(
+            discover_go_binary(RuntimeMode::Production, Some(&executable_dir)),
+            Err(BackendError::BackendNotFound { .. })
+        ));
+
+        let normalized = executable_dir.join(go_binary_filename());
+        fs::write(&normalized, b"normalized packaged sidecar").unwrap();
+        let resolved = discover_go_binary(RuntimeMode::Production, Some(&executable_dir)).unwrap();
+        assert_eq!(resolved, normalized.canonicalize().unwrap());
         fs::remove_dir_all(executable_dir).ok();
     }
 

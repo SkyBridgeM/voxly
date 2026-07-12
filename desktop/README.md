@@ -76,7 +76,9 @@ the logical sidecar name `meeting-asr-go`; a production/release Go run resolves
 only the packaged sidecar next to the application executable, validates its
 `version` output, and never falls back to `MEETING_ASR_GO_BINARY`, the project
 checkout, or `PATH`. The full application bundle and distribution workflow are
-still deferred.
+still deferred. Tauri removes the target suffix while copying the sidecar; the
+Rust resolver follows the current executable's parent directory, matching
+Tauri's supported sidecar path on macOS.
 
 ## Running
 

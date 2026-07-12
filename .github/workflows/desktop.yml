@@ -83,6 +83,14 @@ jobs:
           test -n "$sidecar"
           test -x "$sidecar"
           "$sidecar" version
+      - name: Verify Tauri sidecar normalization
+        working-directory: desktop/src-tauri
+        run: |
+          cargo build
+          test -x target/debug/meeting-asr-go
+          normalized_suffix="$(find target/debug -maxdepth 1 -type f -name 'meeting-asr-go-*' -print -quit)"
+          test -z "$normalized_suffix"
+          target/debug/meeting-asr-go version
 
       - name: Check Rust desktop code
         working-directory: desktop/src-tauri

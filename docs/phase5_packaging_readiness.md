@@ -68,7 +68,9 @@ The Rust resolver is runtime-aware:
   auto-build.
 - Production/release resolves only the packaged `meeting-asr-go` next to the
   application executable, validates `version`, and returns structured
-  `backend_not_found` when it is absent or invalid.
+  `backend_not_found` when it is absent or invalid. On macOS, the resolver
+  uses the current executable's parent directory because Tauri's
+  `PathResolver::executable_dir()` is not supported on macOS.
 - Production does not read `MEETING_ASR_GO_BINARY` or use a project-root Go
   binary, and it does not silently fall back to Python.
 
