@@ -26,10 +26,12 @@ being removed from source code or regression tests.
   experimental.
 - ffmpeg: required as a system dependency. It will not be bundled, downloaded,
   or installed by the application.
-- API keys: a later, separate PR will use macOS Keychain. Production candidates
-  must not depend on a project-root `.env` file.
-- Output: a later, separate PR will move production-candidate task folders to
-  `~/Documents/Meeting ASR` and preserve containment validation.
+- API keys: Phase 5 PR 8B will use macOS Keychain. Production candidates must
+  not depend on a project-root `.env` file.
+- Output: Phase 5 PR 8A introduces runtime-aware output roots. Development
+  continues to default to `<project-root>/output`; release builds default to
+  `~/Documents/Meeting ASR`. Configured output roots and non-sensitive settings
+  live in the app config directory and retain canonical containment checks.
 
 ## This PR's CI Baseline
 
@@ -46,8 +48,9 @@ test begin only after the sidecar implementation PR exists.
 - Tauri `externalBin` configuration and generated Go sidecar binaries.
 - `.app`, DMG, installer, signing, notarization, release, and updater work.
 - ffmpeg bundling, download, automatic installation, or custom-path UI.
-- Keychain implementation and `.env` migration UX.
-- Production output-directory settings.
+- Keychain implementation and `.env` migration UX (PR 8B).
+- Production output-directory Settings UI. PR 8A provides the Rust foundation
+  and command API only; it does not add a large frontend settings flow.
 - Visible resume and cancellation UI.
 - Live API validation. Before an internal production candidate is accepted,
   Go transcript, notes, minutes, and interrupted minutes-resume checks must
