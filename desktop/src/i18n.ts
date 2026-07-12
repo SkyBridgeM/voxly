@@ -51,8 +51,25 @@ export interface Translations {
   hideLogs: string;
   keysNotPersisted: string;
   saveToEnv: string;
+  productionCredentialsNote: string;
   savedSuccessfully: string;
   saveFailed: string;
+  readinessTitle: string;
+  readinessLocalOnly: string;
+  refresh: string;
+  checking: string;
+  ready: string;
+  notReady: string;
+  runtimeMode: string;
+  development: string;
+  production: string;
+  sidecar: string;
+  outputRoot: string;
+  missing: string;
+  session: string;
+  secureStore: string;
+  developmentEnv: string;
+  preflightUnavailable: string;
 }
 
 export const translations: Record<Locale, Translations> = {
@@ -110,8 +127,25 @@ export const translations: Record<Locale, Translations> = {
     hideLogs: "隐藏日志",
     keysNotPersisted: "临时 Key 仅在本次会话有效，关闭后丢失。可点击「保存到 .env」持久化到项目根目录。",
     saveToEnv: "保存到 .env",
+    productionCredentialsNote: "生产模式不读取项目根 .env；请使用本次会话 Key 或安全存储。",
     savedSuccessfully: "已保存",
     saveFailed: "保存失败",
+    readinessTitle: "运行就绪检查",
+    readinessLocalOnly: "仅检查本机状态，不调用外部 API",
+    refresh: "刷新",
+    checking: "检查中…",
+    ready: "就绪",
+    notReady: "未就绪",
+    runtimeMode: "运行模式",
+    development: "开发",
+    production: "生产",
+    sidecar: "Go sidecar",
+    outputRoot: "输出根目录",
+    missing: "未配置",
+    session: "本次会话",
+    secureStore: "安全存储",
+    developmentEnv: "开发 .env",
+    preflightUnavailable: "运行就绪检查暂不可用。",
   },
   en: {
     appTitle: "meeting-asr Desktop Prototype",
@@ -167,8 +201,25 @@ export const translations: Record<Locale, Translations> = {
     hideLogs: "Hide Logs",
     keysNotPersisted: "Temporary keys are session-only and lost when closed. Use \"Save to .env\" to persist to the project root.",
     saveToEnv: "Save to .env",
+    productionCredentialsNote: "Production does not read the project-root .env; use session keys or secure storage.",
     savedSuccessfully: "Saved",
     saveFailed: "Save failed",
+    readinessTitle: "Runtime readiness",
+    readinessLocalOnly: "Local checks only; no external API calls",
+    refresh: "Refresh",
+    checking: "Checking…",
+    ready: "Ready",
+    notReady: "Not ready",
+    runtimeMode: "Runtime mode",
+    development: "Development",
+    production: "Production",
+    sidecar: "Go sidecar",
+    outputRoot: "Output root",
+    missing: "Missing",
+    session: "Session",
+    secureStore: "Secure store",
+    developmentEnv: "Development .env",
+    preflightUnavailable: "Runtime readiness check is unavailable.",
   },
 };
 

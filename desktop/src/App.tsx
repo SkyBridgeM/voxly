@@ -5,9 +5,11 @@ import {
   openTaskFolder,
   saveEnvKey,
   getRuntimeInfo,
+  getRuntimePreflight,
   parseBackendError,
   type BackendKind,
   type RuntimeMode,
+  type RuntimePreflight,
   type LogEntry,
   type OutputMode,
   type ProgressEvent,
@@ -53,8 +55,25 @@ function App() {
   const [mimoApiKey, setMimoApiKey] = useState("");
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
   const [deepseekModel, setDeepseekModel] = useState("deepseek-v4-flash");
+  const [preflight, setPreflight] = useState<RuntimePreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
 
   const t = translations[locale];
+
+  const refreshPreflight = useCallback(async () => {
+    setPreflightLoading(true);
+    setPreflightError(null);
+    try {
+      const result = await getRuntimePreflight({ mimoApiKey, deepseekApiKey });
+      setPreflight(result);
+    } catch {
+      setPreflight(null);
+      setPreflightError(t.preflightUnavailable);
+    } finally {
+      setPreflightLoading(false);
+    }
+  }, [mimoApiKey, deepseekApiKey, t.preflightUnavailable]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -161,17 +180,52 @@ function App() {
     setShowSettings(false);
   };
 
+  const handleOpenSettings = () => {
+    setShowSettings(true);
+    void refreshPreflight();
+  };
+
   const handleSaveKey = async (key: string, value: string) => {
     if (!value.trim()) return;
     try {
       await saveEnvKey(key, value.trim());
       setSaveStatus((prev) => ({ ...prev, [key]: t.savedSuccessfully }));
+      await refreshPreflight();
     } catch (e) {
       setSaveStatus((prev) => ({ ...prev, [key]: `${t.saveFailed}: ${String(e)}` }));
     }
   };
 
   const [saveStatus, setSaveStatus] = useState<Record<string, string>>({});
+
+  const credentialStatusText = (credential: RuntimePreflight["mimo_api_key"]) => {
+    if (!credential.status.configured) return t.missing;
+    switch (credential.status.source) {
+      case "session":
+        return t.session;
+      case "secure_store":
+        return t.secureStore;
+      case "env":
+        return t.developmentEnv;
+      default:
+        return t.missing;
+    }
+  };
+
+  const outputModeLabel = (mode: OutputMode) => {
+    switch (mode) {
+      case "notes":
+        return t.modeNotes;
+      case "minutes":
+        return t.modeMinutes;
+      case "transcript":
+      default:
+        return t.modeTranscript;
+    }
+  };
+
+  const preflightReadyForMode =
+    outputMode === "minutes" ? preflight?.ready_for_minutes : preflight?.ready;
 
   return (
     <div className="app">
@@ -181,7 +235,7 @@ function App() {
         <div className="header-actions">
           <button
             className="btn-icon"
-            onClick={() => setShowSettings(true)}
+            onClick={handleOpenSettings}
             title={t.settingsTitle}
           >
             ⚙️
@@ -285,7 +339,83 @@ function App() {
             </div>
             <div className="modal-body">
               <div className="warning-banner settings-warning">
-                {t.keysNotPersisted}
+                {runtimeMode === "production" ? t.productionCredentialsNote : t.keysNotPersisted}
+              </div>
+              <div className="preflight-panel">
+                <div className="preflight-header">
+                  <div>
+                    <h3>{t.readinessTitle}</h3>
+                    <span>{t.readinessLocalOnly}</span>
+                  </div>
+                  <button
+                    className="btn-secondary preflight-refresh"
+                    onClick={() => void refreshPreflight()}
+                    disabled={preflightLoading}
+                  >
+                    {preflightLoading ? t.checking : t.refresh}
+                  </button>
+                </div>
+                {preflightError && <div className="preflight-error">{preflightError}</div>}
+                {preflight && (
+                  <>
+                    <div
+                      className={`preflight-summary ${
+                        preflightReadyForMode ? "ready" : "not-ready"
+                      }`}
+                    >
+                      {preflightReadyForMode ? "✓" : "!"} {preflightReadyForMode ? t.ready : t.notReady}
+                      {` · ${outputModeLabel(outputMode)}`}
+                    </div>
+                    <div className="preflight-grid">
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.runtimeMode}</span>
+                        <span className="preflight-value">
+                          {preflight.runtime_mode === "production" ? t.production : t.development}
+                        </span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.backend}</span>
+                        <span className="preflight-value">
+                          {preflight.backend === "go" ? t.backendGoProduction : t.backendPython}
+                        </span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.sidecar}</span>
+                        <span className={preflight.sidecar.ready ? "preflight-value ready" : "preflight-value not-ready"}>
+                          {preflight.sidecar.ready ? t.ready : t.notReady}
+                        </span>
+                        <span className="preflight-detail">{preflight.sidecar.message}</span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">ffmpeg</span>
+                        <span className={preflight.ffmpeg.ready ? "preflight-value ready" : "preflight-value not-ready"}>
+                          {preflight.ffmpeg.ready ? t.ready : t.notReady}
+                        </span>
+                        <span className="preflight-detail">{preflight.ffmpeg.message}</span>
+                      </div>
+                      <div className="preflight-item preflight-item-wide">
+                        <span className="preflight-label">{t.outputRoot}</span>
+                        <code className="preflight-path">{preflight.output_root.path}</code>
+                        <span className={preflight.output_root.ready ? "preflight-value ready" : "preflight-value not-ready"}>
+                          {preflight.output_root.ready ? t.ready : t.notReady}
+                        </span>
+                        <span className="preflight-detail">{preflight.output_root.message}</span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.mimoApiKey}</span>
+                        <span className={preflight.mimo_api_key.status.configured ? "preflight-value ready" : "preflight-value not-ready"}>
+                          {credentialStatusText(preflight.mimo_api_key)}
+                        </span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.deepseekApiKey}</span>
+                        <span className={preflight.deepseek_api_key.status.configured ? "preflight-value ready" : "preflight-value not-ready"}>
+                          {credentialStatusText(preflight.deepseek_api_key)}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="form-group">
                 <label>{t.language}</label>
@@ -342,14 +472,16 @@ function App() {
                       locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
                     }
                   />
-                  <button
-                    className="btn-secondary btn-save-key"
-                    onClick={() => handleSaveKey("MIMO_API_KEY", mimoApiKey)}
-                    disabled={!mimoApiKey.trim()}
-                    title={t.saveToEnv}
-                  >
-                    {t.saveToEnv}
-                  </button>
+                  {runtimeMode === "development" && (
+                    <button
+                      className="btn-secondary btn-save-key"
+                      onClick={() => handleSaveKey("MIMO_API_KEY", mimoApiKey)}
+                      disabled={!mimoApiKey.trim()}
+                      title={t.saveToEnv}
+                    >
+                      {t.saveToEnv}
+                    </button>
+                  )}
                 </div>
                 {saveStatus["MIMO_API_KEY"] && (
                   <span className="save-status">{saveStatus["MIMO_API_KEY"]}</span>
@@ -366,14 +498,16 @@ function App() {
                       locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
                     }
                   />
-                  <button
-                    className="btn-secondary btn-save-key"
-                    onClick={() => handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)}
-                    disabled={!deepseekApiKey.trim()}
-                    title={t.saveToEnv}
-                  >
-                    {t.saveToEnv}
-                  </button>
+                  {runtimeMode === "development" && (
+                    <button
+                      className="btn-secondary btn-save-key"
+                      onClick={() => handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)}
+                      disabled={!deepseekApiKey.trim()}
+                      title={t.saveToEnv}
+                    >
+                      {t.saveToEnv}
+                    </button>
+                  )}
                 </div>
                 {saveStatus["DEEPSEEK_API_KEY"] && (
                   <span className="save-status">{saveStatus["DEEPSEEK_API_KEY"]}</span>

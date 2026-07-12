@@ -95,6 +95,19 @@ This is an internal validation path only. It does not create a DMG or
 installer, upload artifacts, or perform signing/notarization. The Tauri bundle
 configuration enables only the `app` target for this smoke.
 
+### Runtime preflight (PR 12)
+
+Settings includes a compact, offline-only readiness panel backed by the Rust
+`get_runtime_preflight` command. It reports runtime/backend policy, packaged Go
+sidecar and version status in production, ffmpeg availability, output-root
+availability, and safe credential metadata. It never returns key values,
+creates task folders, writes output artifacts, mutates settings or credentials,
+or calls MiMo/DeepSeek. Missing ffmpeg is reported as a system prerequisite;
+ffmpeg is not downloaded or bundled.
+
+The detailed manual procedure is in
+[`docs/phase5_internal_acceptance.md`](../docs/phase5_internal_acceptance.md).
+
 ## Running
 
 ```bash
@@ -138,20 +151,28 @@ development compatibility flow; a `.env` migration UI is deferred. ffmpeg
 remains a system prerequisite, while public packaging, signing, notarization,
 installers, and automatic updates are deferred.
 
+PR 12 adds only local runtime preflight UX and the manual internal acceptance
+checklist. The preflight panel is informational and offline-only; it does not
+perform live API validation or change the production backend policy. The
+development-only "Save to .env" action is hidden in production, which reads
+credentials only from the current session or secure storage.
+
 ## How It Works
 
 1. User selects a `.mp3`, `.wav`, or `.m4a` file via the Tauri file dialog.
 2. User chooses `transcript`, `notes`, or `minutes`.
 3. In Settings, development shows Python as the default and Go as experimental;
    a release build shows the packaged Go sidecar policy.
-4. On "Start", Rust resolves the required credentials and runs the selected
+4. Settings can refresh a local readiness summary for the runtime, sidecar,
+   ffmpeg, output root, and credential metadata without showing key values.
+5. On "Start", Rust resolves the required credentials and runs the selected
    backend with structured arguments. Credentials are passed only through child
    process environment variables. In development, Python/Go retain their
    project-root `.env` compatibility; in release, Python disables dotenv
    loading and a packaged Go sidecar receives an isolated runtime project root.
-5. stdout/stderr stream in real time to the UI.
-6. On completion, canonical task/artifact paths must validate inside root `output/`.
-7. "Open Output Folder" opens only a validated task directory.
+6. stdout/stderr stream in real time to the UI.
+7. On completion, canonical task/artifact paths must validate inside root `output/`.
+8. "Open Output Folder" opens only a validated task directory.
 
 ## API Key Handling
 
@@ -232,6 +253,10 @@ No filesystem, shell, network, or opener permissions are granted.
 - [ ] Development Settings show Python as default and Go as experimental
 - [ ] Internal bundle smoke finds `Contents/MacOS/meeting-asr-go` and its
       `version` command succeeds
+- [ ] Settings readiness panel reports runtime/backend, sidecar, ffmpeg,
+      output-root, and safe credential status metadata
+- [ ] Missing ffmpeg is reported as a system prerequisite without download
+- [ ] Missing packaged sidecar is reported without Python fallback
 - [ ] Privacy warning is accurate for all modes
 - [ ] `transcript` mode starts without DeepSeek key
 - [ ] `minutes` mode calls CLI with `--output-mode minutes`

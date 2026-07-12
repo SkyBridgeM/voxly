@@ -276,6 +276,119 @@ body {
   line-height: 1.5;
 }
 
+/* Local runtime preflight */
+.preflight-panel {
+  margin: 16px 0;
+  padding: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.preflight-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.preflight-header h3 {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.preflight-header span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.preflight-refresh {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+}
+
+.preflight-summary {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.preflight-summary.ready {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.preflight-summary.not-ready,
+.preflight-error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.preflight-error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.preflight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.preflight-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.preflight-item-wide {
+  grid-column: 1 / -1;
+}
+
+.preflight-label {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.preflight-value {
+  font-size: 0.78rem;
+}
+
+.preflight-value.ready {
+  color: var(--success);
+}
+
+.preflight-value.not-ready {
+  color: var(--error);
+}
+
+.preflight-detail {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.preflight-path {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
 /* Buttons */
 button {
   border-radius: var(--radius-sm);
