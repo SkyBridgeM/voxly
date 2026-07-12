@@ -212,6 +212,18 @@ function App() {
     }
   };
 
+  const outputModeLabel = (mode: OutputMode) => {
+    switch (mode) {
+      case "notes":
+        return t.modeNotes;
+      case "minutes":
+        return t.modeMinutes;
+      case "transcript":
+      default:
+        return t.modeTranscript;
+    }
+  };
+
   const preflightReadyForMode =
     outputMode === "minutes" ? preflight?.ready_for_minutes : preflight?.ready;
 
@@ -352,7 +364,7 @@ function App() {
                       }`}
                     >
                       {preflightReadyForMode ? "✓" : "!"} {preflightReadyForMode ? t.ready : t.notReady}
-                      {outputMode === "minutes" ? ` · ${t.modeMinutes}` : ` · ${t.modeTranscript}`}
+                      {` · ${outputModeLabel(outputMode)}`}
                     </div>
                     <div className="preflight-grid">
                       <div className="preflight-item">
