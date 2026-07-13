@@ -197,7 +197,7 @@ func (artifactError ArtifactError) validate(field string, requireRetryable bool)
 	return nil
 }
 
-// WriteManifest validates and writes a Task manifest to path with owner-only permissions.
+// WriteManifest validates and creates manifest files with owner-only permissions.
 func WriteManifest(path string, manifest *TaskManifest) error {
 	if manifest == nil {
 		return errors.New("task manifest is nil")
