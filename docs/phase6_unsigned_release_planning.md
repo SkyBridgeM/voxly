@@ -111,6 +111,12 @@ manifest under `dist/unsigned/`. It does not build or modify the app, publish
 artifacts, or enable CI release workflows. Generated files still require every
 gate in the GitHub Pre-release policy before upload.
 
+The local packaging validation performed during PR #18 is recorded in
+[`docs/phase6_unsigned_rc_record_2026-07-13.md`](phase6_unsigned_rc_record_2026-07-13.md).
+That document records local validation only. It does not authorize an upload,
+create a public Release, or replace the separately reviewed manual Pre-release
+decision required by policy.
+
 Published assets are immutable. They must never be silently replaced. A broken
 artifact should be marked withdrawn; a correction uses a new unique Release and
 new integrity metadata.
@@ -237,10 +243,13 @@ updater, and ffmpeg bundling remain deferred.
 - **PR #18 — Optional local zip packaging script:** generate the unsigned zip,
   SHA-256, and build manifest locally. Do not upload, sign, or create a CI
   release.
-- **PR #19 — Optional manual unsigned GitHub Pre-release:** if all gates pass,
-  document or perform the maintainer-controlled Pre-release process. It must not
-  be Latest and must not use a CI artifact workflow.
-- **PR #20 — Revisit Apple trust tooling if justified:** consider Apple
+- **PR #19 — Unsigned release candidate dry-run record:** record the local
+  packaging validation after PR #18, its boundaries, and unresolved upload
+  gates. Do not publish or upload an artifact.
+- **Future manual unsigned GitHub Pre-release:** keep any maintainer-controlled
+  Pre-release in a separate, explicitly reviewed PR after every gate passes. It
+  must not be Latest and must not use a CI artifact workflow.
+- **Future Apple trust tooling, if justified:** consider Apple
   Developer Program enrollment, signing, and notarization only if real external
   users create a demonstrated need.
 
