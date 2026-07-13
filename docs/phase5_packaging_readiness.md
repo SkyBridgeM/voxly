@@ -132,6 +132,14 @@ in [`docs/phase5_internal_acceptance_2026-07-13.md`](phase5_internal_acceptance_
 Signing, notarization, DMG, installer, and updater work remain deferred, and
 the next phase should be planned separately.
 
+## Phase 5 Closure and Phase 6
+
+Phase 5 is closed after PR #13. Unsigned release planning has moved to
+[`docs/phase6_unsigned_release_planning.md`](phase6_unsigned_release_planning.md).
+Signing, notarization, Apple Developer ID, DMG, installer, updater, and ffmpeg
+bundling remain outside Phase 5. The current release direction intentionally
+accepts unsigned macOS builds and the resulting Gatekeeper friction.
+
 ## PR 8B Secure Credential Foundation
 
 Desktop credentials use the platform secure store where available (`keyring`,
