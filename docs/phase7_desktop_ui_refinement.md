@@ -93,13 +93,26 @@ All existing controls and diagnostic details remain available. Selection,
 disabled/loading behavior, preflight readiness semantics, execution commands,
 credential resolution, and output paths are unchanged.
 
-## 5. Remaining follow-up findings
+## 5. PR #22 accessibility and interaction QA
+
+PR #22 is a narrow frontend accessibility and interaction pass after the
+modern refresh. It adds contained Settings-dialog focus management, Escape
+handling, focus restoration, associated form labels, and keyboard focus
+containment without changing settings values or commands. It also preserves
+native output-mode radio behavior and the scoped live-region policy: progress,
+final status, and results may announce concise updates while logs remain
+`aria-live="off"`.
+
+The pass raises muted-text contrast in light and dark themes and adds small
+wrapping safeguards for compact headers, Settings metadata, status rows, and
+result paths. These are targeted QA fixes rather than another visual redesign.
+
+## 6. Remaining follow-up findings
 
 These items should be handled in later focused PRs rather than expanded here:
 
-- The settings dialog and workflow controls need a dedicated accessibility
-  pass for keyboard behavior, focus trapping/restoration, screen-reader flow,
-  and contrast verification.
+- Full assistive-technology testing on supported macOS versions remains a
+  release QA activity beyond this source-level and keyboard interaction pass.
 - Raw preflight detail messages come from the backend and may not match the
   selected UI language; stable status labels and diagnostic detail should be
   visually distinguished before considering localization.
@@ -114,15 +127,16 @@ These items should be handled in later focused PRs rather than expanded here:
 - Secure-store status exists, but a credential-management UI remains a separate
   product decision and must not be implied by status-only metadata.
 
-## 6. Proposed Phase 7 PR sequence
+## 7. Proposed Phase 7 PR sequence
 
 1. **PR #20 — UI audit and copy baseline:** inventory the current UI and remove
    stale Python-first, backend, mode, credential, and folder labels.
 2. **PR #21 — modern desktop UI refresh:** modernize the app shell, workflow
    cards, mode selection, primary action, status presentation, and Settings
    organization while remaining frontend-only.
-3. **Accessibility and interaction QA:** verify keyboard and focus behavior,
-   accessible names, screen-reader flow, and contrast in both themes.
+3. **PR #22 — accessibility and interaction QA:** tighten keyboard and dialog
+   focus behavior, accessible names, scoped announcements, theme contrast, and
+   compact-window wrapping without changing application behavior.
 4. **Results and recovery states:** test and clarify output files, task-folder
    actions, partial results, backend errors, and log disclosure without changing
    runtime error contracts.
@@ -132,9 +146,9 @@ These items should be handled in later focused PRs rather than expanded here:
 Each follow-up should remain independently reviewable and preserve the current
 runtime contract.
 
-## 7. Strict non-goals
+## 8. Strict non-goals
 
-PR #20 and PR #21 do not:
+PR #20 through PR #22 do not:
 
 - change runtime or backend behavior;
 - change production packaged-Go policy or development Python default;

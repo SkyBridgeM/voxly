@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
@@ -51,6 +51,9 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsDialogRef = useRef<HTMLDivElement>(null);
+  const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
 
   const [mimoApiKey, setMimoApiKey] = useState("");
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
@@ -111,6 +114,63 @@ function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+
+    const dialog = settingsDialogRef.current;
+    settingsCloseButtonRef.current?.focus();
+
+    const handleSettingsKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowSettings(false);
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialog) return;
+
+      const focusableElements = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter(
+        (element) =>
+          !element.hasAttribute("hidden") &&
+          element.getAttribute("aria-hidden") !== "true"
+      );
+
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (
+        event.shiftKey &&
+        (activeElement === firstElement || !dialog.contains(activeElement))
+      ) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (
+        !event.shiftKey &&
+        (activeElement === lastElement || !dialog.contains(activeElement))
+      ) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleSettingsKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleSettingsKeyDown);
+      settingsButtonRef.current?.focus();
+    };
+  }, [showSettings]);
 
   const startRun = useCallback(async () => {
     if (!audioPath || isRunning) return;
@@ -262,7 +322,14 @@ function App() {
               <span className="runtime-dot" aria-hidden="true"></span>
               {runtimeMode === "production" ? t.production : t.development}
             </span>
-            <button className="btn-settings" onClick={handleOpenSettings}>
+            <button
+              ref={settingsButtonRef}
+              className="btn-settings"
+              onClick={handleOpenSettings}
+              aria-haspopup="dialog"
+              aria-expanded={showSettings}
+              aria-controls="settings-dialog"
+            >
               {t.settingsTitle}
             </button>
           </div>
@@ -407,23 +474,28 @@ function App() {
       </div>
 
       {showSettings && (
-        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+        <div className="modal-overlay" onClick={handleCloseSettings}>
           <div
+            id="settings-dialog"
+            ref={settingsDialogRef}
             className="modal settings-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="settings-title"
+            aria-describedby="settings-description"
+            tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
               <div>
                 <span className="modal-eyebrow">{t.appKicker}</span>
                 <h2 id="settings-title">{t.settingsTitle}</h2>
-                <p>{t.settingsIntro}</p>
+                <p id="settings-description">{t.settingsIntro}</p>
               </div>
               <button
+                ref={settingsCloseButtonRef}
                 className="btn-close"
-                onClick={() => setShowSettings(false)}
+                onClick={handleCloseSettings}
                 aria-label={t.close}
               >
                 ×
@@ -539,8 +611,9 @@ function App() {
                 </div>
                 <div className="settings-form-grid">
                   <div className="form-group">
-                    <label>{t.language}</label>
+                    <label htmlFor="settings-language">{t.language}</label>
                     <select
+                      id="settings-language"
                       value={locale}
                       onChange={(e) =>
                         setLocaleState(e.target.value as Locale)
@@ -551,8 +624,9 @@ function App() {
                     </select>
                   </div>
                   <div className="form-group">
-                    <label>{t.theme}</label>
+                    <label htmlFor="settings-theme">{t.theme}</label>
                     <select
+                      id="settings-theme"
                       value={theme}
                       onChange={(e) => setTheme(e.target.value as Theme)}
                     >
@@ -581,8 +655,9 @@ function App() {
                   </div>
                 ) : (
                   <div className="form-group form-group-compact">
-                    <label>{t.backend}</label>
+                    <label htmlFor="settings-backend">{t.backend}</label>
                     <select
+                      id="settings-backend"
                       value={backend}
                       onChange={(e) =>
                         setBackend(e.target.value === "go" ? "go" : "python")
@@ -648,9 +723,10 @@ function App() {
 
                 <div className="credential-fields">
                   <div className="form-group">
-                    <label>{t.mimoApiKey}</label>
+                    <label htmlFor="settings-mimo-key">{t.mimoApiKey}</label>
                     <div className="key-input-row">
                       <input
+                        id="settings-mimo-key"
                         type="password"
                         value={mimoApiKey}
                         onChange={(e) => setMimoApiKey(e.target.value)}
@@ -676,9 +752,12 @@ function App() {
                     )}
                   </div>
                   <div className="form-group">
-                    <label>{t.deepseekApiKey}</label>
+                    <label htmlFor="settings-deepseek-key">
+                      {t.deepseekApiKey}
+                    </label>
                     <div className="key-input-row">
                       <input
+                        id="settings-deepseek-key"
                         type="password"
                         value={deepseekApiKey}
                         onChange={(e) => setDeepseekApiKey(e.target.value)}
@@ -720,8 +799,11 @@ function App() {
                   </div>
                 </div>
                 <div className="form-group form-group-compact">
-                  <label>{t.deepseekModel}</label>
+                  <label htmlFor="settings-deepseek-model">
+                    {t.deepseekModel}
+                  </label>
                   <select
+                    id="settings-deepseek-model"
                     value={deepseekModel}
                     onChange={(e) => setDeepseekModel(e.target.value)}
                   >
