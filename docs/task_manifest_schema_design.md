@@ -81,8 +81,22 @@ Artifact metadata includes references for:
 - notes-preparation output;
 - minutes or summary output;
 - other generated files approved by the schema; and
-- per-artifact status needed to distinguish expected, produced, missing,
-  invalid, or failed output.
+- an independent lifecycle status for each artifact.
+
+The artifact lifecycle should support states such as:
+
+- `pending`;
+- `processing`;
+- `completed`;
+- `failed`; and
+- `unavailable`.
+
+Exact state names and transitions belong to schema implementation review, but
+artifact status must remain distinguishable from the overall Task status. One
+Task may partially succeed: for example, its transcript may be completed while
+its minutes or summary fails. The manifest must preserve that outcome rather
+than reducing all artifacts to a single success/failure flag or claiming that
+completed output is unavailable because a later artifact failed.
 
 Artifact references should be relative to, or otherwise validated against, the
 Task boundary and configured output root. The schema must distinguish final
@@ -204,6 +218,19 @@ execution but does not replace path validation. The user metadata layer must
 not rewrite execution truth when organization fields change. A future index is
 a discovery layer, not an authority for execution history, artifact ownership,
 or deletion, and should be rebuildable from validated Task records.
+
+These are logical responsibilities, not a prescribed physical file layout.
+Because user metadata changes more frequently than execution history, a future
+implementation may store it in a separate physical layer, but this document
+does not decide whether that means another file, store, or representation. The
+implementation phase owns the final physical-layout decision after atomicity,
+backup, portability, performance, and failure-recovery requirements are known.
+
+Schema compatibility and migration strategy must describe logical records and
+ownership rather than depend on the current folder layout. A future migration
+must be able to evolve the physical representation without changing execution
+truth, user authority, or validated Task boundaries merely because current
+files happen to be colocated.
 
 No storage layer, metadata file, database, or index is created by this design
 PR.
