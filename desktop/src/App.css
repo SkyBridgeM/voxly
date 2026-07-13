@@ -7,7 +7,7 @@
   --surface-accent: #e6f1ed;
   --text-primary: #17211f;
   --text-secondary: #5a6965;
-  --text-muted: #87938f;
+  --text-muted: #64736f;
   --border: #d8e1de;
   --border-strong: #c3d0cc;
   --accent: #176b5b;
@@ -50,7 +50,7 @@
   --surface-accent: #1b3932;
   --text-primary: #edf5f2;
   --text-secondary: #a9bab5;
-  --text-muted: #73847f;
+  --text-muted: #91a39e;
   --border: #293a35;
   --border-strong: #3b4f49;
   --accent: #65b9a5;
@@ -85,7 +85,7 @@
     --surface-accent: #1b3932;
     --text-primary: #edf5f2;
     --text-secondary: #a9bab5;
-    --text-muted: #73847f;
+    --text-muted: #91a39e;
     --border: #293a35;
     --border-strong: #3b4f49;
     --accent: #65b9a5;
@@ -955,12 +955,11 @@ button:disabled {
 }
 
 .result-copy code {
-  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .result-actions {
@@ -1581,6 +1580,19 @@ select:focus-visible,
 
   .app-header {
     align-items: center;
+    gap: 12px;
+  }
+
+  .brand-lockup,
+  .brand-copy,
+  .settings-section-title,
+  .settings-section-title > div {
+    min-width: 0;
+  }
+
+  .app-header h1,
+  .settings-section-title p {
+    overflow-wrap: anywhere;
   }
 
   .brand-mark,
@@ -1623,6 +1635,10 @@ select:focus-visible,
     padding-left: 18px;
   }
 
+  .modal-header {
+    gap: 12px;
+  }
+
   .modal-footer {
     padding-right: 18px;
     padding-left: 18px;
@@ -1639,6 +1655,12 @@ select:focus-visible,
 
   .preflight-grid {
     grid-template-columns: 1fr;
+  }
+
+  .preflight-item-row,
+  .output-location-meta {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .key-input-row {
