@@ -158,6 +158,11 @@ Pre-release tag should use:
 desktop-v<app-version>-<YYYYMMDD>-<short-sha>
 ```
 
+Future maintainers should start release-page text from
+[`docs/unsigned_release_notes_template.md`](unsigned_release_notes_template.md).
+The template is for future manual GitHub Pre-releases only. It does not create
+artifacts, enable CI publishing, or authorize a public release by itself.
+
 The Release page and build manifest must record the full commit, build date,
 architecture, unsigned status, and SHA-256. The asset filename may retain only
 the configured app version because the Release and manifest provide the unique
