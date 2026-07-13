@@ -106,33 +106,61 @@ status are represented separately before implementation.
 Future Task data should distinguish metadata recorded by execution from
 metadata that users may edit frequently.
 
-### Immutable or runtime metadata
+### Runtime or execution metadata: system-owned
 
 - `task_id`;
-- creation time;
+- `created_at` and `updated_at`;
 - input reference and ownership information;
 - processing backend/provider;
-- execution status; and
-- output references.
+- selected output mode;
+- processing status;
+- artifact and output references; and
+- non-sensitive execution errors.
 
-Runtime metadata should remain an auditable description of Task identity and
-processing. Fields that legitimately change during execution, such as status
-or output references, should follow defined state transitions rather than
-general-purpose user editing.
+The application workflow owns and updates runtime metadata. It should remain an
+auditable description of Task identity, processing history, and generated
+outputs and should not be casually modified by users. “Runtime” does not mean
+that every field is permanently immutable: fields such as `updated_at`, status,
+error state, and output references may change through defined system
+transitions. They are immutable from the perspective of general-purpose user
+editing.
 
-### User-editable metadata
+### User-editable metadata: user-owned
 
 - title;
 - optional description;
 - user-defined tags;
 - future favorite or pin state; and
-- future user annotations.
+- future user notes or annotations.
 
-Frequently changed user metadata should not unnecessarily rewrite execution
-manifests or blur the record of how a Task was processed. Future schema design
-should consider a separate metadata layer, explicit versioning, and migration
-compatibility while retaining a clear relationship to the Task identity and
-validated storage boundary.
+User-owned metadata may change independently from processing history. These
+changes should not alter system-owned execution facts or unnecessarily rewrite
+execution manifests. Future implementations should store frequently edited
+user metadata in a separate metadata layer while retaining a clear relationship
+to the Task identity and validated storage boundary.
+
+### Metadata source and authority
+
+When more than one source can provide a value, future fields may need to record
+their origin explicitly. For example, `title_source` could identify:
+
+- `user`;
+- `filename`;
+- `generated`; or
+- `fallback`.
+
+User input has the highest authority. Filename-derived, fallback, or other
+automatically inferred metadata must not silently overwrite a user edit.
+AI-generated metadata must always be optional and identifiable as generated so
+users and future migrations can distinguish it from user-authored values.
+
+### Compatibility guidance
+
+Future implementation should define metadata versioning, a migration strategy,
+backward compatibility, and a durable separation between execution history and
+user organization data. Version changes must preserve field ownership and
+source information rather than silently reclassifying user-authored data as
+system-generated data.
 
 This separation is design guidance only. It does not add a metadata layer,
 schema, migration, persistence behavior, or runtime behavior in this PR.
@@ -174,11 +202,18 @@ Task folders remain the filesystem organization and containment boundary for
 task-owned data. Tags do not replace folders, rename folders, or imply that a
 Task's files can be moved without validation.
 
-The manifest or equivalent task metadata is the durable per-Task record. A
-future index may provide discovery across Tasks by storing or deriving only the
-minimum metadata needed for search, filters, and lifecycle views. The index
-must be rebuildable or safely reconcilable with validated Task metadata so it
-does not become an independent source of truth for file ownership.
+The execution manifest is the durable source of truth for processing lifecycle,
+execution facts, and artifact references. A separate future metadata layer
+should hold user organization data such as titles, descriptions, labels, tags,
+favorite or pin state, and information needed for future search and filtering.
+Frequently changing user metadata should not be placed directly in the
+execution manifest when doing so would rewrite execution history unnecessarily.
+
+A future index may provide discovery across Tasks by storing or deriving only
+the minimum metadata needed for search, filters, and lifecycle views. The index
+must be rebuildable or safely reconcilable with the execution manifest and
+user metadata layer so it does not become an independent source of truth for
+file ownership or execution history.
 
 In short, folders organize files; metadata describes a Task; and an index
 enables discovery. This document does not change the current folder layout,
@@ -247,8 +282,10 @@ This PR does not:
 
 - change code, runtime behavior, or backend behavior;
 - migrate storage or manifests;
+- change the storage layout;
 - implement or extend a manifest schema;
 - add Task, tag, history, search, or archive UI;
+- implement an index or indexing behavior;
 - add a database, cloud sync, account system, collaboration, organizations, or
   teams;
 - add attendees, calendars, or a meetings table;
