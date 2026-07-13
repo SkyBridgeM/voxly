@@ -69,6 +69,9 @@ manifest persistence checkpoints. The runtime should continue mutating and
 saving its current `Manifest`; after a successful current save, the adapter may
 derive a `taskmanifest.TaskManifest` in memory for shadow validation. It must
 not become a second state machine or receive independent business decisions.
+Its only responsibility is translating an already-decided runtime checkpoint
+into the new representation. It does not own workflow decisions, retry logic,
+cleanup logic, or runtime behavior.
 
 During Phases 1 and 2:
 
@@ -156,8 +159,15 @@ they need a separate storage decision.
 
 Compare the current manifest and the in-memory shadow semantically at stable
 checkpoints. Comparison should normalize representation differences and check
-identity, lifecycle, requested outputs, artifact completion/failure, source
-ownership, and safe error classification rather than comparing raw JSON.
+Task identity, execution state, artifact state, output references, source
+ownership, and safe error state rather than comparing raw JSON.
+
+Comparison should exclude or normalize values that are not stable semantic
+facts, including independently generated timestamps, absolute machine paths,
+and temporary runtime fields. Path comparison should use validated Task-relative
+references. A difference in an excluded representation detail must not hide a
+difference in Task identity, execution state, artifact state, output reference,
+or error state.
 
 Required gates:
 
