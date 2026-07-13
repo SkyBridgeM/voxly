@@ -224,6 +224,18 @@ function App() {
     }
   };
 
+  const backendLabel = (mode: RuntimeMode, kind: BackendKind) => {
+    if (kind === "python") return t.backendPython;
+    return mode === "production"
+      ? t.backendGoProduction
+      : t.backendGoExperimental;
+  };
+
+  const credentialPlaceholder =
+    runtimeMode === "production"
+      ? t.productionCredentialPlaceholder
+      : t.developmentCredentialPlaceholder;
+
   const preflightReadyForMode =
     outputMode === "minutes" ? preflight?.ready_for_minutes : preflight?.ready;
 
@@ -376,7 +388,7 @@ function App() {
                       <div className="preflight-item">
                         <span className="preflight-label">{t.backend}</span>
                         <span className="preflight-value">
-                          {preflight.backend === "go" ? t.backendGoProduction : t.backendPython}
+                          {backendLabel(preflight.runtime_mode, preflight.backend)}
                         </span>
                       </div>
                       <div className="preflight-item">
@@ -468,9 +480,7 @@ function App() {
                     type="password"
                     value={mimoApiKey}
                     onChange={(e) => setMimoApiKey(e.target.value)}
-                    placeholder={
-                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
-                    }
+                    placeholder={credentialPlaceholder}
                   />
                   {runtimeMode === "development" && (
                     <button
@@ -494,9 +504,7 @@ function App() {
                     type="password"
                     value={deepseekApiKey}
                     onChange={(e) => setDeepseekApiKey(e.target.value)}
-                    placeholder={
-                      locale === "zh" ? "留空则使用 .env 配置" : "Leave empty to use .env"
-                    }
+                    placeholder={credentialPlaceholder}
                   />
                   {runtimeMode === "development" && (
                     <button
