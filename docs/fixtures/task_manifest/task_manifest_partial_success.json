@@ -33,9 +33,10 @@
     },
     "minutes": {
       "status": "failed",
-      "error_summary": {
+      "error": {
         "code": "provider_request_failed",
-        "message": "The summary provider did not return a completed result."
+        "message": "The summary provider did not return a completed result.",
+        "retryable": true
       }
     }
   }

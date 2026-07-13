@@ -25,9 +25,10 @@
   "artifacts": {
     "transcript": {
       "status": "failed",
-      "error_summary": {
+      "error": {
         "code": "provider_request_failed",
-        "message": "The transcription provider did not return a usable result."
+        "message": "The transcription provider did not return a usable result.",
+        "retryable": true
       }
     },
     "notes": {

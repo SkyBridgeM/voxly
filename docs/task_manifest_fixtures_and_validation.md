@@ -58,9 +58,9 @@ For the proposed first version, a readable execution manifest requires:
   mode and execution state.
 
 Each present artifact requires a `status`. A `completed` artifact also requires
-a validated path. A `failed` artifact requires a non-sensitive error summary.
-An `unavailable`, `pending`, or `processing` artifact must not pretend to have a
-completed path.
+a validated path. A `failed` artifact requires a non-sensitive structured
+`error`. An `unavailable`, `pending`, or `processing` artifact must not pretend
+to have a completed path.
 
 The schema implementation must decide whether all known artifact keys are
 always required or whether unrequested artifacts may be omitted. The fixtures
@@ -92,7 +92,7 @@ Future readers and validators should apply these expectations:
 - Missing optional input data is represented as unknown; it must not cause a
   fabricated value.
 - A missing required artifact entry, missing completed path, or missing failed
-  error summary is a validation error.
+  artifact error is a validation error.
 - An artifact path outside the validated Task/output-root boundary is invalid
   even when the JSON is otherwise well formed.
 - Unknown fields in a compatible version may be preserved or ignored according
@@ -136,7 +136,46 @@ Expected validation result: valid failed Task with diagnostic information and
 no completed artifact paths. Resume eligibility must be decided by future
 runtime rules rather than inferred from this fixture alone.
 
-## 7. `schema_version` and compatibility
+## 7. Artifact error model
+
+A failed artifact should carry a structured error with:
+
+- `code`: a stable machine-readable identifier;
+- `message`: a concise, non-sensitive user- or developer-readable summary; and
+- `retryable`: a boolean indicating whether retry may be appropriate under the
+  same logical Task workflow.
+
+Task failure and artifact failure are different. A Task-level error summarizes
+the aggregate execution outcome, while an artifact error explains why one
+output failed. In partial success, completed artifacts must remain valid and
+recoverable even when another artifact fails. A future retry should be able to
+target or resume the failed work without discarding completed outputs, subject
+to separately implemented resume rules.
+
+The `retryable` value is guidance, not automatic authorization to retry. It
+must not bypass credential, provider, input, lifecycle, or user-confirmation
+requirements.
+
+## 8. Fixture portability
+
+Fixtures must be deterministic and environment independent so they can support
+future local and CI validation. They must:
+
+- contain no absolute local paths, home directories, usernames, or machine
+  identifiers;
+- use relative or clearly synthetic example paths;
+- avoid relying on files, providers, credentials, locale, timezone, or state
+  unique to the author's environment; and
+- remain valid inputs for future schema validation in CI without network or
+  live API access.
+
+The current fixtures use UTC timestamps, synthetic identifiers and provider
+names, relative example input references, and Task-relative artifact paths.
+They do not require the referenced example audio files to exist for JSON/schema
+validation. Runtime fixture integration and filesystem behavior remain outside
+this PR.
+
+## 9. `schema_version` and compatibility
 
 The examples use proposed version `1.0`. This value does not activate a schema
 or promise that the implementation must use this exact version format.
@@ -158,7 +197,7 @@ unknown compatible fields, a missing version, an unsupported newer version,
 and migration failure recovery. No backward-compatibility reader or migration
 is implemented in this PR.
 
-## 8. Non-goals
+## 10. Non-goals
 
 This PR does not:
 
