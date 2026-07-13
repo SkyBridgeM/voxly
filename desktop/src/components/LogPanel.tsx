@@ -77,7 +77,12 @@ export function LogPanel({
     <>
       {isRunning && (
         <div className="section progress-section">
-          <div className="progress-meta">
+          <div
+            className="progress-meta"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <span className="progress-status">
               <span className="status-pulse" aria-hidden="true"></span>
               {getProgressLabel()}
@@ -94,7 +99,7 @@ export function LogPanel({
       )}
 
       {logs.length > 0 && (
-        <div className="section logs-section">
+        <div className="section logs-section" aria-live="off">
           <div className="logs-header">
             <span className="logs-count">{logs.length}</span>
             <button className="btn-link" onClick={onToggleLogs}>

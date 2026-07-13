@@ -330,7 +330,7 @@ function App() {
             </div>
           </section>
 
-          <section className="activity-region" aria-live="polite">
+          <section className="activity-region">
             {!hasActivity && (
               <div className={`empty-state ${audioPath ? "has-file" : ""}`}>
                 <div className="empty-visual" aria-hidden="true">
@@ -392,6 +392,9 @@ function App() {
                       ? "error"
                       : ""
                 }`}
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
               >
                 <span className="status-mark" aria-hidden="true">
                   {statusOk === true ? "✓" : statusOk === false ? "!" : "·"}

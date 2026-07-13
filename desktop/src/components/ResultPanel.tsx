@@ -29,7 +29,12 @@ export function ResultPanel({
   };
 
   return (
-    <div className="section results-section">
+    <div
+      className="section results-section"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
       <div className="results-header">
         <span className="result-success-mark" aria-hidden="true">
           ✓
