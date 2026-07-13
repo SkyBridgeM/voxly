@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_fixture_failed_001",
+  "created_at": "2026-07-13T09:30:00Z",
+  "updated_at": "2026-07-13T09:31:00Z",
+  "execution": {
+    "backend": "go",
+    "provider": "example-provider",
+    "output_mode": "minutes",
+    "status": "failed",
+    "error_summary": {
+      "code": "transcription_failed",
+      "message": "Transcription did not produce a usable result."
+    }
+  },
+  "input": {
+    "source_reference": "fixtures/audio/failed-example.mp3",
+    "source_ownership": "external_user_owned",
+    "duration_seconds": 300,
+    "format": "mp3",
+    "metadata": {
+      "size_bytes": 5242880
+    }
+  },
+  "artifacts": {
+    "transcript": {
+      "status": "failed",
+      "error_summary": {
+        "code": "provider_request_failed",
+        "message": "The transcription provider did not return a usable result."
+      }
+    },
+    "notes": {
+      "status": "unavailable"
+    },
+    "minutes": {
+      "status": "unavailable"
+    }
+  }
+}

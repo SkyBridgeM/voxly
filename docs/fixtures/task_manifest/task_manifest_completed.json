@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_fixture_completed_001",
+  "created_at": "2026-07-13T08:30:00Z",
+  "updated_at": "2026-07-13T08:42:00Z",
+  "execution": {
+    "backend": "go",
+    "provider": "example-provider",
+    "output_mode": "minutes",
+    "status": "completed"
+  },
+  "input": {
+    "source_reference": "fixtures/audio/completed-example.m4a",
+    "source_ownership": "external_user_owned",
+    "duration_seconds": 720,
+    "format": "m4a",
+    "metadata": {
+      "size_bytes": 10485760
+    }
+  },
+  "artifacts": {
+    "transcript": {
+      "status": "completed",
+      "path": "transcript.md"
+    },
+    "notes": {
+      "status": "completed",
+      "path": "notes_input.md"
+    },
+    "minutes": {
+      "status": "completed",
+      "path": "meeting_minutes.md"
+    }
+  }
+}
