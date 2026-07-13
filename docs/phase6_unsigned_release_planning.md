@@ -44,6 +44,10 @@ The current policy is deliberately narrow:
 - **Public GitHub distribution:** conditionally allowed only as an explicitly
   unsigned GitHub **Pre-release**. It must not be Latest, and it must satisfy all
   release gates below.
+- **Pre-release policy:** any future manual upload must follow
+  [`docs/github_unsigned_prerelease_policy.md`](github_unsigned_prerelease_policy.md).
+  The policy is documentation only; it does not publish artifacts or enable CI
+  release workflows.
 - **Trusted source:** public assets must come from this repository's official
   GitHub Releases. Maintainer-to-tester transfer is acceptable for small-circle
   testing. Third-party mirrors are not approved sources.
@@ -223,12 +227,12 @@ operation rather than a CI release workflow.
 - **PR #16 — Local unsigned artifact checklist:** document the trusted Apple
   Silicon build host, clean `main`, Finder launch and ffmpeg check, and manual
   transcript/notes/minutes acceptance.
-- **PR #17 — Optional local zip packaging script:** generate the unsigned zip,
-  SHA-256, and build manifest locally. Do not upload, sign, or create a CI
-  release.
-- **PR #18 — GitHub Pre-release policy:** record the licensing gate, official
+- **PR #17 — GitHub Pre-release policy:** record the licensing gate, official
   source, immutable-asset and withdrawal rules, tag format, and required asset
   set.
+- **PR #18 — Optional local zip packaging script:** generate the unsigned zip,
+  SHA-256, and build manifest locally. Do not upload, sign, or create a CI
+  release.
 - **PR #19 — Optional manual unsigned GitHub Pre-release:** if all gates pass,
   document or perform the maintainer-controlled Pre-release process. It must not
   be Latest and must not use a CI artifact workflow.
