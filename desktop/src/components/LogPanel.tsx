@@ -77,21 +77,30 @@ export function LogPanel({
     <>
       {isRunning && (
         <div className="section progress-section">
+          <div className="progress-meta">
+            <span className="progress-status">
+              <span className="status-pulse" aria-hidden="true"></span>
+              {getProgressLabel()}
+            </span>
+            <span className="progress-percent">{getProgressPercent()}%</span>
+          </div>
           <div className="progress-bar-container">
             <div
               className="progress-bar"
               style={{ width: `${getProgressPercent()}%` }}
             ></div>
           </div>
-          <p className="progress-label">{getProgressLabel()}</p>
         </div>
       )}
 
       {logs.length > 0 && (
         <div className="section logs-section">
-          <button className="btn-link" onClick={onToggleLogs}>
-            {showLogs ? labels.hideLogs : labels.showLogs}
-          </button>
+          <div className="logs-header">
+            <span className="logs-count">{logs.length}</span>
+            <button className="btn-link" onClick={onToggleLogs}>
+              {showLogs ? labels.hideLogs : labels.showLogs}
+            </button>
+          </div>
           {showLogs && (
             <div className="log-container">
               {logs.map((entry, i) => (

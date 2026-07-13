@@ -7,6 +7,7 @@ interface FilePickerProps {
   labels: {
     chooseFile: string;
     noFileSelected: string;
+    audioFile: string;
   };
 }
 
@@ -37,16 +38,27 @@ export function FilePicker({
 
   return (
     <div className="file-row">
+      <div className="file-visual" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <div className="file-copy">
+        <span className="file-caption">
+          {audioPath ? labels.audioFile : labels.noFileSelected}
+        </span>
+        <span className={`file-path ${audioPath ? "has-file" : ""}`}>
+          {audioPath ? getFileName(audioPath) : "MP3 · WAV · M4A"}
+        </span>
+      </div>
       <button
-        className="btn-secondary"
+        className="btn-secondary file-button"
         onClick={pickFile}
         disabled={disabled}
       >
         {labels.chooseFile}
       </button>
-      <span className={`file-path ${audioPath ? "has-file" : ""}`}>
-        {audioPath ? getFileName(audioPath) : labels.noFileSelected}
-      </span>
     </div>
   );
 }

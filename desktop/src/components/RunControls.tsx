@@ -43,8 +43,14 @@ export function RunControls({
             disabled={isRunning}
           />
           <label htmlFor="mode-transcript">
-            {labels.modeTranscript}
-            <span>{labels.modeTranscriptDesc}</span>
+            <span className="mode-index">01</span>
+            <span className="mode-copy">
+              <strong>{labels.modeTranscript}</strong>
+              <small>{labels.modeTranscriptDesc}</small>
+            </span>
+            <span className="mode-selected" aria-hidden="true">
+              ✓
+            </span>
           </label>
         </div>
         <div className="mode-option">
@@ -58,8 +64,14 @@ export function RunControls({
             disabled={isRunning}
           />
           <label htmlFor="mode-notes">
-            {labels.modeNotes}
-            <span>{labels.modeNotesDesc}</span>
+            <span className="mode-index">02</span>
+            <span className="mode-copy">
+              <strong>{labels.modeNotes}</strong>
+              <small>{labels.modeNotesDesc}</small>
+            </span>
+            <span className="mode-selected" aria-hidden="true">
+              ✓
+            </span>
           </label>
         </div>
         <div className="mode-option">
@@ -73,20 +85,41 @@ export function RunControls({
             disabled={isRunning}
           />
           <label htmlFor="mode-minutes">
-            {labels.modeMinutes}
-            <span>{labels.modeMinutesDesc}</span>
+            <span className="mode-index">03</span>
+            <span className="mode-copy">
+              <strong>{labels.modeMinutes}</strong>
+              <small>{labels.modeMinutesDesc}</small>
+            </span>
+            <span className="mode-selected" aria-hidden="true">
+              ✓
+            </span>
           </label>
         </div>
       </div>
 
       {outputMode === "transcript" && (
-        <div className="warning-banner">{labels.transcriptWarning}</div>
+        <div className="warning-banner">
+          <span className="warning-icon" aria-hidden="true">
+            i
+          </span>
+          <span>{labels.transcriptWarning}</span>
+        </div>
       )}
       {outputMode === "notes" && (
-        <div className="warning-banner">{labels.notesWarning}</div>
+        <div className="warning-banner">
+          <span className="warning-icon" aria-hidden="true">
+            i
+          </span>
+          <span>{labels.notesWarning}</span>
+        </div>
       )}
       {outputMode === "minutes" && (
-        <div className="warning-banner">{labels.llmWarning}</div>
+        <div className="warning-banner">
+          <span className="warning-icon" aria-hidden="true">
+            i
+          </span>
+          <span>{labels.llmWarning}</span>
+        </div>
       )}
 
       <div className="section run-section">
@@ -101,7 +134,12 @@ export function RunControls({
               {labels.processing}
             </>
           ) : (
-            labels.start
+            <>
+              {labels.start}
+              <span className="button-arrow" aria-hidden="true">
+                →
+              </span>
+            </>
           )}
         </button>
       </div>

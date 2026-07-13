@@ -11,6 +11,13 @@ PR #20 is an audit and copy baseline. It documents the current UI, fixes a
 small set of clearly stale or misleading labels, and proposes focused follow-up
 work. It is not a full visual redesign.
 
+PR #21 is the modern desktop UI refresh. It keeps the same single-screen
+workflow and frontend state while introducing a clearer card hierarchy,
+selectable output-mode cards, a stronger primary action, more composed
+progress/result states, and a sectioned Settings dialog. The work is
+frontend-only: it does not change runtime policy, Tauri commands, backend
+payloads, credential handling, ffmpeg behavior, packaging, release, or CI.
+
 ## 2. Current UI inventory
 
 The desktop frontend is a single React screen without routing. `App.tsx` owns
@@ -67,16 +74,32 @@ PR #20 corrects those labels in Chinese and English. The backend label helper
 uses the existing typed `RuntimeMode` and `BackendKind`; it does not alter
 backend selection or execution.
 
-## 4. Follow-up audit findings
+## 4. PR #21 modern desktop refresh
+
+PR #21 addresses the broad visual hierarchy findings from the audit without
+turning the app into a multi-screen product or introducing a design-system
+dependency. The refresh includes:
+
+- a softer desktop background and more deliberate app-header hierarchy;
+- a unified workflow card with a modern file picker, selectable mode cards,
+  and a visually prominent start action;
+- clearer empty, processing, log, result, warning, and error presentation;
+- six visible Settings sections: Local readiness, Appearance and language,
+  Processing backend, Credentials, Minutes model, and Output location; and
+- localized section headings, helper text, theme labels, and accessible names
+  needed by the refreshed presentation.
+
+All existing controls and diagnostic details remain available. Selection,
+disabled/loading behavior, preflight readiness semantics, execution commands,
+credential resolution, and output paths are unchanged.
+
+## 5. Remaining follow-up findings
 
 These items should be handled in later focused PRs rather than expanded here:
 
-- The settings modal mixes readiness, appearance, backend policy, credentials,
-  and model selection in one long list without grouping or section hierarchy.
-- Theme labels are still embedded directly in `App.tsx` rather than fully
-  represented in the translation interface.
-- The settings icon and modal close controls need an accessibility pass for
-  explicit accessible names, keyboard behavior, and focus restoration.
+- The settings dialog and workflow controls need a dedicated accessibility
+  pass for keyboard behavior, focus trapping/restoration, screen-reader flow,
+  and contrast verification.
 - Raw preflight detail messages come from the backend and may not match the
   selected UI language; stable status labels and diagnostic detail should be
   visually distinguished before considering localization.
@@ -91,28 +114,27 @@ These items should be handled in later focused PRs rather than expanded here:
 - Secure-store status exists, but a credential-management UI remains a separate
   product decision and must not be implied by status-only metadata.
 
-## 5. Proposed Phase 7 PR sequence
+## 6. Proposed Phase 7 PR sequence
 
 1. **PR #20 — UI audit and copy baseline:** inventory the current UI and remove
    stale Python-first, backend, mode, credential, and folder labels.
-2. **Settings information hierarchy:** group readiness, appearance, processing,
-   and credentials without changing settings storage or commands.
-3. **Run workflow clarity:** refine mode guidance, readiness callouts, start and
-   disabled states, and the distinction between local checks and live API use.
-4. **Results and recovery states:** clarify output files, task-folder actions,
-   partial results, backend errors, and log disclosure without changing runtime
-   error contracts.
-5. **Accessibility and localization:** complete translation coverage, keyboard
-   and focus behavior, accessible names, contrast review, and narrow-window QA.
-6. **Visual refinement:** make measured spacing and hierarchy improvements only
-   after the preceding behavior and copy are stable.
+2. **PR #21 — modern desktop UI refresh:** modernize the app shell, workflow
+   cards, mode selection, primary action, status presentation, and Settings
+   organization while remaining frontend-only.
+3. **Accessibility and interaction QA:** verify keyboard and focus behavior,
+   accessible names, screen-reader flow, and contrast in both themes.
+4. **Results and recovery states:** test and clarify output files, task-folder
+   actions, partial results, backend errors, and log disclosure without changing
+   runtime error contracts.
+5. **Narrow-window and localization QA:** test compact desktop dimensions,
+   long translated strings, scrolling, and status density in realistic states.
 
 Each follow-up should remain independently reviewable and preserve the current
 runtime contract.
 
-## 6. Strict non-goals
+## 7. Strict non-goals
 
-PR #20 does not:
+PR #20 and PR #21 do not:
 
 - change runtime or backend behavior;
 - change production packaged-Go policy or development Python default;
@@ -123,5 +145,5 @@ PR #20 does not:
 - change ffmpeg discovery, installation, downloading, or bundling;
 - change packaging, CI, release, signing, notarization, or updater behavior;
 - add routes, dependencies, a design system, or a settings migration;
-- perform a full layout redesign; or
+- introduce a routing rewrite or multi-screen information architecture; or
 - add telemetry, live API checks, or public release artifacts.
