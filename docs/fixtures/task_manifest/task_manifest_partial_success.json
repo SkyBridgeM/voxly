@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_fixture_partial_001",
+  "created_at": "2026-07-13T09:00:00Z",
+  "updated_at": "2026-07-13T09:11:00Z",
+  "execution": {
+    "backend": "go",
+    "provider": "example-provider",
+    "output_mode": "minutes",
+    "status": "completed_with_errors",
+    "error_summary": {
+      "code": "minutes_generation_failed",
+      "message": "Minutes generation did not complete."
+    }
+  },
+  "input": {
+    "source_reference": "fixtures/audio/partial-example.wav",
+    "source_ownership": "external_user_owned",
+    "duration_seconds": 540,
+    "format": "wav",
+    "metadata": {
+      "size_bytes": 18874368
+    }
+  },
+  "artifacts": {
+    "transcript": {
+      "status": "completed",
+      "path": "transcript.md"
+    },
+    "notes": {
+      "status": "completed",
+      "path": "notes_input.md"
+    },
+    "minutes": {
+      "status": "failed",
+      "error": {
+        "code": "provider_request_failed",
+        "message": "The summary provider did not return a completed result.",
+        "retryable": true
+      }
+    }
+  }
+}
