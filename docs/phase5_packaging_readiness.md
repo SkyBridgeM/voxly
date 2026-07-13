@@ -125,6 +125,13 @@ The manual offline and optional-live acceptance steps are recorded in
 transcript, notes, and minutes checks require intentionally supplied keys and a
 test recording; they are never part of GitHub Actions.
 
+## PR 13 Internal Acceptance Result
+
+Phase 5 internal acceptance passed after PR #12; the dated result is recorded
+in [`docs/phase5_internal_acceptance_2026-07-13.md`](phase5_internal_acceptance_2026-07-13.md).
+Signing, notarization, DMG, installer, and updater work remain deferred, and
+the next phase should be planned separately.
+
 ## PR 8B Secure Credential Foundation
 
 Desktop credentials use the platform secure store where available (`keyring`,
