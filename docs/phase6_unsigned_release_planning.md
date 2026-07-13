@@ -104,8 +104,12 @@ architecture, and unsigned status.
 
 Manual preparation and validation should follow
 [`docs/local_unsigned_artifact_checklist.md`](local_unsigned_artifact_checklist.md).
-The checklist is manual documentation only; it does not add scripts, CI
-publishing, or artifacts.
+After its manual app checks pass, the optional local-only
+[`scripts/package_unsigned_macos_app.sh`](../scripts/package_unsigned_macos_app.sh)
+may package the already-built `.app` into a zip, SHA-256 file, and build
+manifest under `dist/unsigned/`. It does not build or modify the app, publish
+artifacts, or enable CI release workflows. Generated files still require every
+gate in the GitHub Pre-release policy before upload.
 
 Published assets are immutable. They must never be silently replaced. A broken
 artifact should be marked withdrawn; a correction uses a new unique Release and
@@ -199,10 +203,10 @@ Current CI policy remains unchanged:
 - CI does not sign, notarize, or produce release installers.
 - CI does not run live MiMo or DeepSeek checks.
 
-A later PR may document a local artifact command or add a manual process only
-after this unsigned release policy is accepted. PR #14 does not implement that
-path. Any future public Pre-release remains a maintainer-controlled manual
-operation rather than a CI release workflow.
+The optional local packaging script does not upload its output. Any future
+public Pre-release remains a maintainer-controlled manual operation rather than
+a CI release workflow. CI publishing, signing, notarization, DMG, installer,
+updater, and ffmpeg bundling remain deferred.
 
 ## 9. Security and privacy expectations
 
