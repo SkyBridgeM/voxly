@@ -107,7 +107,20 @@ The pass raises muted-text contrast in light and dark themes and adds small
 wrapping safeguards for compact headers, Settings metadata, status rows, and
 result paths. These are targeted QA fixes rather than another visual redesign.
 
-## 6. Remaining follow-up findings
+## 6. PR #23 results and output UX polish
+
+PR #23 is a focused frontend-only refinement of the completed-run experience.
+It presents meeting minutes, notes preparation, or the transcript as the
+primary user-facing deliverable according to what the run produced. Other
+generated files remain available below it, while the task-folder path is kept
+as secondary detail instead of leading with the internal filesystem structure.
+
+This presentation change does not alter the storage layout, generated paths,
+task-folder behavior, or the existing Open Task Folder command. It adds no
+individual-file, copy, delete, or cleanup actions. Storage lifecycle and
+cleanup controls are deferred to a separately scoped future PR.
+
+## 7. Remaining follow-up findings
 
 These items should be handled in later focused PRs rather than expanded here:
 
@@ -119,15 +132,14 @@ These items should be handled in later focused PRs rather than expanded here:
 - The DeepSeek model control is always visible even though it affects only the
   minutes workflow; future helper text can clarify this without hiding useful
   configuration unexpectedly.
-- Run completion, result files, errors, and logs compete for attention after a
-  run. Their hierarchy should be tested with success, partial-output, and
-  failure states before changing layout.
+- Partial-output, recovery, and failure states still need focused testing with
+  real run outcomes before their presentation or error contracts are changed.
 - Output-location status is visible but configuration and reset behavior are
   not explained in the main workflow.
 - Secure-store status exists, but a credential-management UI remains a separate
   product decision and must not be implied by status-only metadata.
 
-## 7. Proposed Phase 7 PR sequence
+## 8. Proposed Phase 7 PR sequence
 
 1. **PR #20 — UI audit and copy baseline:** inventory the current UI and remove
    stale Python-first, backend, mode, credential, and folder labels.
@@ -137,18 +149,22 @@ These items should be handled in later focused PRs rather than expanded here:
 3. **PR #22 — accessibility and interaction QA:** tighten keyboard and dialog
    focus behavior, accessible names, scoped announcements, theme contrast, and
    compact-window wrapping without changing application behavior.
-4. **Results and recovery states:** test and clarify output files, task-folder
-   actions, partial results, backend errors, and log disclosure without changing
-   runtime error contracts.
-5. **Narrow-window and localization QA:** test compact desktop dimensions,
+4. **PR #23 — results and output UX polish:** emphasize the primary
+   user-facing deliverable, retain generated paths as secondary information,
+   and separate task-folder detail without changing storage.
+5. **Recovery and partial-output states:** test partial results, backend errors,
+   and log disclosure without changing runtime error contracts.
+6. **Storage lifecycle:** define cleanup and retention behavior separately
+   before adding any delete or cleanup controls.
+7. **Narrow-window and localization QA:** test compact desktop dimensions,
    long translated strings, scrolling, and status density in realistic states.
 
 Each follow-up should remain independently reviewable and preserve the current
 runtime contract.
 
-## 8. Strict non-goals
+## 9. Strict non-goals
 
-PR #20 through PR #22 do not:
+PR #20 through PR #23 do not:
 
 - change runtime or backend behavior;
 - change production packaged-Go policy or development Python default;

@@ -6,11 +6,15 @@ interface ResultPanelProps {
   onOpenFolder: () => void;
   labels: {
     resultsTitle: string;
-    folder: string;
+    resultsSummary: string;
+    primaryOutput: string;
+    generatedFiles: string;
+    taskFolder: string;
+    advancedDetails: string;
     transcript: string;
     notesInput: string;
     meetingMinutes: string;
-    openOutputFolder: string;
+    openTaskFolder: string;
   };
 }
 
@@ -24,9 +28,33 @@ export function ResultPanel({
 }: ResultPanelProps) {
   if (!taskFolder) return null;
 
-  const getFileName = (path: string) => {
-    return path.split("/").pop() || path.split("\\").pop() || path;
-  };
+  const outputs = [
+    transcriptPath && {
+      kind: "T",
+      label: labels.transcript,
+      path: transcriptPath,
+    },
+    notesInputPath && {
+      kind: "N",
+      label: labels.notesInput,
+      path: notesInputPath,
+    },
+    minutesPath && {
+      kind: "M",
+      label: labels.meetingMinutes,
+      path: minutesPath,
+    },
+  ].filter((output): output is { kind: string; label: string; path: string } =>
+    Boolean(output),
+  );
+  const primaryOutput = minutesPath
+    ? outputs.find((output) => output.path === minutesPath)
+    : notesInputPath
+      ? outputs.find((output) => output.path === notesInputPath)
+      : outputs.find((output) => output.path === transcriptPath);
+  const secondaryOutputs = outputs.filter(
+    (output) => output.path !== primaryOutput?.path,
+  );
 
   return (
     <div
@@ -41,56 +69,49 @@ export function ResultPanel({
         </span>
         <div>
           <strong>{labels.resultsTitle}</strong>
-          <span>{labels.folder}</span>
+          <span>{labels.resultsSummary}</span>
         </div>
       </div>
-      <div className="results-container">
-        <div className="result-item">
-          <span className="result-file-mark" aria-hidden="true">
-            ⌁
+      {primaryOutput && (
+        <div className="primary-result">
+          <span className="result-file-mark primary" aria-hidden="true">
+            {primaryOutput.kind}
           </span>
           <div className="result-copy">
-            <span className="result-label">{labels.folder}</span>
-            <code>{taskFolder}</code>
+            <span className="result-eyebrow">{labels.primaryOutput}</span>
+            <strong>{primaryOutput.label}</strong>
+            <code>{primaryOutput.path}</code>
           </div>
         </div>
-        {transcriptPath && (
-          <div className="result-item">
-            <span className="result-file-mark" aria-hidden="true">
-              T
-            </span>
-            <div className="result-copy">
-              <span className="result-label">{labels.transcript}</span>
-              <code>{getFileName(transcriptPath)}</code>
-            </div>
+      )}
+      {secondaryOutputs.length > 0 && (
+        <div className="generated-results">
+          <h3>{labels.generatedFiles}</h3>
+          <div className="results-container">
+            {secondaryOutputs.map((output) => (
+              <div className="result-item" key={output.path}>
+                <span className="result-file-mark" aria-hidden="true">
+                  {output.kind}
+                </span>
+                <div className="result-copy">
+                  <span className="result-label">{output.label}</span>
+                  <code title={output.path}>{output.path}</code>
+                </div>
+              </div>
+            ))}
           </div>
-        )}
-        {notesInputPath && (
-          <div className="result-item">
-            <span className="result-file-mark" aria-hidden="true">
-              N
-            </span>
-            <div className="result-copy">
-              <span className="result-label">{labels.notesInput}</span>
-              <code>{getFileName(notesInputPath)}</code>
-            </div>
-          </div>
-        )}
-        {minutesPath && (
-          <div className="result-item">
-            <span className="result-file-mark" aria-hidden="true">
-              M
-            </span>
-            <div className="result-copy">
-              <span className="result-label">{labels.meetingMinutes}</span>
-              <code>{getFileName(minutesPath)}</code>
-            </div>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+      <details className="result-details">
+        <summary>{labels.advancedDetails}</summary>
+        <div className="task-folder-detail">
+          <span className="result-label">{labels.taskFolder}</span>
+          <code>{taskFolder}</code>
+        </div>
+      </details>
       <div className="result-actions">
         <button className="btn-secondary" onClick={onOpenFolder}>
-          {labels.openOutputFolder}
+          {labels.openTaskFolder}
         </button>
       </div>
     </div>

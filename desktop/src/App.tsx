@@ -442,11 +442,15 @@ function App() {
               onOpenFolder={handleOpenFolder}
               labels={{
                 resultsTitle: t.resultsTitle,
-                folder: t.folder,
+                resultsSummary: t.resultsSummary,
+                primaryOutput: t.primaryOutput,
+                generatedFiles: t.generatedFiles,
+                taskFolder: t.taskFolder,
+                advancedDetails: t.advancedDetails,
                 transcript: t.transcript,
                 notesInput: t.notesInput,
                 meetingMinutes: t.meetingMinutes,
-                openOutputFolder: t.openOutputFolder,
+                openTaskFolder: t.openTaskFolder,
               }}
             />
 
