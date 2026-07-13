@@ -28,6 +28,12 @@ export interface Translations {
   generatingMinutes: string;
   done: string;
   resultsTitle: string;
+  resultsSummary: string;
+  primaryOutput: string;
+  generatedFiles: string;
+  taskFolder: string;
+  openTaskFolder: string;
+  advancedDetails: string;
   folder: string;
   transcript: string;
   notesInput: string;
@@ -131,9 +137,15 @@ export const translations: Record<Locale, Translations> = {
     generatingMinutes: "生成会议纪要...",
     done: "完成",
     resultsTitle: "结果",
+    resultsSummary: "你的文件已准备就绪",
+    primaryOutput: "主要输出",
+    generatedFiles: "同时生成的文件",
+    taskFolder: "任务文件夹",
+    openTaskFolder: "打开任务文件夹",
+    advancedDetails: "任务文件夹详情",
     folder: "任务文件夹",
-    transcript: "转写",
-    notesInput: "笔记输入",
+    transcript: "转写文本",
+    notesInput: "笔记准备文件",
     meetingMinutes: "会议纪要",
     completedSuccessfully: "处理完成",
     exitedWithCode: "退出码",
@@ -235,9 +247,15 @@ export const translations: Record<Locale, Translations> = {
     generatingMinutes: "Generating minutes...",
     done: "Done",
     resultsTitle: "Results",
+    resultsSummary: "Your files are ready",
+    primaryOutput: "Primary output",
+    generatedFiles: "Also generated",
+    taskFolder: "Task folder",
+    openTaskFolder: "Open Task Folder",
+    advancedDetails: "Task folder details",
     folder: "Task folder",
     transcript: "Transcript",
-    notesInput: "Notes input",
+    notesInput: "Notes preparation",
     meetingMinutes: "Meeting minutes",
     completedSuccessfully: "Completed successfully",
     exitedWithCode: "Exited with code",

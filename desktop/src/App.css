@@ -870,7 +870,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 11px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .result-success-mark {
@@ -909,6 +909,47 @@ button:disabled {
   gap: 8px;
 }
 
+.primary-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--success-border);
+  border-radius: 13px;
+  background: var(--surface-elevated);
+  box-shadow: 0 7px 18px rgba(23, 112, 93, 0.08);
+}
+
+.primary-result .result-copy strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 680;
+}
+
+.primary-result .result-copy code {
+  margin-top: 3px;
+}
+
+.result-eyebrow {
+  margin-bottom: 2px;
+  color: var(--success);
+  font-size: 0.6rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.generated-results {
+  margin-top: 14px;
+}
+
+.generated-results h3 {
+  margin: 0 0 7px;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 680;
+}
+
 .result-item {
   display: flex;
   align-items: flex-start;
@@ -918,10 +959,6 @@ button:disabled {
   border: 1px solid var(--success-border);
   border-radius: 10px;
   background: var(--surface-elevated);
-}
-
-.result-item:first-child {
-  grid-column: 1 / -1;
 }
 
 .result-file-mark {
@@ -937,6 +974,14 @@ button:disabled {
   font-family: var(--font-mono);
   font-size: 0.62rem;
   font-weight: 700;
+}
+
+.result-file-mark.primary {
+  width: 31px;
+  height: 31px;
+  flex-basis: 31px;
+  color: #fff;
+  background: var(--success);
 }
 
 .result-copy {
@@ -955,6 +1000,44 @@ button:disabled {
 }
 
 .result-copy code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.result-details {
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid var(--success-border);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.result-details summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.result-details summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.task-folder-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: 9px;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--surface-elevated);
+}
+
+.task-folder-detail code {
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.68rem;
@@ -1555,10 +1638,6 @@ select:focus-visible,
   .credential-status-grid,
   .credential-fields {
     grid-template-columns: 1fr;
-  }
-
-  .result-item:first-child {
-    grid-column: auto;
   }
 
   .card-heading,
