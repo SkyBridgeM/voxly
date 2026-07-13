@@ -98,6 +98,11 @@ A future public Pre-release should contain the zip, a separate SHA-256 file, and
 a build manifest recording the app version, full source commit, build date,
 architecture, and unsigned status.
 
+Manual preparation and validation should follow
+[`docs/local_unsigned_artifact_checklist.md`](local_unsigned_artifact_checklist.md).
+The checklist is manual documentation only; it does not add scripts, CI
+publishing, or artifacts.
+
 Published assets are immutable. They must never be silently replaced. A broken
 artifact should be marked withdrawn; a correction uses a new unique Release and
 new integrity metadata.
