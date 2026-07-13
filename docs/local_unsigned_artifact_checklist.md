@@ -132,9 +132,18 @@ the Phase 6 plan before an artifact is shared outside the project.
 
 Live MiMo or DeepSeek checks must never be added to CI.
 
-## 8. Future artifact preparation policy
+## 8. Optional local artifact preparation
 
-A later PR may add a reviewed local process for creating these files:
+Only after the manual app checks above pass, the optional local-only packaging
+script may be used from the clean repository root:
+
+```bash
+./scripts/package_unsigned_macos_app.sh
+```
+
+The script packages the single existing `.app` under the release bundle
+directory. It does not build or modify the app. It creates these local files
+under `dist/unsigned/`:
 
 ```text
 meeting-asr-desktop-experiment-macos-arm64-<version>-unsigned.zip
@@ -142,12 +151,15 @@ meeting-asr-desktop-experiment-macos-arm64-<version>-unsigned.zip.sha256
 build-manifest-<version>-<short-sha>.json
 ```
 
-The future manifest must record the configured app version, full source commit,
-build date, `arm64` architecture, artifact filename, SHA-256, and unsigned
-status. The zip, checksum, and manifest must agree.
+The manifest records the configured app version, full source commit, build date,
+`arm64` architecture, artifact filename, SHA-256, unsigned status, and packaged
+sidecar status. The zip, checksum, and manifest must agree. Existing output is
+not overwritten unless the maintainer explicitly passes `--force`.
 
-PR #16 does not create any of these files. It adds no packaging script and does
-not modify the application version or Tauri configuration.
+These generated local files are not automatically approved for upload. Any
+GitHub upload remains blocked until every gate in
+[`docs/github_unsigned_prerelease_policy.md`](github_unsigned_prerelease_policy.md)
+passes. Running the script does not authorize a public release.
 
 ## 9. Release gate
 
@@ -169,10 +181,9 @@ This checklist does not itself authorize a public release.
 
 ## 10. Non-goals
 
-PR #16 does not:
+This checklist and optional packaging step do not:
 
 - create or upload a public artifact;
-- add or modify a packaging script;
 - add a CI release or artifact-upload workflow;
 - create a DMG or installer;
 - add an updater;
