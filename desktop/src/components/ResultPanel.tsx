@@ -29,29 +29,62 @@ export function ResultPanel({
   };
 
   return (
-    <div className="section results-section">
-      <div className="results-header">{labels.resultsTitle}</div>
+    <div
+      className="section results-section"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div className="results-header">
+        <span className="result-success-mark" aria-hidden="true">
+          ✓
+        </span>
+        <div>
+          <strong>{labels.resultsTitle}</strong>
+          <span>{labels.folder}</span>
+        </div>
+      </div>
       <div className="results-container">
         <div className="result-item">
-          <span className="result-label">{labels.folder}:</span>
-          <code>{taskFolder}</code>
+          <span className="result-file-mark" aria-hidden="true">
+            ⌁
+          </span>
+          <div className="result-copy">
+            <span className="result-label">{labels.folder}</span>
+            <code>{taskFolder}</code>
+          </div>
         </div>
         {transcriptPath && (
           <div className="result-item">
-            <span className="result-label">{labels.transcript}:</span>
-            <code>{getFileName(transcriptPath)}</code>
+            <span className="result-file-mark" aria-hidden="true">
+              T
+            </span>
+            <div className="result-copy">
+              <span className="result-label">{labels.transcript}</span>
+              <code>{getFileName(transcriptPath)}</code>
+            </div>
           </div>
         )}
         {notesInputPath && (
           <div className="result-item">
-            <span className="result-label">{labels.notesInput}:</span>
-            <code>{getFileName(notesInputPath)}</code>
+            <span className="result-file-mark" aria-hidden="true">
+              N
+            </span>
+            <div className="result-copy">
+              <span className="result-label">{labels.notesInput}</span>
+              <code>{getFileName(notesInputPath)}</code>
+            </div>
           </div>
         )}
         {minutesPath && (
           <div className="result-item">
-            <span className="result-label">{labels.meetingMinutes}:</span>
-            <code>{getFileName(minutesPath)}</code>
+            <span className="result-file-mark" aria-hidden="true">
+              M
+            </span>
+            <div className="result-copy">
+              <span className="result-label">{labels.meetingMinutes}</span>
+              <code>{getFileName(minutesPath)}</code>
+            </div>
           </div>
         )}
       </div>

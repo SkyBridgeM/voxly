@@ -3,9 +3,15 @@ export type Locale = "zh" | "en";
 export interface Translations {
   appTitle: string;
   appSubtitle: string;
+  appKicker: string;
+  workflowEyebrow: string;
+  workflowTitle: string;
+  workflowDescription: string;
   inputTitle: string;
+  outputModeTitle: string;
   chooseFile: string;
   noFileSelected: string;
+  audioFile: string;
   modeTranscript: string;
   modeTranscriptDesc: string;
   modeNotes: string;
@@ -72,15 +78,43 @@ export interface Translations {
   secureStore: string;
   developmentEnv: string;
   preflightUnavailable: string;
+  preflightPrompt: string;
+  chooseFileToBegin: string;
+  chooseFileToBeginDesc: string;
+  readyToRun: string;
+  readyToRunDesc: string;
+  settingsIntro: string;
+  settingsReadiness: string;
+  settingsReadinessDesc: string;
+  settingsAppearance: string;
+  settingsAppearanceDesc: string;
+  settingsBackend: string;
+  settingsBackendDesc: string;
+  settingsCredentials: string;
+  settingsCredentialsDesc: string;
+  settingsMinutesModel: string;
+  settingsMinutesModelDesc: string;
+  settingsOutputLocation: string;
+  settingsOutputLocationDesc: string;
+  theme: string;
+  themeSystem: string;
+  themeLight: string;
+  themeDark: string;
 }
 
 export const translations: Record<Locale, Translations> = {
   zh: {
     appTitle: "Meeting ASR Desktop",
     appSubtitle: "用于转写、笔记准备和 AI 会议纪要的实验性桌面工作流",
-    inputTitle: "输入",
+    appKicker: "本地会议工作台",
+    workflowEyebrow: "新建任务",
+    workflowTitle: "处理会议录音",
+    workflowDescription: "选择一段音频和需要的输出，其余文件会整理到同一个任务文件夹。",
+    inputTitle: "音频来源",
+    outputModeTitle: "输出类型",
     chooseFile: "选择音频文件",
     noFileSelected: "未选择文件",
+    audioFile: "音频文件",
     modeTranscript: "转写",
     modeTranscriptDesc: "音频 → 转写文本",
     modeNotes: "笔记准备",
@@ -150,13 +184,41 @@ export const translations: Record<Locale, Translations> = {
     secureStore: "安全存储",
     developmentEnv: "开发 .env",
     preflightUnavailable: "运行就绪检查暂不可用。",
+    preflightPrompt: "刷新后查看本机运行环境与配置状态。",
+    chooseFileToBegin: "从一段会议录音开始",
+    chooseFileToBeginDesc: "选择本机音频文件，再选择转写、笔记准备或会议纪要。",
+    readyToRun: "已准备好开始",
+    readyToRunDesc: "音频已选择。确认输出类型后即可开始处理。",
+    settingsIntro: "检查本机运行状态，并调整界面、处理后端与会话配置。",
+    settingsReadiness: "本机就绪状态",
+    settingsReadinessDesc: "检查运行模式、后端和系统依赖，不发起在线请求。",
+    settingsAppearance: "外观与语言",
+    settingsAppearanceDesc: "调整界面语言和主题偏好。",
+    settingsBackend: "处理后端",
+    settingsBackendDesc: "生产模式固定使用内置 Go；开发模式可选择 Python 或实验性 Go。",
+    settingsCredentials: "凭据",
+    settingsCredentialsDesc: "会话 Key 不会显示在状态信息、日志或输出文件中。",
+    settingsMinutesModel: "会议纪要模型",
+    settingsMinutesModelDesc: "DeepSeek 模型仅用于会议纪要输出。",
+    settingsOutputLocation: "输出位置",
+    settingsOutputLocationDesc: "所有任务文件都会保存在已配置输出位置之内。",
+    theme: "主题",
+    themeSystem: "跟随系统",
+    themeLight: "浅色",
+    themeDark: "深色",
   },
   en: {
     appTitle: "Meeting ASR Desktop",
     appSubtitle: "Experimental desktop workflow for transcripts, notes preparation, and AI meeting minutes",
-    inputTitle: "Input",
+    appKicker: "Local meeting workspace",
+    workflowEyebrow: "New task",
+    workflowTitle: "Process a meeting recording",
+    workflowDescription: "Choose an audio file and the output you need. Generated files stay together in one task folder.",
+    inputTitle: "Audio source",
+    outputModeTitle: "Output type",
     chooseFile: "Choose Audio File",
     noFileSelected: "No file selected",
+    audioFile: "Audio file",
     modeTranscript: "Transcript",
     modeTranscriptDesc: "Audio → transcript",
     modeNotes: "Notes preparation",
@@ -226,6 +288,28 @@ export const translations: Record<Locale, Translations> = {
     secureStore: "Secure store",
     developmentEnv: "Development .env",
     preflightUnavailable: "Runtime readiness check is unavailable.",
+    preflightPrompt: "Refresh to inspect this Mac's runtime and configuration status.",
+    chooseFileToBegin: "Start with a meeting recording",
+    chooseFileToBeginDesc: "Choose a local audio file, then select transcript, notes preparation, or meeting minutes.",
+    readyToRun: "Ready to begin",
+    readyToRunDesc: "Your audio is selected. Confirm the output type, then start processing.",
+    settingsIntro: "Inspect local readiness and adjust appearance, processing, and session configuration.",
+    settingsReadiness: "Local readiness",
+    settingsReadinessDesc: "Checks runtime policy, backend, and system dependencies without making online requests.",
+    settingsAppearance: "Appearance and language",
+    settingsAppearanceDesc: "Choose the interface language and theme preference.",
+    settingsBackend: "Processing backend",
+    settingsBackendDesc: "Production is fixed to packaged Go; development can use Python or experimental Go.",
+    settingsCredentials: "Credentials",
+    settingsCredentialsDesc: "Session keys are never shown in status metadata, logs, or output files.",
+    settingsMinutesModel: "Minutes model",
+    settingsMinutesModelDesc: "The DeepSeek model is used only for meeting-minutes output.",
+    settingsOutputLocation: "Output location",
+    settingsOutputLocationDesc: "Every task folder and generated file stays inside the configured output location.",
+    theme: "Theme",
+    themeSystem: "System",
+    themeLight: "Light",
+    themeDark: "Dark",
   },
 };
 

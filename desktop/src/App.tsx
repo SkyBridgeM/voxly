@@ -239,125 +239,206 @@ function App() {
   const preflightReadyForMode =
     outputMode === "minutes" ? preflight?.ready_for_minutes : preflight?.ready;
 
+  const hasActivity = isRunning || logs.length > 0 || taskFolder || status;
+
   return (
-    <div className="app">
-      <header className="app-header">
-        <h1>{t.appTitle}</h1>
-        <p className="subtitle">{t.appSubtitle}</p>
-        <div className="header-actions">
-          <button
-            className="btn-icon"
-            onClick={handleOpenSettings}
-            title={t.settingsTitle}
-          >
-            ⚙️
-          </button>
-        </div>
-      </header>
-
-      <div className="main-content">
-        <div className="section input-section">
-          <div className="section-header">
-            <label>{t.inputTitle}</label>
+    <div className="app-shell">
+      <div className="app">
+        <header className="app-header">
+          <div className="brand-lockup">
+            <div className="brand-mark" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div className="brand-copy">
+              <span className="app-kicker">{t.appKicker}</span>
+              <h1>{t.appTitle}</h1>
+              <p className="subtitle">{t.appSubtitle}</p>
+            </div>
           </div>
-
-          <FilePicker
-            audioPath={audioPath}
-            onFileSelected={setAudioPath}
-            disabled={isRunning}
-            labels={{ chooseFile: t.chooseFile, noFileSelected: t.noFileSelected }}
-          />
-
-          <RunControls
-            outputMode={outputMode}
-            onModeChange={setOutputMode}
-            onStartRun={startRun}
-            isRunning={isRunning}
-            audioPath={audioPath}
-            labels={{
-              modeTranscript: t.modeTranscript,
-              modeTranscriptDesc: t.modeTranscriptDesc,
-              modeNotes: t.modeNotes,
-              modeNotesDesc: t.modeNotesDesc,
-              modeMinutes: t.modeMinutes,
-              modeMinutesDesc: t.modeMinutesDesc,
-              start: t.start,
-              processing: t.processing,
-              llmWarning: t.llmWarning,
-              transcriptWarning: t.transcriptWarning,
-              notesWarning: t.notesWarning,
-            }}
-          />
-        </div>
-
-        <LogPanel
-          isRunning={isRunning}
-          progress={progress}
-          logs={logs}
-          showLogs={showLogs}
-          onToggleLogs={() => setShowLogs(!showLogs)}
-          onSetShowLogs={setShowLogs}
-          statusOk={statusOk}
-          labels={{
-            splitting: t.splitting,
-            transcribing: t.transcribing,
-            merging: t.merging,
-            preparingNotes: t.preparingNotes,
-            generatingMinutes: t.generatingMinutes,
-            done: t.done,
-            showLogs: t.showLogs,
-            hideLogs: t.hideLogs,
-          }}
-        />
-
-        <ResultPanel
-          taskFolder={taskFolder}
-          transcriptPath={transcriptPath}
-          notesInputPath={notesInputPath}
-          minutesPath={minutesPath}
-          onOpenFolder={handleOpenFolder}
-          labels={{
-            resultsTitle: t.resultsTitle,
-            folder: t.folder,
-            transcript: t.transcript,
-            notesInput: t.notesInput,
-            meetingMinutes: t.meetingMinutes,
-            openOutputFolder: t.openOutputFolder,
-          }}
-        />
-
-        {status && !isRunning && (
-          <div
-            className={`section status-section ${
-              statusOk === true ? "success" : statusOk === false ? "error" : ""
-            }`}
-          >
-            {status}
+          <div className="header-actions">
+            <span className="runtime-pill">
+              <span className="runtime-dot" aria-hidden="true"></span>
+              {runtimeMode === "production" ? t.production : t.development}
+            </span>
+            <button className="btn-settings" onClick={handleOpenSettings}>
+              {t.settingsTitle}
+            </button>
           </div>
-        )}
+        </header>
+
+        <main className="main-content">
+          <section className="workflow-card">
+            <div className="card-heading">
+              <div>
+                <span className="section-kicker">{t.workflowEyebrow}</span>
+                <h2>{t.workflowTitle}</h2>
+                <p>{t.workflowDescription}</p>
+              </div>
+              <span className="workflow-number" aria-hidden="true">
+                01
+              </span>
+            </div>
+
+            <div className="workflow-body">
+              <div className="workflow-block">
+                <div className="workflow-block-heading">
+                  <span>01</span>
+                  <h3>{t.inputTitle}</h3>
+                </div>
+                <FilePicker
+                  audioPath={audioPath}
+                  onFileSelected={setAudioPath}
+                  disabled={isRunning}
+                  labels={{
+                    chooseFile: t.chooseFile,
+                    noFileSelected: t.noFileSelected,
+                    audioFile: t.audioFile,
+                  }}
+                />
+              </div>
+
+              <div className="workflow-divider"></div>
+
+              <div className="workflow-block">
+                <div className="workflow-block-heading">
+                  <span>02</span>
+                  <h3>{t.outputModeTitle}</h3>
+                </div>
+                <RunControls
+                  outputMode={outputMode}
+                  onModeChange={setOutputMode}
+                  onStartRun={startRun}
+                  isRunning={isRunning}
+                  audioPath={audioPath}
+                  labels={{
+                    modeTranscript: t.modeTranscript,
+                    modeTranscriptDesc: t.modeTranscriptDesc,
+                    modeNotes: t.modeNotes,
+                    modeNotesDesc: t.modeNotesDesc,
+                    modeMinutes: t.modeMinutes,
+                    modeMinutesDesc: t.modeMinutesDesc,
+                    start: t.start,
+                    processing: t.processing,
+                    llmWarning: t.llmWarning,
+                    transcriptWarning: t.transcriptWarning,
+                    notesWarning: t.notesWarning,
+                  }}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="activity-region">
+            {!hasActivity && (
+              <div className={`empty-state ${audioPath ? "has-file" : ""}`}>
+                <div className="empty-visual" aria-hidden="true">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <div>
+                  <strong>{audioPath ? t.readyToRun : t.chooseFileToBegin}</strong>
+                  <p>{audioPath ? t.readyToRunDesc : t.chooseFileToBeginDesc}</p>
+                </div>
+              </div>
+            )}
+
+            <LogPanel
+              isRunning={isRunning}
+              progress={progress}
+              logs={logs}
+              showLogs={showLogs}
+              onToggleLogs={() => setShowLogs(!showLogs)}
+              onSetShowLogs={setShowLogs}
+              statusOk={statusOk}
+              labels={{
+                splitting: t.splitting,
+                transcribing: t.transcribing,
+                merging: t.merging,
+                preparingNotes: t.preparingNotes,
+                generatingMinutes: t.generatingMinutes,
+                done: t.done,
+                showLogs: t.showLogs,
+                hideLogs: t.hideLogs,
+              }}
+            />
+
+            <ResultPanel
+              taskFolder={taskFolder}
+              transcriptPath={transcriptPath}
+              notesInputPath={notesInputPath}
+              minutesPath={minutesPath}
+              onOpenFolder={handleOpenFolder}
+              labels={{
+                resultsTitle: t.resultsTitle,
+                folder: t.folder,
+                transcript: t.transcript,
+                notesInput: t.notesInput,
+                meetingMinutes: t.meetingMinutes,
+                openOutputFolder: t.openOutputFolder,
+              }}
+            />
+
+            {status && !isRunning && (
+              <div
+                className={`section status-section ${
+                  statusOk === true
+                    ? "success"
+                    : statusOk === false
+                      ? "error"
+                      : ""
+                }`}
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <span className="status-mark" aria-hidden="true">
+                  {statusOk === true ? "✓" : statusOk === false ? "!" : "·"}
+                </span>
+                <span>{status}</span>
+              </div>
+            )}
+          </section>
+        </main>
       </div>
 
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-header">
-              <h2>{t.settingsTitle}</h2>
+              <div>
+                <span className="modal-eyebrow">{t.appKicker}</span>
+                <h2 id="settings-title">{t.settingsTitle}</h2>
+                <p>{t.settingsIntro}</p>
+              </div>
               <button
                 className="btn-close"
                 onClick={() => setShowSettings(false)}
+                aria-label={t.close}
               >
                 ×
               </button>
             </div>
-            <div className="modal-body">
-              <div className="warning-banner settings-warning">
-                {runtimeMode === "production" ? t.productionCredentialsNote : t.keysNotPersisted}
-              </div>
-              <div className="preflight-panel">
-                <div className="preflight-header">
-                  <div>
-                    <h3>{t.readinessTitle}</h3>
-                    <span>{t.readinessLocalOnly}</span>
+
+            <div className="modal-body settings-body">
+              <section className="settings-section">
+                <div className="settings-section-header settings-section-header-action">
+                  <div className="settings-section-title">
+                    <span>01</span>
+                    <div>
+                      <h3>{t.settingsReadiness}</h3>
+                      <p>{t.settingsReadinessDesc}</p>
+                    </div>
                   </div>
                   <button
                     className="btn-secondary preflight-refresh"
@@ -367,173 +448,324 @@ function App() {
                     {preflightLoading ? t.checking : t.refresh}
                   </button>
                 </div>
-                {preflightError && <div className="preflight-error">{preflightError}</div>}
+
+                {preflightError && (
+                  <div className="preflight-error">{preflightError}</div>
+                )}
+                {!preflight && !preflightError && (
+                  <div className="preflight-empty">{t.preflightPrompt}</div>
+                )}
                 {preflight && (
-                  <>
+                  <div className="preflight-panel">
                     <div
                       className={`preflight-summary ${
                         preflightReadyForMode ? "ready" : "not-ready"
                       }`}
                     >
-                      {preflightReadyForMode ? "✓" : "!"} {preflightReadyForMode ? t.ready : t.notReady}
-                      {` · ${outputModeLabel(outputMode)}`}
+                      <span aria-hidden="true">
+                        {preflightReadyForMode ? "✓" : "!"}
+                      </span>
+                      <strong>
+                        {preflightReadyForMode ? t.ready : t.notReady}
+                      </strong>
+                      <span>{outputModeLabel(outputMode)}</span>
                     </div>
                     <div className="preflight-grid">
                       <div className="preflight-item">
                         <span className="preflight-label">{t.runtimeMode}</span>
                         <span className="preflight-value">
-                          {preflight.runtime_mode === "production" ? t.production : t.development}
+                          {preflight.runtime_mode === "production"
+                            ? t.production
+                            : t.development}
                         </span>
                       </div>
                       <div className="preflight-item">
                         <span className="preflight-label">{t.backend}</span>
                         <span className="preflight-value">
-                          {backendLabel(preflight.runtime_mode, preflight.backend)}
+                          {backendLabel(
+                            preflight.runtime_mode,
+                            preflight.backend
+                          )}
                         </span>
                       </div>
-                      <div className="preflight-item">
-                        <span className="preflight-label">{t.sidecar}</span>
-                        <span className={preflight.sidecar.ready ? "preflight-value ready" : "preflight-value not-ready"}>
-                          {preflight.sidecar.ready ? t.ready : t.notReady}
-                        </span>
-                        <span className="preflight-detail">{preflight.sidecar.message}</span>
-                      </div>
-                      <div className="preflight-item">
-                        <span className="preflight-label">ffmpeg</span>
-                        <span className={preflight.ffmpeg.ready ? "preflight-value ready" : "preflight-value not-ready"}>
-                          {preflight.ffmpeg.ready ? t.ready : t.notReady}
-                        </span>
-                        <span className="preflight-detail">{preflight.ffmpeg.message}</span>
-                      </div>
-                      <div className="preflight-item preflight-item-wide">
-                        <span className="preflight-label">{t.outputRoot}</span>
-                        <code className="preflight-path">{preflight.output_root.path}</code>
-                        <span className={preflight.output_root.ready ? "preflight-value ready" : "preflight-value not-ready"}>
-                          {preflight.output_root.ready ? t.ready : t.notReady}
-                        </span>
-                        <span className="preflight-detail">{preflight.output_root.message}</span>
-                      </div>
-                      <div className="preflight-item">
-                        <span className="preflight-label">{t.mimoApiKey}</span>
-                        <span className={preflight.mimo_api_key.status.configured ? "preflight-value ready" : "preflight-value not-ready"}>
-                          {credentialStatusText(preflight.mimo_api_key)}
+                      <div className="preflight-item preflight-item-diagnostic">
+                        <div className="preflight-item-row">
+                          <span className="preflight-label">{t.sidecar}</span>
+                          <span
+                            className={
+                              preflight.sidecar.ready
+                                ? "preflight-value ready"
+                                : "preflight-value not-ready"
+                            }
+                          >
+                            {preflight.sidecar.ready ? t.ready : t.notReady}
+                          </span>
+                        </div>
+                        <span className="preflight-detail">
+                          {preflight.sidecar.message}
                         </span>
                       </div>
-                      <div className="preflight-item">
-                        <span className="preflight-label">{t.deepseekApiKey}</span>
-                        <span className={preflight.deepseek_api_key.status.configured ? "preflight-value ready" : "preflight-value not-ready"}>
-                          {credentialStatusText(preflight.deepseek_api_key)}
+                      <div className="preflight-item preflight-item-diagnostic">
+                        <div className="preflight-item-row">
+                          <span className="preflight-label">ffmpeg</span>
+                          <span
+                            className={
+                              preflight.ffmpeg.ready
+                                ? "preflight-value ready"
+                                : "preflight-value not-ready"
+                            }
+                          >
+                            {preflight.ffmpeg.ready ? t.ready : t.notReady}
+                          </span>
+                        </div>
+                        <span className="preflight-detail">
+                          {preflight.ffmpeg.message}
                         </span>
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
-              </div>
-              <div className="form-group">
-                <label>{t.language}</label>
-                <select
-                  value={locale}
-                  onChange={(e) => setLocaleState(e.target.value as Locale)}
-                >
-                  <option value="zh">中文</option>
-                  <option value="en">English</option>
-                </select>
-              </div>
-              {runtimeMode === "production" ? (
-                <div className="form-group">
-                  <label>{t.backend}</label>
-                  <div>{t.backendGoProduction}</div>
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>02</span>
+                    <div>
+                      <h3>{t.settingsAppearance}</h3>
+                      <p>{t.settingsAppearanceDesc}</p>
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <div className="form-group">
-                  <label>{t.backend}</label>
+                <div className="settings-form-grid">
+                  <div className="form-group">
+                    <label>{t.language}</label>
+                    <select
+                      value={locale}
+                      onChange={(e) =>
+                        setLocaleState(e.target.value as Locale)
+                      }
+                    >
+                      <option value="zh">中文</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>{t.theme}</label>
+                    <select
+                      value={theme}
+                      onChange={(e) => setTheme(e.target.value as Theme)}
+                    >
+                      <option value="system">{t.themeSystem}</option>
+                      <option value="light">{t.themeLight}</option>
+                      <option value="dark">{t.themeDark}</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>03</span>
+                    <div>
+                      <h3>{t.settingsBackend}</h3>
+                      <p>{t.settingsBackendDesc}</p>
+                    </div>
+                  </div>
+                </div>
+                {runtimeMode === "production" ? (
+                  <div className="readonly-field">
+                    <span className="readonly-dot" aria-hidden="true"></span>
+                    {t.backendGoProduction}
+                  </div>
+                ) : (
+                  <div className="form-group form-group-compact">
+                    <label>{t.backend}</label>
+                    <select
+                      value={backend}
+                      onChange={(e) =>
+                        setBackend(e.target.value === "go" ? "go" : "python")
+                      }
+                    >
+                      <option value="python">{t.backendPython}</option>
+                      <option value="go">{t.backendGoExperimental}</option>
+                    </select>
+                  </div>
+                )}
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>04</span>
+                    <div>
+                      <h3>{t.settingsCredentials}</h3>
+                      <p>{t.settingsCredentialsDesc}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="settings-note">
+                  <span className="warning-icon" aria-hidden="true">
+                    i
+                  </span>
+                  <span>
+                    {runtimeMode === "production"
+                      ? t.productionCredentialsNote
+                      : t.keysNotPersisted}
+                  </span>
+                </div>
+
+                {preflight && (
+                  <div className="credential-status-grid">
+                    <div className="credential-status-item">
+                      <span>{t.mimoApiKey}</span>
+                      <strong
+                        className={
+                          preflight.mimo_api_key.status.configured
+                            ? "ready"
+                            : "not-ready"
+                        }
+                      >
+                        {credentialStatusText(preflight.mimo_api_key)}
+                      </strong>
+                    </div>
+                    <div className="credential-status-item">
+                      <span>{t.deepseekApiKey}</span>
+                      <strong
+                        className={
+                          preflight.deepseek_api_key.status.configured
+                            ? "ready"
+                            : "not-ready"
+                        }
+                      >
+                        {credentialStatusText(preflight.deepseek_api_key)}
+                      </strong>
+                    </div>
+                  </div>
+                )}
+
+                <div className="credential-fields">
+                  <div className="form-group">
+                    <label>{t.mimoApiKey}</label>
+                    <div className="key-input-row">
+                      <input
+                        type="password"
+                        value={mimoApiKey}
+                        onChange={(e) => setMimoApiKey(e.target.value)}
+                        placeholder={credentialPlaceholder}
+                      />
+                      {runtimeMode === "development" && (
+                        <button
+                          className="btn-secondary btn-save-key"
+                          onClick={() =>
+                            handleSaveKey("MIMO_API_KEY", mimoApiKey)
+                          }
+                          disabled={!mimoApiKey.trim()}
+                          title={t.saveToEnv}
+                        >
+                          {t.saveToEnv}
+                        </button>
+                      )}
+                    </div>
+                    {saveStatus["MIMO_API_KEY"] && (
+                      <span className="save-status">
+                        {saveStatus["MIMO_API_KEY"]}
+                      </span>
+                    )}
+                  </div>
+                  <div className="form-group">
+                    <label>{t.deepseekApiKey}</label>
+                    <div className="key-input-row">
+                      <input
+                        type="password"
+                        value={deepseekApiKey}
+                        onChange={(e) => setDeepseekApiKey(e.target.value)}
+                        placeholder={credentialPlaceholder}
+                      />
+                      {runtimeMode === "development" && (
+                        <button
+                          className="btn-secondary btn-save-key"
+                          onClick={() =>
+                            handleSaveKey(
+                              "DEEPSEEK_API_KEY",
+                              deepseekApiKey
+                            )
+                          }
+                          disabled={!deepseekApiKey.trim()}
+                          title={t.saveToEnv}
+                        >
+                          {t.saveToEnv}
+                        </button>
+                      )}
+                    </div>
+                    {saveStatus["DEEPSEEK_API_KEY"] && (
+                      <span className="save-status">
+                        {saveStatus["DEEPSEEK_API_KEY"]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>05</span>
+                    <div>
+                      <h3>{t.settingsMinutesModel}</h3>
+                      <p>{t.settingsMinutesModelDesc}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="form-group form-group-compact">
+                  <label>{t.deepseekModel}</label>
                   <select
-                    value={backend}
-                    onChange={(e) => setBackend(e.target.value === "go" ? "go" : "python")}
+                    value={deepseekModel}
+                    onChange={(e) => setDeepseekModel(e.target.value)}
                   >
-                    <option value="python">{t.backendPython}</option>
-                    <option value="go">{t.backendGoExperimental}</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
                   </select>
                 </div>
-              )}
-              <div className="form-group">
-                <label>{locale === "zh" ? "主题" : "Theme"}</label>
-                <select
-                  value={theme}
-                  onChange={(e) => setTheme(e.target.value as Theme)}
-                >
-                  <option value="system">
-                    {locale === "zh" ? "跟随系统" : "System"}
-                  </option>
-                  <option value="light">
-                    {locale === "zh" ? "浅色" : "Light"}
-                  </option>
-                  <option value="dark">
-                    {locale === "zh" ? "深色" : "Dark"}
-                  </option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>{t.mimoApiKey}</label>
-                <div className="key-input-row">
-                  <input
-                    type="password"
-                    value={mimoApiKey}
-                    onChange={(e) => setMimoApiKey(e.target.value)}
-                    placeholder={credentialPlaceholder}
-                  />
-                  {runtimeMode === "development" && (
-                    <button
-                      className="btn-secondary btn-save-key"
-                      onClick={() => handleSaveKey("MIMO_API_KEY", mimoApiKey)}
-                      disabled={!mimoApiKey.trim()}
-                      title={t.saveToEnv}
-                    >
-                      {t.saveToEnv}
-                    </button>
-                  )}
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>06</span>
+                    <div>
+                      <h3>{t.settingsOutputLocation}</h3>
+                      <p>{t.settingsOutputLocationDesc}</p>
+                    </div>
+                  </div>
                 </div>
-                {saveStatus["MIMO_API_KEY"] && (
-                  <span className="save-status">{saveStatus["MIMO_API_KEY"]}</span>
+                {preflight ? (
+                  <div className="output-location-card">
+                    <div className="output-location-meta">
+                      <span className="preflight-label">{t.outputRoot}</span>
+                      <span
+                        className={
+                          preflight.output_root.ready
+                            ? "preflight-value ready"
+                            : "preflight-value not-ready"
+                        }
+                      >
+                        {preflight.output_root.ready ? t.ready : t.notReady}
+                      </span>
+                    </div>
+                    <code>{preflight.output_root.path}</code>
+                    <p>{preflight.output_root.message}</p>
+                  </div>
+                ) : (
+                  <div className="preflight-empty">{t.preflightPrompt}</div>
                 )}
-              </div>
-              <div className="form-group">
-                <label>{t.deepseekApiKey}</label>
-                <div className="key-input-row">
-                  <input
-                    type="password"
-                    value={deepseekApiKey}
-                    onChange={(e) => setDeepseekApiKey(e.target.value)}
-                    placeholder={credentialPlaceholder}
-                  />
-                  {runtimeMode === "development" && (
-                    <button
-                      className="btn-secondary btn-save-key"
-                      onClick={() => handleSaveKey("DEEPSEEK_API_KEY", deepseekApiKey)}
-                      disabled={!deepseekApiKey.trim()}
-                      title={t.saveToEnv}
-                    >
-                      {t.saveToEnv}
-                    </button>
-                  )}
-                </div>
-                {saveStatus["DEEPSEEK_API_KEY"] && (
-                  <span className="save-status">{saveStatus["DEEPSEEK_API_KEY"]}</span>
-                )}
-              </div>
-              <div className="form-group">
-                <label>{t.deepseekModel}</label>
-                <select
-                  value={deepseekModel}
-                  onChange={(e) => setDeepseekModel(e.target.value)}
-                >
-                  <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-                  <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                </select>
-              </div>
+              </section>
             </div>
+
             <div className="modal-footer">
-              <button className="btn-primary" onClick={handleCloseSettings}>
+              <button className="btn-secondary" onClick={handleCloseSettings}>
                 {t.close}
               </button>
             </div>
@@ -545,18 +777,28 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowError(false)}>
           <div
             className="modal modal-error"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="error-title"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
-              <h2>{t.errorTitle}</h2>
+              <div>
+                <span className="modal-eyebrow">Meeting ASR</span>
+                <h2 id="error-title">{t.errorTitle}</h2>
+              </div>
               <button
                 className="btn-close"
                 onClick={() => setShowError(false)}
+                aria-label={t.close}
               >
                 ×
               </button>
             </div>
             <div className="modal-body">
+              <div className="error-state-mark" aria-hidden="true">
+                !
+              </div>
               <p className="error-message">{errorMessage}</p>
             </div>
             <div className="modal-footer">
