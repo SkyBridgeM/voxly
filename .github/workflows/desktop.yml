@@ -1,10 +1,13 @@
 name: Desktop Readiness
 
 on:
+  workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - "desktop/**"
-      - "core-go/**"
+      - "desktop/src-tauri/**"
+      - "desktop/package.json"
+      - "desktop/package-lock.json"
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
@@ -14,8 +17,9 @@ on:
     branches:
       - main
     paths:
-      - "desktop/**"
-      - "core-go/**"
+      - "desktop/src-tauri/**"
+      - "desktop/package.json"
+      - "desktop/package-lock.json"
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
@@ -28,6 +32,7 @@ permissions:
 jobs:
   verify:
     name: Offline desktop readiness
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
