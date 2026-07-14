@@ -21,7 +21,7 @@ func TestCreateManifest(t *testing.T) {
 	manifest := CreateManifest(taskDir, sourceAudio, outputMode, chunkMinutes, maxUploadMB, asrProvider, asrModel)
 
 	if manifest.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, manifest.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, manifest.SchemaVersion)
 	}
 	if manifest.TaskID != filepath.Base(taskDir) {
 		t.Errorf("expected task ID %q, got %q", filepath.Base(taskDir), manifest.TaskID)
@@ -75,6 +75,24 @@ func TestSaveAndLoadManifest(t *testing.T) {
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(ManifestPath(taskDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, legacyField := range []string{"output_mode", "source", "state", "chunks", "last_error"} {
+		if _, exists := document[legacyField]; exists {
+			t.Errorf("legacy top-level field %q was written", legacyField)
+		}
+	}
+	for _, taskManifestField := range []string{"execution", "input", "artifacts", "checkpoint"} {
+		if _, exists := document[taskManifestField]; !exists {
+			t.Errorf("TaskManifest field %q missing", taskManifestField)
+		}
+	}
 
 	loaded, err := LoadManifest(taskDir)
 	if err != nil {
@@ -82,7 +100,7 @@ func TestSaveAndLoadManifest(t *testing.T) {
 	}
 
 	if loaded.SchemaVersion != currentSchemaVersion {
-		t.Errorf("schema version mismatch: expected %d, got %d", currentSchemaVersion, loaded.SchemaVersion)
+		t.Errorf("schema version mismatch: expected %q, got %q", currentSchemaVersion, loaded.SchemaVersion)
 	}
 	if loaded.TaskID != manifest.TaskID {
 		t.Errorf("task ID mismatch: expected %q, got %q", manifest.TaskID, loaded.TaskID)
@@ -363,7 +381,7 @@ func TestValidateManifest(t *testing.T) {
 		},
 		{
 			name:    "wrong schema version",
-			m:       &Manifest{SchemaVersion: 99, TaskID: "t1", OutputMode: "transcript", State: TaskCreated},
+			m:       &Manifest{SchemaVersion: "99", TaskID: "t1", OutputMode: "transcript", State: TaskCreated},
 			wantErr: "unsupported schema version",
 		},
 		{

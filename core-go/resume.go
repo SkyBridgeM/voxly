@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
 var chunkNameRE = regexp.MustCompile(`^part_(\d{3})\.(mp3|wav)$`)
@@ -73,16 +75,6 @@ func RunResume(args []string) error {
 		m, err = migrateLegacyManifest(absTaskDir, legacy)
 		if err != nil {
 			return fmt.Errorf("migrating legacy manifest: %w", err)
-		}
-	}
-
-	// Migrate legacy manifest only if schema version is older than current.
-	// A current-schema manifest with empty Chunks.Items is a legitimate
-	// CREATED/SPLITTING interrupted state — do NOT migrate it.
-	if m.SchemaVersion < currentSchemaVersion {
-		m, err = migrateManifest(absTaskDir, m)
-		if err != nil {
-			return fmt.Errorf("migrating manifest: %w", err)
 		}
 	}
 
@@ -555,6 +547,7 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 		IntegrityVersion: old.IntegrityVersion,
 		TaskID:           filepath.Base(taskDir),
 		OutputMode:       old.OutputMode,
+		Execution:        taskmanifest.ExecutionMetadata{Backend: "go", Provider: old.Chunks.ASRProvider, OutputMode: old.OutputMode, Status: "created", Stage: TaskCreated, Attempt: 1},
 		State:            TaskCreated,
 		Attempt:          1,
 		Source:           old.Source,
@@ -566,6 +559,9 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 		},
 		CreatedAt: old.CreatedAt,
 		UpdatedAt: now,
+	}
+	if m.Execution.Provider == "" {
+		m.Execution.Provider = "unknown"
 	}
 	if m.CreatedAt == "" {
 		m.CreatedAt = now
@@ -624,7 +620,7 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 // current schema before handing it to the common filesystem reconciliation.
 func migrateLegacyManifest(taskDir string, old *legacyManifest) (*Manifest, error) {
 	m := &Manifest{
-		SchemaVersion: 0,
+		SchemaVersion: "",
 		TaskID:        filepath.Base(taskDir),
 		OutputMode:    old.OutputMode,
 		Source: SourceInfo{

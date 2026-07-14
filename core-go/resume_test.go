@@ -547,6 +547,13 @@ func TestMigrateManifest_BuildsFromDisk(t *testing.T) {
 	taskDir := createTestTaskDir(t)
 	createChunks(t, filepath.Join(taskDir, "chunks"), 3, "wav")
 	createTranscripts(t, filepath.Join(taskDir, "transcripts"), []int{1, 2})
+	audioDir := filepath.Join(taskDir, "audio")
+	if err := os.MkdirAll(audioDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(audioDir, "source.wav"), []byte("audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Write a legacy manifest (simulated by schema_version 0).
 	old := &Manifest{
@@ -554,22 +561,13 @@ func TestMigrateManifest_BuildsFromDisk(t *testing.T) {
 		OutputMode: "transcript",
 		CreatedAt:  "2026-01-01T00:00:00Z",
 	}
-	if err := SaveManifest(taskDir, old); err != nil {
-		t.Fatal(err)
-	}
-	// Overwrite schema_version to 0 to simulate legacy.
-	old.SchemaVersion = 0
-	if err := SaveManifest(taskDir, old); err != nil {
-		t.Fatal(err)
-	}
-
 	migrated, err := migrateManifest(taskDir, old)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if migrated.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, migrated.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, migrated.SchemaVersion)
 	}
 	if migrated.Chunks.Total != 3 {
 		t.Errorf("expected 3 chunks, got %d", migrated.Chunks.Total)
@@ -623,7 +621,7 @@ func TestRunResume_MigratesLegacyManifestFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if migrated.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, migrated.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, migrated.SchemaVersion)
 	}
 	if migrated.Source.Path != taskSourcePath {
 		t.Errorf("source path should use the task-local copy: got %q", migrated.Source.Path)

@@ -1,5 +1,5 @@
-// Package taskmanifest provides the versioned Task manifest data model.
-// It is intentionally not wired into the existing runtime manifest yet.
+// Package taskmanifest provides the versioned Task manifest data model used by
+// the runtime as its durable checkpoint and resume source of truth.
 package taskmanifest
 
 import (
@@ -30,9 +30,65 @@ type TaskManifest struct {
 	UpdatedAt     string                     `json:"updated_at"`
 	Execution     ExecutionMetadata          `json:"execution"`
 	Input         InputMetadata              `json:"input"`
-	Artifacts     map[string]Artifact        `json:"artifacts"`
+	Artifacts     Artifacts                  `json:"artifacts"`
+	Checkpoint    *CheckpointMetadata        `json:"checkpoint,omitempty"`
 	UserMetadata  *UserMetadata              `json:"user_metadata,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
+
+	// Runtime checkpoint accessors are excluded from JSON. The custom codec
+	// maps them to the versioned execution/input/checkpoint sections so runtime
+	// code and persisted TaskManifest state cannot diverge.
+	IntegrityVersion int        `json:"-"`
+	OutputMode       string     `json:"-"`
+	Source           SourceInfo `json:"-"`
+	State            string     `json:"-"`
+	Attempt          int        `json:"-"`
+	Chunks           ChunksInfo `json:"-"`
+	LastError        *ErrorInfo `json:"-"`
+	CompletedAt      *string    `json:"-"`
+}
+
+type SourceInfo struct {
+	Path         string `json:"path"`
+	OriginalName string `json:"original_name"`
+	SizeBytes    int64  `json:"size_bytes"`
+}
+
+type ErrorInfo struct {
+	Stage     string `json:"stage"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+	At        string `json:"at"`
+}
+
+// Artifacts is the fixed set of runtime deliverables. Unknown artifact kinds
+// are retained for forward-compatible reads.
+type Artifacts struct {
+	Transcript    Artifact                   `json:"transcript"`
+	NotesInput    Artifact                   `json:"notes,omitempty"`
+	Minutes       Artifact                   `json:"minutes,omitempty"`
+	UnknownFields map[string]json.RawMessage `json:"-"`
+}
+
+func (artifacts Artifacts) Get(name string) (Artifact, bool) {
+	switch name {
+	case "transcript":
+		return artifacts.Transcript, true
+	case "notes", "notes_input":
+		return artifacts.NotesInput, true
+	case "minutes":
+		return artifacts.Minutes, true
+	default:
+		data, ok := artifacts.UnknownFields[name]
+		if !ok {
+			return Artifact{}, false
+		}
+		var artifact Artifact
+		if json.Unmarshal(data, &artifact) != nil {
+			return Artifact{}, false
+		}
+		return artifact, true
+	}
 }
 
 type ExecutionMetadata struct {
@@ -40,6 +96,9 @@ type ExecutionMetadata struct {
 	Provider      string                     `json:"provider"`
 	OutputMode    string                     `json:"output_mode"`
 	Status        string                     `json:"status"`
+	Stage         string                     `json:"stage,omitempty"`
+	Attempt       int                        `json:"attempt,omitempty"`
+	CompletedAt   *string                    `json:"completed_at,omitempty"`
 	ErrorSummary  *ArtifactError             `json:"error_summary,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
 }
@@ -49,15 +108,48 @@ type InputMetadata struct {
 	SourceOwnership string                     `json:"source_ownership"`
 	DurationSeconds *float64                   `json:"duration_seconds,omitempty"`
 	Format          string                     `json:"format"`
+	OriginalName    string                     `json:"original_name,omitempty"`
+	SizeBytes       int64                      `json:"size_bytes,omitempty"`
 	SourceMetadata  map[string]json.RawMessage `json:"metadata,omitempty"`
 	UnknownFields   map[string]json.RawMessage `json:"-"`
 }
 
 type Artifact struct {
-	Status        string                     `json:"status"`
+	State         string                     `json:"status"`
 	Path          string                     `json:"path,omitempty"`
+	SHA256        string                     `json:"sha256,omitempty"`
 	Error         *ArtifactError             `json:"error,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
+}
+
+// CheckpointMetadata contains runtime-only progress needed for idempotent
+// resume. It is execution truth, not user-editable organization metadata.
+type CheckpointMetadata struct {
+	IntegrityVersion int                        `json:"integrity_version,omitempty"`
+	Chunks           ChunksInfo                 `json:"chunks"`
+	UnknownFields    map[string]json.RawMessage `json:"-"`
+}
+
+type ChunksInfo struct {
+	Format       string      `json:"format,omitempty"`
+	ChunkMinutes int         `json:"chunk_minutes"`
+	MaxUploadMB  float64     `json:"max_upload_mb"`
+	ASRProvider  string      `json:"asr_provider"`
+	ASRModel     string      `json:"asr_model"`
+	Total        int         `json:"total"`
+	Items        []ChunkItem `json:"items"`
+}
+
+type ChunkItem struct {
+	ID               string  `json:"id"`
+	AudioPath        string  `json:"audio_path"`
+	TranscriptPath   string  `json:"transcript_path"`
+	State            string  `json:"status"`
+	Attempts         int     `json:"attempts"`
+	SizeBytes        int64   `json:"size_bytes"`
+	AudioSHA256      string  `json:"audio_sha256,omitempty"`
+	TranscriptSHA256 string  `json:"transcript_sha256,omitempty"`
+	LastError        *string `json:"last_error,omitempty"`
 }
 
 type ArtifactError struct {
@@ -126,12 +218,19 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	if strings.TrimSpace(manifest.Input.Format) == "" {
 		return errors.New("task manifest missing input.format")
 	}
-	if len(manifest.Artifacts) == 0 {
-		return errors.New("task manifest missing artifacts")
+	for name, artifact := range map[string]Artifact{
+		"transcript": manifest.Artifacts.Transcript,
+		"notes":      manifest.Artifacts.NotesInput,
+		"minutes":    manifest.Artifacts.Minutes,
+	} {
+		if err := artifact.validate(name); err != nil {
+			return err
+		}
 	}
-	for name, artifact := range manifest.Artifacts {
-		if strings.TrimSpace(name) == "" {
-			return errors.New("task manifest contains artifact with empty name")
+	for name, raw := range manifest.Artifacts.UnknownFields {
+		var artifact Artifact
+		if err := json.Unmarshal(raw, &artifact); err != nil {
+			return fmt.Errorf("parse artifact %q: %w", name, err)
 		}
 		if err := artifact.validate(name); err != nil {
 			return err
@@ -165,16 +264,13 @@ func (execution ExecutionMetadata) validate() error {
 }
 
 func (artifact Artifact) validate(name string) error {
-	if _, ok := artifactStatuses[artifact.Status]; !ok {
-		return fmt.Errorf("artifact %q has invalid status %q", name, artifact.Status)
+	if _, ok := artifactStatuses[artifact.State]; !ok {
+		return fmt.Errorf("artifact %q has invalid status %q", name, artifact.State)
 	}
-	if artifact.Status == "completed" && strings.TrimSpace(artifact.Path) == "" {
+	if artifact.State == "completed" && strings.TrimSpace(artifact.Path) == "" {
 		return fmt.Errorf("completed artifact %q missing path", name)
 	}
-	if artifact.Status != "completed" && artifact.Path != "" {
-		return fmt.Errorf("artifact %q with status %q must not have a completed path", name, artifact.Status)
-	}
-	if artifact.Status == "failed" {
+	if artifact.State == "failed" {
 		if artifact.Error == nil {
 			return fmt.Errorf("failed artifact %q missing structured error", name)
 		}
@@ -182,7 +278,7 @@ func (artifact Artifact) validate(name string) error {
 			return err
 		}
 	} else if artifact.Error != nil {
-		return fmt.Errorf("artifact %q with status %q must not have an error", name, artifact.Status)
+		return fmt.Errorf("artifact %q with status %q must not have an error", name, artifact.State)
 	}
 	return nil
 }
@@ -295,19 +391,107 @@ func marshalWithUnknown(known any, unknown map[string]json.RawMessage) ([]byte, 
 
 func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	type plain TaskManifest
-	unknown, err := unmarshalWithUnknown(data, (*plain)(manifest), "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "user_metadata")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(manifest), "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata")
 	manifest.UnknownFields = unknown
+	manifest.syncRuntime()
 	return err
 }
 
 func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
+	manifest.syncCanonical()
 	type plain TaskManifest
 	return marshalWithUnknown(plain(manifest), manifest.UnknownFields)
 }
 
+func (manifest *TaskManifest) syncCanonical() {
+	if manifest.OutputMode != "" {
+		manifest.Execution.OutputMode = manifest.OutputMode
+	}
+	if manifest.State != "" {
+		manifest.Execution.Stage = manifest.State
+		manifest.Execution.Status = aggregateStatus(manifest.State)
+	}
+	if manifest.Attempt != 0 {
+		manifest.Execution.Attempt = manifest.Attempt
+	}
+	if manifest.CompletedAt != nil {
+		manifest.Execution.CompletedAt = manifest.CompletedAt
+	}
+	if manifest.LastError != nil {
+		retryable := manifest.LastError.Retryable
+		manifest.Execution.ErrorSummary = &ArtifactError{Code: manifest.LastError.Stage, Message: manifest.LastError.Message, Retryable: &retryable}
+	} else if manifest.State != "FAILED" {
+		manifest.Execution.ErrorSummary = nil
+	}
+	if manifest.Source.Path != "" {
+		manifest.Input.SourceReference = manifest.Source.Path
+		manifest.Input.OriginalName = manifest.Source.OriginalName
+		manifest.Input.SizeBytes = manifest.Source.SizeBytes
+	}
+	if manifest.Input.SourceOwnership == "" {
+		manifest.Input.SourceOwnership = "task_copy"
+	}
+	if manifest.Input.Format == "" {
+		manifest.Input.Format = "unknown"
+	}
+	if manifest.Checkpoint == nil {
+		manifest.Checkpoint = &CheckpointMetadata{}
+	}
+	manifest.Checkpoint.IntegrityVersion = manifest.IntegrityVersion
+	manifest.Checkpoint.Chunks = manifest.Chunks
+}
+
+func (manifest *TaskManifest) syncRuntime() {
+	manifest.OutputMode = manifest.Execution.OutputMode
+	manifest.State = manifest.Execution.Stage
+	manifest.Attempt = manifest.Execution.Attempt
+	manifest.CompletedAt = manifest.Execution.CompletedAt
+	manifest.Source = SourceInfo{Path: manifest.Input.SourceReference, OriginalName: manifest.Input.OriginalName, SizeBytes: manifest.Input.SizeBytes}
+	if manifest.Checkpoint != nil {
+		manifest.IntegrityVersion = manifest.Checkpoint.IntegrityVersion
+		manifest.Chunks = manifest.Checkpoint.Chunks
+	}
+	if manifest.Execution.ErrorSummary != nil {
+		retryable := manifest.Execution.ErrorSummary.Retryable != nil && *manifest.Execution.ErrorSummary.Retryable
+		manifest.LastError = &ErrorInfo{Stage: manifest.Execution.ErrorSummary.Code, Message: manifest.Execution.ErrorSummary.Message, Retryable: retryable, At: manifest.UpdatedAt}
+	}
+}
+
+func aggregateStatus(stage string) string {
+	switch stage {
+	case "CREATED":
+		return "created"
+	case "COMPLETED":
+		return "completed"
+	case "FAILED":
+		return "failed"
+	default:
+		return "processing"
+	}
+}
+
+func (manifest *TaskManifest) ChunkByID(id string) *ChunkItem {
+	for i := range manifest.Chunks.Items {
+		if manifest.Chunks.Items[i].ID == id {
+			return &manifest.Chunks.Items[i]
+		}
+	}
+	return nil
+}
+
+func (manifest *TaskManifest) CountCompletedChunks() int {
+	count := 0
+	for i := range manifest.Chunks.Items {
+		if manifest.Chunks.Items[i].State == "COMPLETED" {
+			count++
+		}
+	}
+	return count
+}
+
 func (metadata *ExecutionMetadata) UnmarshalJSON(data []byte) error {
 	type plain ExecutionMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "status", "error_summary")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "status", "stage", "attempt", "completed_at", "error_summary")
 	metadata.UnknownFields = unknown
 	return err
 }
@@ -319,7 +503,7 @@ func (metadata ExecutionMetadata) MarshalJSON() ([]byte, error) {
 
 func (metadata *InputMetadata) UnmarshalJSON(data []byte) error {
 	type plain InputMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "source_reference", "source_ownership", "duration_seconds", "format", "metadata")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "source_reference", "source_ownership", "duration_seconds", "format", "original_name", "size_bytes", "metadata")
 	metadata.UnknownFields = unknown
 	return err
 }
@@ -331,7 +515,7 @@ func (metadata InputMetadata) MarshalJSON() ([]byte, error) {
 
 func (artifact *Artifact) UnmarshalJSON(data []byte) error {
 	type plain Artifact
-	unknown, err := unmarshalWithUnknown(data, (*plain)(artifact), "status", "path", "error")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(artifact), "status", "path", "sha256", "error")
 	artifact.UnknownFields = unknown
 	return err
 }
@@ -339,6 +523,29 @@ func (artifact *Artifact) UnmarshalJSON(data []byte) error {
 func (artifact Artifact) MarshalJSON() ([]byte, error) {
 	type plain Artifact
 	return marshalWithUnknown(plain(artifact), artifact.UnknownFields)
+}
+
+func (artifacts *Artifacts) UnmarshalJSON(data []byte) error {
+	type plain Artifacts
+	unknown, err := unmarshalWithUnknown(data, (*plain)(artifacts), "transcript", "notes", "notes_input", "minutes")
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err == nil && artifacts.NotesInput.State == "" {
+		if raw, ok := fields["notes_input"]; ok {
+			if err := json.Unmarshal(raw, &artifacts.NotesInput); err != nil {
+				return err
+			}
+		}
+	}
+	artifacts.UnknownFields = unknown
+	return nil
+}
+
+func (artifacts Artifacts) MarshalJSON() ([]byte, error) {
+	type plain Artifacts
+	return marshalWithUnknown(plain(artifacts), artifacts.UnknownFields)
 }
 
 func (artifactError *ArtifactError) UnmarshalJSON(data []byte) error {

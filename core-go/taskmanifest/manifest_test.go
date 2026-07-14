@@ -50,7 +50,11 @@ func TestLoadManifestFixtures(t *testing.T) {
 				t.Fatalf("task status = %q, want %q", manifest.Execution.Status, test.taskStatus)
 			}
 			for name, want := range test.artifacts {
-				if got := manifest.Artifacts[name].Status; got != want {
+				artifact, ok := manifest.Artifacts.Get(name)
+				if !ok {
+					t.Fatalf("artifact %s missing", name)
+				}
+				if got := artifact.State; got != want {
 					t.Errorf("artifact %s status = %q, want %q", name, got, want)
 				}
 			}
@@ -165,7 +169,8 @@ func TestWriteManifestRoundTripPreservesUnknownFields(t *testing.T) {
 	if string(reloaded.Execution.UnknownFields["future_execution"]) == "" {
 		t.Error("execution unknown field was not preserved")
 	}
-	if string(reloaded.Artifacts["transcript"].UnknownFields["future_artifact"]) == "" {
+	transcript, _ := reloaded.Artifacts.Get("transcript")
+	if string(transcript.UnknownFields["future_artifact"]) == "" {
 		t.Error("artifact unknown field was not preserved")
 	}
 }

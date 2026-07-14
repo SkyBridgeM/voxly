@@ -1,7 +1,7 @@
 package main
 
 // TaskState represents the current pipeline stage for a task.
-type TaskState string
+type TaskState = string
 
 const (
 	TaskCreated           TaskState = "CREATED"
@@ -17,7 +17,7 @@ const (
 )
 
 // ChunkState represents the state of one split audio chunk.
-type ChunkState string
+type ChunkState = string
 
 const (
 	ChunkPending    ChunkState = "PENDING"
@@ -27,12 +27,12 @@ const (
 )
 
 // ArtifactState represents the state of a generated output file.
-type ArtifactState string
+type ArtifactState = string
 
 const (
-	ArtifactPending ArtifactState = "PENDING"
-	ArtifactReady   ArtifactState = "READY"
-	ArtifactInvalid ArtifactState = "INVALID"
+	ArtifactPending ArtifactState = "pending"
+	ArtifactReady   ArtifactState = "completed"
+	ArtifactInvalid ArtifactState = "unavailable"
 )
 
 // validTaskStates is the set of all valid task states.

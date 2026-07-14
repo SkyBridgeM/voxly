@@ -11,80 +11,22 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = taskmanifest.CurrentSchemaVersion
 
-// Manifest represents the task manifest stored in each task directory.
-// This is the durable checkpoint for resume operations.
-type Manifest struct {
-	SchemaVersion    int        `json:"schema_version"`
-	IntegrityVersion int        `json:"integrity_version"`
-	TaskID           string     `json:"task_id"`
-	OutputMode       string     `json:"output_mode"`
-	Source           SourceInfo `json:"source"`
-	State            TaskState  `json:"state"`
-	Attempt          int        `json:"attempt"`
-	Chunks           ChunksInfo `json:"chunks"`
-	Artifacts        Artifacts  `json:"artifacts"`
-	LastError        *ErrorInfo `json:"last_error"`
-	CreatedAt        string     `json:"created_at"`
-	UpdatedAt        string     `json:"updated_at"`
-	CompletedAt      *string    `json:"completed_at"`
-}
-
-// SourceInfo describes the input audio file.
-type SourceInfo struct {
-	Path         string `json:"path"`
-	OriginalName string `json:"original_name"`
-	SizeBytes    int64  `json:"size_bytes"`
-}
-
-// ChunksInfo describes the chunk plan and per-chunk state.
-type ChunksInfo struct {
-	Format       string      `json:"format"`
-	ChunkMinutes int         `json:"chunk_minutes"`
-	MaxUploadMB  float64     `json:"max_upload_mb"`
-	ASRProvider  string      `json:"asr_provider"`
-	ASRModel     string      `json:"asr_model"`
-	Total        int         `json:"total"`
-	Items        []ChunkItem `json:"items"`
-}
-
-// ChunkItem describes one audio chunk and its transcription state.
-type ChunkItem struct {
-	ID               string     `json:"id"`
-	AudioPath        string     `json:"audio_path"`
-	TranscriptPath   string     `json:"transcript_path"`
-	State            ChunkState `json:"state"`
-	Attempts         int        `json:"attempts"`
-	SizeBytes        int64      `json:"size_bytes"`
-	AudioSHA256      string     `json:"audio_sha256"`
-	TranscriptSHA256 string     `json:"transcript_sha256"`
-	LastError        *string    `json:"last_error"`
-}
-
-// Artifacts describes the generated output files.
-type Artifacts struct {
-	Transcript ArtifactInfo `json:"transcript"`
-	NotesInput ArtifactInfo `json:"notes_input"`
-	Minutes    ArtifactInfo `json:"minutes"`
-}
-
-// ArtifactInfo describes one generated output file.
-type ArtifactInfo struct {
-	Path   string        `json:"path"`
-	State  ArtifactState `json:"state"`
-	SHA256 string        `json:"sha256"`
-}
-
-// ErrorInfo records the last error that occurred during the task.
-type ErrorInfo struct {
-	Stage     TaskState `json:"stage"`
-	Message   string    `json:"message"`
-	Retryable bool      `json:"retryable"`
-	At        string    `json:"at"`
-}
+// TaskManifest is the runtime's only durable task model. Manifest remains an
+// alias for existing workflow helper signatures; it is not a legacy format.
+type TaskManifest = taskmanifest.TaskManifest
+type Manifest = TaskManifest
+type SourceInfo = taskmanifest.SourceInfo
+type ChunksInfo = taskmanifest.ChunksInfo
+type ChunkItem = taskmanifest.ChunkItem
+type Artifacts = taskmanifest.Artifacts
+type ArtifactInfo = taskmanifest.Artifact
+type ErrorInfo = taskmanifest.ErrorInfo
 
 // legacyManifest is the flat manifest format written before the resume state
 // machine was introduced. Keep it separate from Manifest so new manifests
@@ -114,18 +56,11 @@ func legacyManifestPath(taskDir string) string {
 
 // LoadManifest reads and validates task_manifest.json from a task directory.
 func LoadManifest(taskDir string) (*Manifest, error) {
-	path := ManifestPath(taskDir)
-	data, err := os.ReadFile(path)
+	m, err := taskmanifest.LoadManifest(ManifestPath(taskDir))
 	if err != nil {
-		return nil, fmt.Errorf("reading manifest: %w", err)
-	}
-
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
 	}
-
-	return &m, nil
+	return m, nil
 }
 
 // LoadLegacyManifest loads the pre-state-machine manifest format. Callers
@@ -146,6 +81,40 @@ func LoadLegacyManifest(taskDir string) (*legacyManifest, error) {
 func SaveManifest(taskDir string, m *Manifest) error {
 	m.SchemaVersion = currentSchemaVersion
 	m.UpdatedAt = nowFunc().Format(time.RFC3339)
+	if m.Execution.Backend == "" {
+		m.Execution.Backend = "go"
+	}
+	if m.Execution.Provider == "" {
+		m.Execution.Provider = m.Chunks.ASRProvider
+		if m.Execution.Provider == "" {
+			m.Execution.Provider = "unknown"
+		}
+	}
+	m.Execution.OutputMode = m.OutputMode
+	m.Execution.Stage = m.State
+	m.Execution.Attempt = m.Attempt
+	switch m.State {
+	case TaskCreated:
+		m.Execution.Status = "created"
+	case TaskCompleted:
+		m.Execution.Status = "completed"
+	case TaskFailed:
+		m.Execution.Status = "failed"
+	default:
+		m.Execution.Status = "processing"
+	}
+	m.Input.SourceReference = m.Source.Path
+	m.Input.OriginalName = m.Source.OriginalName
+	m.Input.SizeBytes = m.Source.SizeBytes
+	if m.Input.SourceOwnership == "" {
+		m.Input.SourceOwnership = "task_copy"
+	}
+	if m.Input.Format == "" {
+		m.Input.Format = inputFormat(m.Source.Path)
+	}
+	if err := taskmanifest.ValidateManifest(m); err != nil {
+		return fmt.Errorf("validating task manifest: %w", err)
+	}
 
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -194,11 +163,13 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 		IntegrityVersion: 1,
 		TaskID:           filepath.Base(taskDir),
 		OutputMode:       outputMode,
+		Execution:        taskmanifest.ExecutionMetadata{Backend: "go", Provider: asrProvider, OutputMode: outputMode, Status: "created", Stage: string(TaskCreated), Attempt: 1},
 		Source: SourceInfo{
 			Path:         sourceAudio,
 			OriginalName: filepath.Base(sourceAudio),
 			SizeBytes:    sizeBytes,
 		},
+		Input:   taskmanifest.InputMetadata{SourceReference: sourceAudio, SourceOwnership: "task_copy", Format: inputFormat(sourceAudio), OriginalName: filepath.Base(sourceAudio), SizeBytes: sizeBytes},
 		State:   TaskCreated,
 		Attempt: 1,
 		Chunks: ChunksInfo{
@@ -222,18 +193,26 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 	}
 }
 
+func inputFormat(path string) string {
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if format == "" {
+		return "unknown"
+	}
+	return format
+}
+
 // SetTaskState updates the task state and persists the manifest.
 func SetTaskState(taskDir string, m *Manifest, state TaskState) error {
-	m.State = state
+	m.State = string(state)
 	return SaveManifest(taskDir, m)
 }
 
 // RecordTaskError records an error and transitions the task to FAILED.
 func RecordTaskError(taskDir string, m *Manifest, stage TaskState, err error, retryable bool) error {
 	now := nowFunc().Format(time.RFC3339)
-	m.State = TaskFailed
+	m.State = string(TaskFailed)
 	m.LastError = &ErrorInfo{
-		Stage:     stage,
+		Stage:     string(stage),
 		Message:   err.Error(),
 		Retryable: retryable,
 		At:        now,
@@ -257,38 +236,17 @@ func IsRetryableError(err error) bool {
 // MarkTaskCompleted transitions the task to COMPLETED and records the completion time.
 func MarkTaskCompleted(taskDir string, m *Manifest) error {
 	now := nowFunc().Format(time.RFC3339)
-	m.State = TaskCompleted
+	m.State = string(TaskCompleted)
 	m.CompletedAt = &now
 	m.LastError = nil
 	return SaveManifest(taskDir, m)
-}
-
-// ChunkByID returns a pointer to the chunk item with the given ID, or nil.
-func (m *Manifest) ChunkByID(id string) *ChunkItem {
-	for i := range m.Chunks.Items {
-		if m.Chunks.Items[i].ID == id {
-			return &m.Chunks.Items[i]
-		}
-	}
-	return nil
-}
-
-// CountCompletedChunks returns the number of chunks in COMPLETED state.
-func (m *Manifest) CountCompletedChunks() int {
-	count := 0
-	for i := range m.Chunks.Items {
-		if m.Chunks.Items[i].State == ChunkCompleted {
-			count++
-		}
-	}
-	return count
 }
 
 // ValidateManifest checks that the manifest has valid schema, required fields,
 // and safe task-local paths. All paths must remain within the task directory.
 func ValidateManifest(taskDir string, m *Manifest) error {
 	if m.SchemaVersion != currentSchemaVersion {
-		return fmt.Errorf("unsupported schema version %d (expected %d)", m.SchemaVersion, currentSchemaVersion)
+		return fmt.Errorf("unsupported schema version %q (expected %q)", m.SchemaVersion, currentSchemaVersion)
 	}
 	if m.IntegrityVersion != 0 && m.IntegrityVersion != 1 {
 		return fmt.Errorf("unsupported integrity_version %d", m.IntegrityVersion)
