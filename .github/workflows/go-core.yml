@@ -2,6 +2,7 @@ name: Go Core
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "core-go/**"
       - ".github/workflows/go-core.yml"
@@ -17,6 +18,8 @@ permissions:
 
 jobs:
   verify:
+    name: Go test and vet
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,6 +32,20 @@ jobs:
           cache-dependency-path: core-go/go.sum
       - run: go test ./...
       - run: go vet ./...
+
+  extended:
+    name: Go extended readiness
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core-go/go.mod
+          cache-dependency-path: core-go/go.sum
       - run: go test -race ./...
       - name: Compile macOS tests
         run: GOOS=darwin GOARCH=arm64 go test -c -o /tmp/meeting-asr-go-darwin.test .

@@ -1,0 +1,40 @@
+name: Desktop Frontend
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "desktop/src/**"
+      - "desktop/index.html"
+      - "desktop/tsconfig*.json"
+      - "desktop/vite.config.*"
+      - ".github/workflows/frontend.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/src/**"
+      - "desktop/index.html"
+      - "desktop/tsconfig*.json"
+      - "desktop/vite.config.*"
+      - ".github/workflows/frontend.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build desktop frontend
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - working-directory: desktop
+        run: npm ci
+      - working-directory: desktop
+        run: npm run build
