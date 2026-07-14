@@ -70,11 +70,15 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 	m.Artifacts.Transcript.Path = transcriptPath
 	if artifactMatches(transcriptPath, &m.Artifacts.Transcript) {
 		m.Artifacts.Transcript.State = ArtifactReady
+		m.Artifacts.Transcript.Error = nil
 	} else {
-		m.Artifacts.Transcript.State = ArtifactPending
+		if m.Artifacts.Transcript.State != ArtifactFailed {
+			m.Artifacts.Transcript.State = ArtifactPending
+			m.Artifacts.Transcript.Error = nil
+		}
 		// Downstream depends on transcript.
-		m.Artifacts.NotesInput.State = ArtifactInvalid
-		m.Artifacts.Minutes.State = ArtifactInvalid
+		markArtifactUnavailableUnlessCompleted(&m.Artifacts.NotesInput)
+		markArtifactUnavailableUnlessCompleted(&m.Artifacts.Minutes)
 		return
 	}
 
@@ -84,13 +88,18 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 		m.Artifacts.NotesInput.Path = notesPath
 		if artifactMatches(notesPath, &m.Artifacts.NotesInput) {
 			m.Artifacts.NotesInput.State = ArtifactReady
+			m.Artifacts.NotesInput.Error = nil
 		} else {
-			m.Artifacts.NotesInput.State = ArtifactPending
-			m.Artifacts.Minutes.State = ArtifactInvalid
+			if m.Artifacts.NotesInput.State != ArtifactFailed {
+				m.Artifacts.NotesInput.State = ArtifactPending
+				m.Artifacts.NotesInput.Error = nil
+			}
+			markArtifactUnavailableUnlessCompleted(&m.Artifacts.Minutes)
 			return
 		}
 	} else {
-		m.Artifacts.NotesInput.State = ArtifactPending
+		m.Artifacts.NotesInput.State = ArtifactInvalid
+		m.Artifacts.NotesInput.Error = nil
 	}
 
 	// Minutes artifact (minutes mode only).
@@ -99,12 +108,25 @@ func ReconcileArtifacts(taskDir string, m *Manifest) {
 		m.Artifacts.Minutes.Path = minutesPath
 		if artifactMatches(minutesPath, &m.Artifacts.Minutes) {
 			m.Artifacts.Minutes.State = ArtifactReady
+			m.Artifacts.Minutes.Error = nil
 		} else {
-			m.Artifacts.Minutes.State = ArtifactPending
+			if m.Artifacts.Minutes.State != ArtifactFailed {
+				m.Artifacts.Minutes.State = ArtifactPending
+				m.Artifacts.Minutes.Error = nil
+			}
 		}
 	} else {
-		m.Artifacts.Minutes.State = ArtifactPending
+		m.Artifacts.Minutes.State = ArtifactInvalid
+		m.Artifacts.Minutes.Error = nil
 	}
+}
+
+func markArtifactUnavailableUnlessCompleted(artifact *ArtifactInfo) {
+	if artifactMatches(artifact.Path, artifact) {
+		return
+	}
+	artifact.State = ArtifactInvalid
+	artifact.Error = nil
 }
 
 // BuildChunkItemsFromDisk discovers chunks on disk and builds ChunkItem entries
@@ -206,5 +228,6 @@ func markArtifactReady(path string, artifact *ArtifactInfo) error {
 	artifact.Path = path
 	artifact.State = ArtifactReady
 	artifact.SHA256 = hash
+	artifact.Error = nil
 	return nil
 }

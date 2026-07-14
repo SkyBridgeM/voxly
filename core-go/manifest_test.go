@@ -21,7 +21,7 @@ func TestCreateManifest(t *testing.T) {
 	manifest := CreateManifest(taskDir, sourceAudio, outputMode, chunkMinutes, maxUploadMB, asrProvider, asrModel)
 
 	if manifest.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, manifest.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, manifest.SchemaVersion)
 	}
 	if manifest.TaskID != filepath.Base(taskDir) {
 		t.Errorf("expected task ID %q, got %q", filepath.Base(taskDir), manifest.TaskID)
@@ -75,6 +75,24 @@ func TestSaveAndLoadManifest(t *testing.T) {
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(ManifestPath(taskDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, legacyField := range []string{"output_mode", "source", "state", "chunks", "last_error"} {
+		if _, exists := document[legacyField]; exists {
+			t.Errorf("legacy top-level field %q was written", legacyField)
+		}
+	}
+	for _, taskManifestField := range []string{"execution", "input", "artifacts", "checkpoint"} {
+		if _, exists := document[taskManifestField]; !exists {
+			t.Errorf("TaskManifest field %q missing", taskManifestField)
+		}
+	}
 
 	loaded, err := LoadManifest(taskDir)
 	if err != nil {
@@ -82,7 +100,7 @@ func TestSaveAndLoadManifest(t *testing.T) {
 	}
 
 	if loaded.SchemaVersion != currentSchemaVersion {
-		t.Errorf("schema version mismatch: expected %d, got %d", currentSchemaVersion, loaded.SchemaVersion)
+		t.Errorf("schema version mismatch: expected %q, got %q", currentSchemaVersion, loaded.SchemaVersion)
 	}
 	if loaded.TaskID != manifest.TaskID {
 		t.Errorf("task ID mismatch: expected %q, got %q", manifest.TaskID, loaded.TaskID)
@@ -151,6 +169,61 @@ func TestRecordTaskError(t *testing.T) {
 	}
 	if !loaded.LastError.Retryable {
 		t.Error("expected retryable error")
+	}
+}
+
+func TestArtifactLifecyclePersistsPartialSuccess(t *testing.T) {
+	taskDir := t.TempDir()
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "audio.wav"), "minutes", 5, 10.0, "mimo", "model")
+	m.Artifacts.Transcript.State = ArtifactReady
+	m.Artifacts.Transcript.SHA256 = strings.Repeat("a", 64)
+	m.Artifacts.NotesInput.State = ArtifactReady
+	m.Artifacts.NotesInput.SHA256 = strings.Repeat("b", 64)
+	markArtifactProcessing(&m.Artifacts.Minutes)
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	processing, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processing.Artifacts.Minutes.State != ArtifactProcessing {
+		t.Fatalf("minutes state = %q, want %q", processing.Artifacts.Minutes.State, ArtifactProcessing)
+	}
+
+	retryable := true
+	stageErr := fmt.Errorf("minutes provider unavailable")
+	if err := RecordTaskError(taskDir, m, TaskMinutesGenerating, stageErr, retryable); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "completed_with_errors" {
+		t.Errorf("task status = %q, want completed_with_errors", failed.Status)
+	}
+	if failed.Artifacts.Minutes.State != ArtifactFailed {
+		t.Fatalf("minutes state = %q, want %q", failed.Artifacts.Minutes.State, ArtifactFailed)
+	}
+	artifactError := failed.Artifacts.Minutes.Error
+	if artifactError == nil || artifactError.Code != TaskMinutesGenerating || artifactError.Message != stageErr.Error() || artifactError.Retryable == nil || !*artifactError.Retryable {
+		t.Fatalf("minutes error = %#v, want structured retryable error", artifactError)
+	}
+}
+
+func TestTaskStatusKeepsTotalFailureFailed(t *testing.T) {
+	m := CreateManifest(t.TempDir(), "/audio.wav", "minutes", 5, 10, "mimo", "model")
+	m.State = TaskFailed
+	retryable := false
+	m.Artifacts.Transcript.State = ArtifactFailed
+	m.Artifacts.Transcript.Error = &ArtifactError{Code: TaskMerging, Message: "merge failed", Retryable: &retryable}
+	m.Artifacts.NotesInput.State = ArtifactInvalid
+	m.Artifacts.Minutes.State = ArtifactInvalid
+	if got := taskStatus(m); got != "failed" {
+		t.Fatalf("taskStatus() = %q, want failed", got)
 	}
 }
 
@@ -363,7 +436,7 @@ func TestValidateManifest(t *testing.T) {
 		},
 		{
 			name:    "wrong schema version",
-			m:       &Manifest{SchemaVersion: 99, TaskID: "t1", OutputMode: "transcript", State: TaskCreated},
+			m:       &Manifest{SchemaVersion: "99", TaskID: "t1", OutputMode: "transcript", State: TaskCreated},
 			wantErr: "unsupported schema version",
 		},
 		{

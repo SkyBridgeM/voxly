@@ -275,7 +275,9 @@ func TestResume_DeepSeekFailure_RerunsMinutesOnly(t *testing.T) {
 	m.Artifacts.Transcript.Path = filepath.Join(taskDir, "transcript.md")
 	m.Artifacts.NotesInput.State = ArtifactReady
 	m.Artifacts.NotesInput.Path = filepath.Join(taskDir, "notes_input.md")
-	m.Artifacts.Minutes.State = ArtifactPending
+	retryable := true
+	m.Artifacts.Minutes.State = ArtifactFailed
+	m.Artifacts.Minutes.Error = &ArtifactError{Code: TaskMinutesGenerating, Message: "provider unavailable", Retryable: &retryable}
 	m.State = TaskFailed
 	sealManifestFiles(t, m)
 	if err := SaveManifest(taskDir, m); err != nil {
@@ -284,10 +286,39 @@ func TestResume_DeepSeekFailure_RerunsMinutesOnly(t *testing.T) {
 
 	ReconcileChunks(taskDir, m)
 	ReconcileArtifacts(taskDir, m)
+	if m.Artifacts.Transcript.State != ArtifactReady || m.Artifacts.NotesInput.State != ArtifactReady {
+		t.Fatal("completed upstream artifacts were invalidated")
+	}
+	if m.Artifacts.Minutes.State != ArtifactFailed || m.Artifacts.Minutes.Error == nil {
+		t.Fatalf("reconcile erased failed minutes state: %#v", m.Artifacts.Minutes)
+	}
+	if err := PrepareArtifactsForResume(m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Artifacts.Minutes.State != ArtifactPending || m.Artifacts.Minutes.Error != nil {
+		t.Fatalf("minutes retry state = %#v, want pending without stale error", m.Artifacts.Minutes)
+	}
 
 	stage, _ := ResumeStage(m)
 	if stage != TaskMinutesGenerating {
 		t.Errorf("expected stage %q, got %q", TaskMinutesGenerating, stage)
+	}
+}
+
+func TestPrepareArtifactsForResume_PreservesNonRetryableFailure(t *testing.T) {
+	m := &Manifest{OutputMode: "minutes"}
+	retryable := false
+	m.Artifacts.Transcript.State = ArtifactReady
+	m.Artifacts.NotesInput.State = ArtifactReady
+	m.Artifacts.Minutes.State = ArtifactFailed
+	m.Artifacts.Minutes.Error = &ArtifactError{Code: TaskMinutesGenerating, Message: "invalid request", Retryable: &retryable}
+
+	err := PrepareArtifactsForResume(m)
+	if err == nil || !strings.Contains(err.Error(), "not retryable") {
+		t.Fatalf("PrepareArtifactsForResume() error = %v, want non-retryable failure", err)
+	}
+	if m.Artifacts.Minutes.State != ArtifactFailed || m.Artifacts.Minutes.Error == nil {
+		t.Fatalf("non-retryable failure was modified: %#v", m.Artifacts.Minutes)
 	}
 }
 
@@ -547,6 +578,13 @@ func TestMigrateManifest_BuildsFromDisk(t *testing.T) {
 	taskDir := createTestTaskDir(t)
 	createChunks(t, filepath.Join(taskDir, "chunks"), 3, "wav")
 	createTranscripts(t, filepath.Join(taskDir, "transcripts"), []int{1, 2})
+	audioDir := filepath.Join(taskDir, "audio")
+	if err := os.MkdirAll(audioDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(audioDir, "source.wav"), []byte("audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Write a legacy manifest (simulated by schema_version 0).
 	old := &Manifest{
@@ -554,22 +592,13 @@ func TestMigrateManifest_BuildsFromDisk(t *testing.T) {
 		OutputMode: "transcript",
 		CreatedAt:  "2026-01-01T00:00:00Z",
 	}
-	if err := SaveManifest(taskDir, old); err != nil {
-		t.Fatal(err)
-	}
-	// Overwrite schema_version to 0 to simulate legacy.
-	old.SchemaVersion = 0
-	if err := SaveManifest(taskDir, old); err != nil {
-		t.Fatal(err)
-	}
-
 	migrated, err := migrateManifest(taskDir, old)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if migrated.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, migrated.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, migrated.SchemaVersion)
 	}
 	if migrated.Chunks.Total != 3 {
 		t.Errorf("expected 3 chunks, got %d", migrated.Chunks.Total)
@@ -623,7 +652,7 @@ func TestRunResume_MigratesLegacyManifestFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if migrated.SchemaVersion != currentSchemaVersion {
-		t.Errorf("expected schema version %d, got %d", currentSchemaVersion, migrated.SchemaVersion)
+		t.Errorf("expected schema version %q, got %q", currentSchemaVersion, migrated.SchemaVersion)
 	}
 	if migrated.Source.Path != taskSourcePath {
 		t.Errorf("source path should use the task-local copy: got %q", migrated.Source.Path)
@@ -796,6 +825,31 @@ func TestReconcileArtifacts_TranscriptMissing_InvalidatesDownstream(t *testing.T
 	}
 	if m.Artifacts.Minutes.State != ArtifactInvalid {
 		t.Errorf("minutes should be INVALID, got %s", m.Artifacts.Minutes.State)
+	}
+}
+
+func TestReconcileArtifacts_PreservesVerifiedCompletedDownstream(t *testing.T) {
+	taskDir := createTestTaskDir(t)
+	notesPath := filepath.Join(taskDir, "notes_input.md")
+	minutesPath := filepath.Join(taskDir, "meeting_minutes.md")
+	if err := os.WriteFile(notesPath, []byte("notes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(minutesPath, []byte("minutes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manifest{OutputMode: "minutes"}
+	m.Artifacts.Transcript = ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactPending}
+	if err := markArtifactReady(notesPath, &m.Artifacts.NotesInput); err != nil {
+		t.Fatal(err)
+	}
+	if err := markArtifactReady(minutesPath, &m.Artifacts.Minutes); err != nil {
+		t.Fatal(err)
+	}
+
+	ReconcileArtifacts(taskDir, m)
+	if m.Artifacts.NotesInput.State != ArtifactReady || m.Artifacts.Minutes.State != ArtifactReady {
+		t.Fatalf("verified completed outputs were downgraded: notes=%s minutes=%s", m.Artifacts.NotesInput.State, m.Artifacts.Minutes.State)
 	}
 }
 

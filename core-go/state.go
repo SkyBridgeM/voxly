@@ -1,7 +1,7 @@
 package main
 
 // TaskState represents the current pipeline stage for a task.
-type TaskState string
+type TaskState = string
 
 const (
 	TaskCreated           TaskState = "CREATED"
@@ -17,7 +17,7 @@ const (
 )
 
 // ChunkState represents the state of one split audio chunk.
-type ChunkState string
+type ChunkState = string
 
 const (
 	ChunkPending    ChunkState = "PENDING"
@@ -27,12 +27,14 @@ const (
 )
 
 // ArtifactState represents the state of a generated output file.
-type ArtifactState string
+type ArtifactState = string
 
 const (
-	ArtifactPending ArtifactState = "PENDING"
-	ArtifactReady   ArtifactState = "READY"
-	ArtifactInvalid ArtifactState = "INVALID"
+	ArtifactPending    ArtifactState = "pending"
+	ArtifactProcessing ArtifactState = "processing"
+	ArtifactReady      ArtifactState = "completed"
+	ArtifactFailed     ArtifactState = "failed"
+	ArtifactInvalid    ArtifactState = "unavailable"
 )
 
 // validTaskStates is the set of all valid task states.
@@ -59,33 +61,33 @@ var validChunkStates = map[ChunkState]bool{
 
 // validArtifactStates is the set of all valid artifact states.
 var validArtifactStates = map[ArtifactState]bool{
-	ArtifactPending: true,
-	ArtifactReady:   true,
-	ArtifactInvalid: true,
+	ArtifactPending:    true,
+	ArtifactProcessing: true,
+	ArtifactReady:      true,
+	ArtifactFailed:     true,
+	ArtifactInvalid:    true,
 }
 
 // ResumeStage determines the earliest incomplete stage for a task based on
 // reconciled manifest and filesystem state. Returns the stage to execute and
 // whether the task is already complete.
 func ResumeStage(m *Manifest) (TaskState, bool) {
-	// Source validity: if chunks exist, source was valid at split time.
-	// We check chunk presence instead.
-
-	// Chunks missing or invalid: need splitting.
-	if m.Chunks.Total == 0 || !chunksExist(m) {
-		return TaskSplitting, false
-	}
-
-	// Any chunk transcript missing or invalid: need transcription.
-	for i := range m.Chunks.Items {
-		if m.Chunks.Items[i].State != ChunkCompleted {
-			return TaskTranscribing, false
-		}
-	}
-
-	// transcript.md missing or invalid: need merging.
+	// A verified completed output is authoritative. Resume must not rebuild its
+	// upstream intermediates merely because chunks were later removed.
 	t := m.Artifacts.Transcript
 	if t.State != ArtifactReady || !isCompleteFile(t.Path) {
+		// Chunks missing or invalid: need splitting.
+		if m.Chunks.Total == 0 || !chunksExist(m) {
+			return TaskSplitting, false
+		}
+
+		// Any chunk transcript missing or invalid: need transcription.
+		for i := range m.Chunks.Items {
+			if m.Chunks.Items[i].State != ChunkCompleted {
+				return TaskTranscribing, false
+			}
+		}
+
 		return TaskMerging, false
 	}
 

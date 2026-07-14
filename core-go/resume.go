@@ -76,16 +76,6 @@ func RunResume(args []string) error {
 		}
 	}
 
-	// Migrate legacy manifest only if schema version is older than current.
-	// A current-schema manifest with empty Chunks.Items is a legitimate
-	// CREATED/SPLITTING interrupted state — do NOT migrate it.
-	if m.SchemaVersion < currentSchemaVersion {
-		m, err = migrateManifest(absTaskDir, m)
-		if err != nil {
-			return fmt.Errorf("migrating manifest: %w", err)
-		}
-	}
-
 	if err := ValidateManifest(absTaskDir, m); err != nil {
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
@@ -122,6 +112,9 @@ func RunResume(args []string) error {
 	// 3. Reconcile manifest and filesystem.
 	ReconcileChunks(absTaskDir, m)
 	ReconcileArtifacts(absTaskDir, m)
+	if err := PrepareArtifactsForResume(m); err != nil {
+		return fmt.Errorf("preparing artifacts for resume: %w", err)
+	}
 
 	// Update chunk counts from reconciled state.
 	m.Chunks.Total = len(m.Chunks.Items)
@@ -214,8 +207,11 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 
 	// Invalidate all downstream artifacts since chunks are being rebuilt.
 	m.Artifacts.Transcript.State = ArtifactPending
+	m.Artifacts.Transcript.Error = nil
 	m.Artifacts.NotesInput.State = ArtifactPending
+	m.Artifacts.NotesInput.Error = nil
 	m.Artifacts.Minutes.State = ArtifactPending
+	m.Artifacts.Minutes.Error = nil
 	for _, path := range []string{m.Artifacts.Transcript.Path, m.Artifacts.NotesInput.Path, m.Artifacts.Minutes.Path} {
 		if err := removeArtifactFile(path); err != nil {
 			return err
@@ -381,6 +377,10 @@ func executeMerging(taskDir string, m *Manifest) error {
 	if err := SetTaskState(taskDir, m, TaskMerging); err != nil {
 		return err
 	}
+	markArtifactProcessing(&m.Artifacts.Transcript)
+	if err := SaveManifest(taskDir, m); err != nil {
+		return err
+	}
 	fmt.Println("Status: Merging transcript")
 
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
@@ -399,6 +399,10 @@ func executeMerging(taskDir string, m *Manifest) error {
 // executeNotesGenerating creates notes_input.md from prompt + transcript.
 func executeNotesGenerating(taskDir string, m *Manifest, settings *Settings) error {
 	if err := SetTaskState(taskDir, m, TaskNotesGenerating); err != nil {
+		return err
+	}
+	markArtifactProcessing(&m.Artifacts.NotesInput)
+	if err := SaveManifest(taskDir, m); err != nil {
 		return err
 	}
 	fmt.Println("Status: Preparing notes input")
@@ -420,6 +424,10 @@ func executeNotesGenerating(taskDir string, m *Manifest, settings *Settings) err
 // executeMinutesGenerating generates meeting_minutes.md via LLM + Obsidian template.
 func executeMinutesGenerating(taskDir string, m *Manifest, settings *Settings) error {
 	if err := SetTaskState(taskDir, m, TaskMinutesGenerating); err != nil {
+		return err
+	}
+	markArtifactProcessing(&m.Artifacts.Minutes)
+	if err := SaveManifest(taskDir, m); err != nil {
 		return err
 	}
 	fmt.Println("Status: Generating meeting minutes")
@@ -555,6 +563,9 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 		IntegrityVersion: old.IntegrityVersion,
 		TaskID:           filepath.Base(taskDir),
 		OutputMode:       old.OutputMode,
+		Backend:          "go",
+		Provider:         old.Chunks.ASRProvider,
+		Status:           "created",
 		State:            TaskCreated,
 		Attempt:          1,
 		Source:           old.Source,
@@ -566,6 +577,9 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 		},
 		CreatedAt: old.CreatedAt,
 		UpdatedAt: now,
+	}
+	if m.Provider == "" {
+		m.Provider = "unknown"
 	}
 	if m.CreatedAt == "" {
 		m.CreatedAt = now
@@ -624,7 +638,7 @@ func migrateManifest(taskDir string, old *Manifest) (*Manifest, error) {
 // current schema before handing it to the common filesystem reconciliation.
 func migrateLegacyManifest(taskDir string, old *legacyManifest) (*Manifest, error) {
 	m := &Manifest{
-		SchemaVersion: 0,
+		SchemaVersion: "",
 		TaskID:        filepath.Base(taskDir),
 		OutputMode:    old.OutputMode,
 		Source: SourceInfo{
