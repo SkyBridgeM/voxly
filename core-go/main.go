@@ -301,6 +301,10 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if err := SetTaskState(taskDir, manifest, TaskMerging); err != nil {
 		return fmt.Errorf("updating task state: %w", err)
 	}
+	markArtifactProcessing(&manifest.Artifacts.Transcript)
+	if err := SaveManifest(taskDir, manifest); err != nil {
+		return fmt.Errorf("saving transcript artifact state: %w", err)
+	}
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
@@ -320,6 +324,10 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if outputMode == "notes" || outputMode == "minutes" {
 		if err := SetTaskState(taskDir, manifest, TaskNotesGenerating); err != nil {
 			return fmt.Errorf("updating task state: %w", err)
+		}
+		markArtifactProcessing(&manifest.Artifacts.NotesInput)
+		if err := SaveManifest(taskDir, manifest); err != nil {
+			return fmt.Errorf("saving notes artifact state: %w", err)
 		}
 		fmt.Println("Status: Preparing notes input")
 		promptPath := settings.ResolvePath(settings.MinutesPromptPath)
@@ -342,6 +350,10 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if outputMode == "minutes" {
 		if err := SetTaskState(taskDir, manifest, TaskMinutesGenerating); err != nil {
 			return fmt.Errorf("updating task state: %w", err)
+		}
+		markArtifactProcessing(&manifest.Artifacts.Minutes)
+		if err := SaveManifest(taskDir, manifest); err != nil {
+			return fmt.Errorf("saving minutes artifact state: %w", err)
 		}
 		fmt.Println("Status: Generating meeting minutes")
 		rawMinutes, err := GenerateMinutes(notesInputPath, settings)

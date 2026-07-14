@@ -172,6 +172,61 @@ func TestRecordTaskError(t *testing.T) {
 	}
 }
 
+func TestArtifactLifecyclePersistsPartialSuccess(t *testing.T) {
+	taskDir := t.TempDir()
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "audio.wav"), "minutes", 5, 10.0, "mimo", "model")
+	m.Artifacts.Transcript.State = ArtifactReady
+	m.Artifacts.Transcript.SHA256 = strings.Repeat("a", 64)
+	m.Artifacts.NotesInput.State = ArtifactReady
+	m.Artifacts.NotesInput.SHA256 = strings.Repeat("b", 64)
+	markArtifactProcessing(&m.Artifacts.Minutes)
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	processing, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processing.Artifacts.Minutes.State != ArtifactProcessing {
+		t.Fatalf("minutes state = %q, want %q", processing.Artifacts.Minutes.State, ArtifactProcessing)
+	}
+
+	retryable := true
+	stageErr := fmt.Errorf("minutes provider unavailable")
+	if err := RecordTaskError(taskDir, m, TaskMinutesGenerating, stageErr, retryable); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "completed_with_errors" {
+		t.Errorf("task status = %q, want completed_with_errors", failed.Status)
+	}
+	if failed.Artifacts.Minutes.State != ArtifactFailed {
+		t.Fatalf("minutes state = %q, want %q", failed.Artifacts.Minutes.State, ArtifactFailed)
+	}
+	artifactError := failed.Artifacts.Minutes.Error
+	if artifactError == nil || artifactError.Code != TaskMinutesGenerating || artifactError.Message != stageErr.Error() || artifactError.Retryable == nil || !*artifactError.Retryable {
+		t.Fatalf("minutes error = %#v, want structured retryable error", artifactError)
+	}
+}
+
+func TestTaskStatusKeepsTotalFailureFailed(t *testing.T) {
+	m := CreateManifest(t.TempDir(), "/audio.wav", "minutes", 5, 10, "mimo", "model")
+	m.State = TaskFailed
+	retryable := false
+	m.Artifacts.Transcript.State = ArtifactFailed
+	m.Artifacts.Transcript.Error = &ArtifactError{Code: TaskMerging, Message: "merge failed", Retryable: &retryable}
+	m.Artifacts.NotesInput.State = ArtifactInvalid
+	m.Artifacts.Minutes.State = ArtifactInvalid
+	if got := taskStatus(m); got != "failed" {
+		t.Fatalf("taskStatus() = %q, want failed", got)
+	}
+}
+
 func TestIsRetryableError(t *testing.T) {
 	tests := []struct {
 		name string

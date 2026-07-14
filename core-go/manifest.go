@@ -26,6 +26,7 @@ type ChunksInfo = taskmanifest.ChunksInfo
 type ChunkItem = taskmanifest.ChunkItem
 type Artifacts = taskmanifest.Artifacts
 type ArtifactInfo = taskmanifest.Artifact
+type ArtifactError = taskmanifest.ArtifactError
 type ErrorInfo = taskmanifest.ErrorInfo
 
 // legacyManifest is the flat manifest format written before the resume state
@@ -81,36 +82,21 @@ func LoadLegacyManifest(taskDir string) (*legacyManifest, error) {
 func SaveManifest(taskDir string, m *Manifest) error {
 	m.SchemaVersion = currentSchemaVersion
 	m.UpdatedAt = nowFunc().Format(time.RFC3339)
-	if m.Execution.Backend == "" {
-		m.Execution.Backend = "go"
+	if m.Backend == "" {
+		m.Backend = "go"
 	}
-	if m.Execution.Provider == "" {
-		m.Execution.Provider = m.Chunks.ASRProvider
-		if m.Execution.Provider == "" {
-			m.Execution.Provider = "unknown"
+	if m.Provider == "" {
+		m.Provider = m.Chunks.ASRProvider
+		if m.Provider == "" {
+			m.Provider = "unknown"
 		}
 	}
-	m.Execution.OutputMode = m.OutputMode
-	m.Execution.Stage = m.State
-	m.Execution.Attempt = m.Attempt
-	switch m.State {
-	case TaskCreated:
-		m.Execution.Status = "created"
-	case TaskCompleted:
-		m.Execution.Status = "completed"
-	case TaskFailed:
-		m.Execution.Status = "failed"
-	default:
-		m.Execution.Status = "processing"
+	m.Status = taskStatus(m)
+	if m.SourceOwnership == "" {
+		m.SourceOwnership = "task_copy"
 	}
-	m.Input.SourceReference = m.Source.Path
-	m.Input.OriginalName = m.Source.OriginalName
-	m.Input.SizeBytes = m.Source.SizeBytes
-	if m.Input.SourceOwnership == "" {
-		m.Input.SourceOwnership = "task_copy"
-	}
-	if m.Input.Format == "" {
-		m.Input.Format = inputFormat(m.Source.Path)
+	if m.InputFormat == "" {
+		m.InputFormat = inputFormat(m.Source.Path)
 	}
 	if err := taskmanifest.ValidateManifest(m); err != nil {
 		return fmt.Errorf("validating task manifest: %w", err)
@@ -163,15 +149,18 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 		IntegrityVersion: 1,
 		TaskID:           filepath.Base(taskDir),
 		OutputMode:       outputMode,
-		Execution:        taskmanifest.ExecutionMetadata{Backend: "go", Provider: asrProvider, OutputMode: outputMode, Status: "created", Stage: string(TaskCreated), Attempt: 1},
+		Backend:          "go",
+		Provider:         asrProvider,
+		Status:           "created",
 		Source: SourceInfo{
 			Path:         sourceAudio,
 			OriginalName: filepath.Base(sourceAudio),
 			SizeBytes:    sizeBytes,
 		},
-		Input:   taskmanifest.InputMetadata{SourceReference: sourceAudio, SourceOwnership: "task_copy", Format: inputFormat(sourceAudio), OriginalName: filepath.Base(sourceAudio), SizeBytes: sizeBytes},
-		State:   TaskCreated,
-		Attempt: 1,
+		SourceOwnership: "task_copy",
+		InputFormat:     inputFormat(sourceAudio),
+		State:           TaskCreated,
+		Attempt:         1,
 		Chunks: ChunksInfo{
 			Format:       "",
 			ChunkMinutes: chunkMinutes,
@@ -183,14 +172,59 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 		},
 		Artifacts: Artifacts{
 			Transcript: ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactPending},
-			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: ArtifactPending},
-			Minutes:    ArtifactInfo{Path: filepath.Join(taskDir, "meeting_minutes.md"), State: ArtifactPending},
+			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: requestedArtifactState(outputMode == "notes" || outputMode == "minutes")},
+			Minutes:    ArtifactInfo{Path: filepath.Join(taskDir, "meeting_minutes.md"), State: requestedArtifactState(outputMode == "minutes")},
 		},
 		LastError:   nil,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		CompletedAt: nil,
 	}
+}
+
+func requestedArtifactState(requested bool) ArtifactState {
+	if requested {
+		return ArtifactPending
+	}
+	return ArtifactInvalid
+}
+
+func taskStatus(m *Manifest) string {
+	if m.State == TaskCreated {
+		return "created"
+	}
+	if m.State == TaskCompleted {
+		for _, artifact := range requiredArtifacts(m) {
+			if artifact.State != ArtifactReady {
+				return "processing"
+			}
+		}
+		return "completed"
+	}
+	if m.State == TaskFailed {
+		completed := false
+		failed := false
+		for _, artifact := range requiredArtifacts(m) {
+			completed = completed || artifact.State == ArtifactReady
+			failed = failed || artifact.State == ArtifactFailed
+		}
+		if completed && failed {
+			return "completed_with_errors"
+		}
+		return "failed"
+	}
+	return "processing"
+}
+
+func requiredArtifacts(m *Manifest) []ArtifactInfo {
+	artifacts := []ArtifactInfo{m.Artifacts.Transcript}
+	if m.OutputMode == "notes" || m.OutputMode == "minutes" {
+		artifacts = append(artifacts, m.Artifacts.NotesInput)
+	}
+	if m.OutputMode == "minutes" {
+		artifacts = append(artifacts, m.Artifacts.Minutes)
+	}
+	return artifacts
 }
 
 func inputFormat(path string) string {
@@ -217,7 +251,60 @@ func RecordTaskError(taskDir string, m *Manifest, stage TaskState, err error, re
 		Retryable: retryable,
 		At:        now,
 	}
+	markArtifactFailed(m, stage, err, retryable)
 	return SaveManifest(taskDir, m)
+}
+
+func markArtifactProcessing(artifact *ArtifactInfo) {
+	artifact.State = ArtifactProcessing
+	artifact.Error = nil
+}
+
+func markArtifactFailed(m *Manifest, stage TaskState, err error, retryable bool) {
+	var artifact *ArtifactInfo
+	switch stage {
+	case TaskMerging:
+		artifact = &m.Artifacts.Transcript
+		m.Artifacts.NotesInput.State = ArtifactInvalid
+		m.Artifacts.NotesInput.Error = nil
+		m.Artifacts.Minutes.State = ArtifactInvalid
+		m.Artifacts.Minutes.Error = nil
+	case TaskNotesGenerating:
+		artifact = &m.Artifacts.NotesInput
+		m.Artifacts.Minutes.State = ArtifactInvalid
+		m.Artifacts.Minutes.Error = nil
+	case TaskMinutesGenerating:
+		artifact = &m.Artifacts.Minutes
+	default:
+		return
+	}
+	artifact.State = ArtifactFailed
+	artifact.Error = &taskmanifest.ArtifactError{Code: string(stage), Message: err.Error(), Retryable: &retryable}
+}
+
+// PrepareArtifactsForResume is the only path allowed to transition a failed
+// artifact back to pending. Non-retryable failures remain durable blockers.
+func PrepareArtifactsForResume(m *Manifest) error {
+	requested := []struct {
+		name     string
+		required bool
+		artifact *ArtifactInfo
+	}{
+		{name: "transcript", required: true, artifact: &m.Artifacts.Transcript},
+		{name: "notes", required: m.OutputMode == "notes" || m.OutputMode == "minutes", artifact: &m.Artifacts.NotesInput},
+		{name: "minutes", required: m.OutputMode == "minutes", artifact: &m.Artifacts.Minutes},
+	}
+	for _, item := range requested {
+		if !item.required || item.artifact.State != ArtifactFailed {
+			continue
+		}
+		if item.artifact.Error == nil || item.artifact.Error.Retryable == nil || !*item.artifact.Error.Retryable {
+			return fmt.Errorf("%s artifact failed and is not retryable", item.name)
+		}
+		item.artifact.State = ArtifactPending
+		item.artifact.Error = nil
+	}
+	return nil
 }
 
 func IsRetryableError(err error) bool {

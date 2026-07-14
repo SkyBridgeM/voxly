@@ -28,24 +28,28 @@ type TaskManifest struct {
 	TaskID        string                     `json:"task_id"`
 	CreatedAt     string                     `json:"created_at"`
 	UpdatedAt     string                     `json:"updated_at"`
-	Execution     ExecutionMetadata          `json:"execution"`
-	Input         InputMetadata              `json:"input"`
-	Artifacts     Artifacts                  `json:"artifacts"`
-	Checkpoint    *CheckpointMetadata        `json:"checkpoint,omitempty"`
 	UserMetadata  *UserMetadata              `json:"user_metadata,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
 
-	// Runtime checkpoint accessors are excluded from JSON. The custom codec
-	// maps them to the versioned execution/input/checkpoint sections so runtime
-	// code and persisted TaskManifest state cannot diverge.
-	IntegrityVersion int        `json:"-"`
-	OutputMode       string     `json:"-"`
-	Source           SourceInfo `json:"-"`
-	State            string     `json:"-"`
-	Attempt          int        `json:"-"`
-	Chunks           ChunksInfo `json:"-"`
-	LastError        *ErrorInfo `json:"-"`
-	CompletedAt      *string    `json:"-"`
+	Backend                 string                     `json:"-"`
+	Provider                string                     `json:"-"`
+	OutputMode              string                     `json:"-"`
+	Status                  string                     `json:"-"`
+	State                   string                     `json:"-"`
+	Attempt                 int                        `json:"-"`
+	LastError               *ErrorInfo                 `json:"-"`
+	CompletedAt             *string                    `json:"-"`
+	Source                  SourceInfo                 `json:"-"`
+	SourceOwnership         string                     `json:"-"`
+	DurationSeconds         *float64                   `json:"-"`
+	InputFormat             string                     `json:"-"`
+	SourceMetadata          map[string]json.RawMessage `json:"-"`
+	Artifacts               Artifacts                  `json:"-"`
+	IntegrityVersion        int                        `json:"-"`
+	Chunks                  ChunksInfo                 `json:"-"`
+	ExecutionUnknownFields  map[string]json.RawMessage `json:"-"`
+	InputUnknownFields      map[string]json.RawMessage `json:"-"`
+	CheckpointUnknownFields map[string]json.RawMessage `json:"-"`
 }
 
 type SourceInfo struct {
@@ -55,10 +59,11 @@ type SourceInfo struct {
 }
 
 type ErrorInfo struct {
-	Stage     string `json:"stage"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-	At        string `json:"at"`
+	Stage         string                     `json:"stage"`
+	Message       string                     `json:"message"`
+	Retryable     bool                       `json:"retryable"`
+	At            string                     `json:"at"`
+	UnknownFields map[string]json.RawMessage `json:"-"`
 }
 
 // Artifacts is the fixed set of runtime deliverables. Unknown artifact kinds
@@ -206,16 +211,21 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	if strings.TrimSpace(manifest.CreatedAt) == "" || strings.TrimSpace(manifest.UpdatedAt) == "" {
 		return errors.New("task manifest missing required timestamps")
 	}
-	if err := manifest.Execution.validate(); err != nil {
+	execution := ExecutionMetadata{
+		Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
+		Status: manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+		CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
+	}
+	if err := execution.validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(manifest.Input.SourceReference) == "" {
+	if strings.TrimSpace(manifest.Source.Path) == "" {
 		return errors.New("task manifest missing input.source_reference")
 	}
-	if strings.TrimSpace(manifest.Input.SourceOwnership) == "" {
+	if strings.TrimSpace(manifest.SourceOwnership) == "" {
 		return errors.New("task manifest missing input.source_ownership")
 	}
-	if strings.TrimSpace(manifest.Input.Format) == "" {
+	if strings.TrimSpace(manifest.InputFormat) == "" {
 		return errors.New("task manifest missing input.format")
 	}
 	for name, artifact := range map[string]Artifact{
@@ -390,84 +400,100 @@ func marshalWithUnknown(known any, unknown map[string]json.RawMessage) ([]byte, 
 }
 
 func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
-	type plain TaskManifest
-	unknown, err := unmarshalWithUnknown(data, (*plain)(manifest), "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata")
+	type wireManifest struct {
+		SchemaVersion string              `json:"schema_version"`
+		TaskID        string              `json:"task_id"`
+		CreatedAt     string              `json:"created_at"`
+		UpdatedAt     string              `json:"updated_at"`
+		Execution     ExecutionMetadata   `json:"execution"`
+		Input         InputMetadata       `json:"input"`
+		Artifacts     Artifacts           `json:"artifacts"`
+		Checkpoint    *CheckpointMetadata `json:"checkpoint,omitempty"`
+		UserMetadata  *UserMetadata       `json:"user_metadata,omitempty"`
+	}
+	var wire wireManifest
+	unknown, err := unmarshalWithUnknown(data, &wire, "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata")
+	if err != nil {
+		return err
+	}
+	manifest.SchemaVersion = wire.SchemaVersion
+	manifest.TaskID = wire.TaskID
+	manifest.CreatedAt = wire.CreatedAt
+	manifest.UpdatedAt = wire.UpdatedAt
+	manifest.UserMetadata = wire.UserMetadata
 	manifest.UnknownFields = unknown
-	manifest.syncRuntime()
-	return err
+	manifest.Backend = wire.Execution.Backend
+	manifest.Provider = wire.Execution.Provider
+	manifest.OutputMode = wire.Execution.OutputMode
+	manifest.Status = wire.Execution.Status
+	manifest.State = wire.Execution.Stage
+	manifest.Attempt = wire.Execution.Attempt
+	manifest.CompletedAt = wire.Execution.CompletedAt
+	manifest.ExecutionUnknownFields = wire.Execution.UnknownFields
+	if wire.Execution.ErrorSummary != nil {
+		retryable := wire.Execution.ErrorSummary.Retryable != nil && *wire.Execution.ErrorSummary.Retryable
+		manifest.LastError = &ErrorInfo{Stage: wire.Execution.ErrorSummary.Code, Message: wire.Execution.ErrorSummary.Message, Retryable: retryable, At: wire.UpdatedAt, UnknownFields: wire.Execution.ErrorSummary.UnknownFields}
+	}
+	manifest.Source = SourceInfo{Path: wire.Input.SourceReference, OriginalName: wire.Input.OriginalName, SizeBytes: wire.Input.SizeBytes}
+	manifest.SourceOwnership = wire.Input.SourceOwnership
+	manifest.DurationSeconds = wire.Input.DurationSeconds
+	manifest.InputFormat = wire.Input.Format
+	manifest.SourceMetadata = wire.Input.SourceMetadata
+	manifest.InputUnknownFields = wire.Input.UnknownFields
+	manifest.Artifacts = wire.Artifacts
+	if wire.Checkpoint != nil {
+		manifest.IntegrityVersion = wire.Checkpoint.IntegrityVersion
+		manifest.Chunks = wire.Checkpoint.Chunks
+		manifest.CheckpointUnknownFields = wire.Checkpoint.UnknownFields
+	}
+	return nil
 }
 
 func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
-	manifest.syncCanonical()
-	type plain TaskManifest
-	return marshalWithUnknown(plain(manifest), manifest.UnknownFields)
+	type wireManifest struct {
+		SchemaVersion string              `json:"schema_version"`
+		TaskID        string              `json:"task_id"`
+		CreatedAt     string              `json:"created_at"`
+		UpdatedAt     string              `json:"updated_at"`
+		Execution     ExecutionMetadata   `json:"execution"`
+		Input         InputMetadata       `json:"input"`
+		Artifacts     Artifacts           `json:"artifacts"`
+		Checkpoint    *CheckpointMetadata `json:"checkpoint,omitempty"`
+		UserMetadata  *UserMetadata       `json:"user_metadata,omitempty"`
+	}
+	wire := wireManifest{
+		SchemaVersion: manifest.SchemaVersion,
+		TaskID:        manifest.TaskID,
+		CreatedAt:     manifest.CreatedAt,
+		UpdatedAt:     manifest.UpdatedAt,
+		Execution: ExecutionMetadata{
+			Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
+			Status: manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+			CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
+			UnknownFields: manifest.ExecutionUnknownFields,
+		},
+		Input: InputMetadata{
+			SourceReference: manifest.Source.Path, SourceOwnership: manifest.SourceOwnership,
+			DurationSeconds: manifest.DurationSeconds, Format: manifest.InputFormat,
+			OriginalName: manifest.Source.OriginalName, SizeBytes: manifest.Source.SizeBytes,
+			SourceMetadata: manifest.SourceMetadata, UnknownFields: manifest.InputUnknownFields,
+		},
+		Artifacts: manifest.Artifacts,
+		Checkpoint: &CheckpointMetadata{
+			IntegrityVersion: manifest.IntegrityVersion, Chunks: manifest.Chunks,
+			UnknownFields: manifest.CheckpointUnknownFields,
+		},
+		UserMetadata: manifest.UserMetadata,
+	}
+	return marshalWithUnknown(wire, manifest.UnknownFields)
 }
 
-func (manifest *TaskManifest) syncCanonical() {
-	if manifest.OutputMode != "" {
-		manifest.Execution.OutputMode = manifest.OutputMode
+func (manifest TaskManifest) errorSummary() *ArtifactError {
+	if manifest.LastError == nil {
+		return nil
 	}
-	if manifest.State != "" {
-		manifest.Execution.Stage = manifest.State
-		manifest.Execution.Status = aggregateStatus(manifest.State)
-	}
-	if manifest.Attempt != 0 {
-		manifest.Execution.Attempt = manifest.Attempt
-	}
-	if manifest.CompletedAt != nil {
-		manifest.Execution.CompletedAt = manifest.CompletedAt
-	}
-	if manifest.LastError != nil {
-		retryable := manifest.LastError.Retryable
-		manifest.Execution.ErrorSummary = &ArtifactError{Code: manifest.LastError.Stage, Message: manifest.LastError.Message, Retryable: &retryable}
-	} else if manifest.State != "FAILED" {
-		manifest.Execution.ErrorSummary = nil
-	}
-	if manifest.Source.Path != "" {
-		manifest.Input.SourceReference = manifest.Source.Path
-		manifest.Input.OriginalName = manifest.Source.OriginalName
-		manifest.Input.SizeBytes = manifest.Source.SizeBytes
-	}
-	if manifest.Input.SourceOwnership == "" {
-		manifest.Input.SourceOwnership = "task_copy"
-	}
-	if manifest.Input.Format == "" {
-		manifest.Input.Format = "unknown"
-	}
-	if manifest.Checkpoint == nil {
-		manifest.Checkpoint = &CheckpointMetadata{}
-	}
-	manifest.Checkpoint.IntegrityVersion = manifest.IntegrityVersion
-	manifest.Checkpoint.Chunks = manifest.Chunks
-}
-
-func (manifest *TaskManifest) syncRuntime() {
-	manifest.OutputMode = manifest.Execution.OutputMode
-	manifest.State = manifest.Execution.Stage
-	manifest.Attempt = manifest.Execution.Attempt
-	manifest.CompletedAt = manifest.Execution.CompletedAt
-	manifest.Source = SourceInfo{Path: manifest.Input.SourceReference, OriginalName: manifest.Input.OriginalName, SizeBytes: manifest.Input.SizeBytes}
-	if manifest.Checkpoint != nil {
-		manifest.IntegrityVersion = manifest.Checkpoint.IntegrityVersion
-		manifest.Chunks = manifest.Checkpoint.Chunks
-	}
-	if manifest.Execution.ErrorSummary != nil {
-		retryable := manifest.Execution.ErrorSummary.Retryable != nil && *manifest.Execution.ErrorSummary.Retryable
-		manifest.LastError = &ErrorInfo{Stage: manifest.Execution.ErrorSummary.Code, Message: manifest.Execution.ErrorSummary.Message, Retryable: retryable, At: manifest.UpdatedAt}
-	}
-}
-
-func aggregateStatus(stage string) string {
-	switch stage {
-	case "CREATED":
-		return "created"
-	case "COMPLETED":
-		return "completed"
-	case "FAILED":
-		return "failed"
-	default:
-		return "processing"
-	}
+	retryable := manifest.LastError.Retryable
+	return &ArtifactError{Code: manifest.LastError.Stage, Message: manifest.LastError.Message, Retryable: &retryable, UnknownFields: manifest.LastError.UnknownFields}
 }
 
 func (manifest *TaskManifest) ChunkByID(id string) *ChunkItem {
