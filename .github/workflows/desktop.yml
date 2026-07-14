@@ -12,7 +12,7 @@ on:
       - "tests/**"
       - "pyproject.toml"
       - "scripts/**"
-      - ".github/workflows/desktop.yml"
+      - ".github/workflows/**"
   push:
     branches:
       - main
@@ -20,11 +20,12 @@ on:
       - "desktop/src-tauri/**"
       - "desktop/package.json"
       - "desktop/package-lock.json"
+      - "core-go/**"
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
       - "scripts/**"
-      - ".github/workflows/desktop.yml"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
