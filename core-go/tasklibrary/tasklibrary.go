@@ -15,7 +15,7 @@ import (
 	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
-const ManifestFilename = "task_manifest.json"
+const ManifestFilename = taskmanifest.ManifestFilename
 
 const (
 	IssueInvalidManifest    = "invalid_manifest"

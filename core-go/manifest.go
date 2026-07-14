@@ -48,7 +48,7 @@ type legacyManifest struct {
 
 // ManifestPath returns the path to task_manifest.json in a task directory.
 func ManifestPath(taskDir string) string {
-	return filepath.Join(taskDir, "task_manifest.json")
+	return filepath.Join(taskDir, taskmanifest.ManifestFilename)
 }
 
 func legacyManifestPath(taskDir string) string {

@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-const CurrentSchemaVersion = "1.0"
+const (
+	CurrentSchemaVersion = "1.0"
+	ManifestFilename     = "task_manifest.json"
+)
 
 var ErrUnsupportedSchemaVersion = errors.New("unsupported task manifest schema version")
 

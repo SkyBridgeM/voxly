@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,6 +28,74 @@ func TestDiscoverMultipleTasksDeterministicOrdering(t *testing.T) {
 	want := []string{"task-c", "task-a", "task-b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("task order = %v, want %v", got, want)
+	}
+}
+
+func TestDiscoverOrderingFallbacks(t *testing.T) {
+	t.Run("equal timestamps use task ID then folder", func(t *testing.T) {
+		root := t.TempDir()
+		writeTask(t, root, "folder-z", manifestFor("same", "completed", "2026-07-14T10:00:00Z", "transcript"))
+		writeTask(t, root, "folder-a", manifestFor("same", "completed", "2026-07-14T10:00:00Z", "transcript"))
+		writeTask(t, root, "folder-m", manifestFor("another", "completed", "2026-07-14T10:00:00Z", "transcript"))
+
+		result, err := Discover(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, len(result.Tasks))
+		for i, task := range result.Tasks {
+			got[i] = task.TaskID + "/" + task.TaskFolder
+		}
+		want := []string{"another/folder-m", "same/folder-a", "same/folder-z"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("task order = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("malformed timestamps remain deterministic", func(t *testing.T) {
+		root := t.TempDir()
+		writeTask(t, root, "folder-a", manifestFor("task-a", "completed", "not-a-time", "transcript"))
+		writeTask(t, root, "folder-b", manifestFor("task-b", "completed", "also-not-a-time", "transcript"))
+
+		first, err := Discover(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := Discover(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(first.Tasks, second.Tasks) {
+			t.Fatalf("malformed timestamp ordering changed: first=%#v second=%#v", first.Tasks, second.Tasks)
+		}
+	})
+}
+
+func TestSafeRelativeReferenceContainment(t *testing.T) {
+	taskDir := filepath.Join(t.TempDir(), "task")
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "nested relative path", path: "outputs/final/transcript.md", want: "outputs/final/transcript.md"},
+		{name: "outside absolute path", path: filepath.Join(filepath.Dir(taskDir), "outside.md"), want: ""},
+		{name: "parent traversal", path: "../outside.md", want: ""},
+		{name: "task directory itself", path: taskDir, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := safeRelativeReference(taskDir, tt.path); got != tt.want {
+				t.Fatalf("safeRelativeReference(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIssueForPermissionFailure(t *testing.T) {
+	issue := issueFor("task-folder", fmt.Errorf("wrapped: %w", os.ErrPermission))
+	if issue.Code != IssueUnreadableManifest || issue.Message != "Task manifest cannot be read." {
+		t.Fatalf("issueFor(permission) = %#v", issue)
 	}
 }
 
