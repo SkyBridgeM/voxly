@@ -37,6 +37,12 @@ export interface OutputRootPreflight {
   message: string;
 }
 
+export interface OutputRootInfo {
+  output_root: string;
+  configured: boolean;
+  runtime_mode: RuntimeMode;
+}
+
 export interface CredentialPreflight {
   status: CredentialStatus;
   message: string;
@@ -118,6 +124,22 @@ export async function getRuntimeInfo(): Promise<RuntimeInfo> {
 /** Returns presentation-safe Task Library data from the configured output root. */
 export async function listTasks(): Promise<DiscoveryResult> {
   return invoke<DiscoveryResult>("list_tasks");
+}
+
+export async function getOutputRoot(): Promise<OutputRootInfo> {
+  return invoke<OutputRootInfo>("get_output_root");
+}
+
+export async function setOutputRoot(outputRoot: string): Promise<OutputRootInfo> {
+  return invoke<OutputRootInfo>("set_output_root", { outputRoot });
+}
+
+export async function resetOutputRoot(): Promise<OutputRootInfo> {
+  return invoke<OutputRootInfo>("reset_output_root");
+}
+
+export async function openOutputRoot(): Promise<void> {
+  return invoke("open_output_root");
 }
 
 export async function openTaskArtifact(

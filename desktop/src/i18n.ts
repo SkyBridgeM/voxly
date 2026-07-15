@@ -102,6 +102,17 @@ export interface Translations {
   settingsMinutesModelDesc: string;
   settingsOutputLocation: string;
   settingsOutputLocationDesc: string;
+  currentOutputFolder: string;
+  changeOutputFolder: string;
+  openOutputFolderAction: string;
+  resetOutputFolder: string;
+  outputFolderChanged: string;
+  outputFolderReset: string;
+  outputFolderMoveWarning: string;
+  outputFolderChangeBlocked: string;
+  outputFolderUnavailable: string;
+  outputFolderNotWritable: string;
+  chooseOutputFolder: string;
   theme: string;
   themeSystem: string;
   themeLight: string;
@@ -255,6 +266,17 @@ export const translations: Record<Locale, Translations> = {
     settingsMinutesModelDesc: "DeepSeek 模型仅用于会议纪要输出。",
     settingsOutputLocation: "输出位置",
     settingsOutputLocationDesc: "所有任务文件都会保存在已配置输出位置之内。",
+    currentOutputFolder: "当前文件夹",
+    changeOutputFolder: "更改文件夹…",
+    openOutputFolderAction: "打开文件夹",
+    resetOutputFolder: "恢复默认",
+    outputFolderChanged: "输出文件夹已更改。",
+    outputFolderReset: "输出位置已恢复为默认设置。",
+    outputFolderMoveWarning: "更改输出文件夹不会移动现有任务。",
+    outputFolderChangeBlocked: "处理任务时无法更改输出文件夹。",
+    outputFolderUnavailable: "输出文件夹不可用。",
+    outputFolderNotWritable: "输出文件夹不可写。",
+    chooseOutputFolder: "选择输出文件夹",
     theme: "主题",
     themeSystem: "跟随系统",
     themeLight: "浅色",
@@ -406,6 +428,17 @@ export const translations: Record<Locale, Translations> = {
     settingsMinutesModelDesc: "The DeepSeek model is used only for meeting-minutes output.",
     settingsOutputLocation: "Output location",
     settingsOutputLocationDesc: "Every task folder and generated file stays inside the configured output location.",
+    currentOutputFolder: "Current folder",
+    changeOutputFolder: "Change Folder…",
+    openOutputFolderAction: "Open Folder",
+    resetOutputFolder: "Reset to Default",
+    outputFolderChanged: "Output folder changed successfully.",
+    outputFolderReset: "Output location reset successfully.",
+    outputFolderMoveWarning: "Changing the output folder does not move existing tasks.",
+    outputFolderChangeBlocked: "Cannot change output folder while processing.",
+    outputFolderUnavailable: "Output folder unavailable.",
+    outputFolderNotWritable: "Output folder is not writable.",
+    chooseOutputFolder: "Choose output folder",
     theme: "Theme",
     themeSystem: "System",
     themeLight: "Light",
