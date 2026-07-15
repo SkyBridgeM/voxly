@@ -1,8 +1,8 @@
 # Future Processing Architecture
 
-Status: proposed architecture for incremental implementation  
-Scope: processing contracts, artifacts, and migration boundaries  
-Current implementation: remains unchanged by this document
+- Status: proposed architecture for incremental implementation
+- Scope: processing contracts, artifacts, and migration boundaries
+- Current implementation: remains unchanged by this document
 
 ## 1. Purpose and invariants
 
