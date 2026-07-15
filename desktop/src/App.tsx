@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
@@ -18,6 +24,7 @@ import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
 import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
+import { TaskLibrary } from "./components/TaskLibrary";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
@@ -59,6 +66,11 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
+  const [activeArea, setActiveArea] = useState<"workflow" | "library">("workflow");
+  const [libraryOpened, setLibraryOpened] = useState(false);
+  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
+  const workflowTabRef = useRef<HTMLButtonElement>(null);
+  const libraryTabRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
@@ -263,6 +275,7 @@ function App() {
 
       setStatus(t.completedSuccessfully);
       setStatusOk(true);
+      if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } catch (e) {
       const error = parseBackendError(String(e));
       setErrorMessage(error.message);
@@ -285,7 +298,29 @@ function App() {
     t,
     queueLog,
     flushPendingLogs,
+    libraryOpened,
   ]);
+
+  const showWorkflow = useCallback(() => {
+    setActiveArea("workflow");
+    requestAnimationFrame(() => workflowTabRef.current?.focus());
+  }, []);
+
+  const showLibrary = () => {
+    setLibraryOpened(true);
+    setActiveArea("library");
+  };
+
+  const handleWorkspaceTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    if (activeArea === "workflow") {
+      showLibrary();
+      requestAnimationFrame(() => libraryTabRef.current?.focus());
+    } else {
+      showWorkflow();
+    }
+  };
 
   const handleOpenFolder = useCallback(async () => {
     if (!taskFolder) return;
@@ -396,8 +431,44 @@ function App() {
           </div>
         </header>
 
+        <nav
+          className="workspace-tabs"
+          role="tablist"
+          aria-label={t.workspaceNavigation}
+          onKeyDown={handleWorkspaceTabKeyDown}
+        >
+          <button
+            ref={workflowTabRef}
+            id="workflow-tab"
+            role="tab"
+            aria-selected={activeArea === "workflow"}
+            aria-controls="workflow-panel"
+            tabIndex={activeArea === "workflow" ? 0 : -1}
+            onClick={() => setActiveArea("workflow")}
+          >
+            {t.newTask}
+          </button>
+          <button
+            ref={libraryTabRef}
+            id="library-tab"
+            role="tab"
+            aria-selected={activeArea === "library"}
+            aria-controls="library-panel"
+            tabIndex={activeArea === "library" ? 0 : -1}
+            onClick={showLibrary}
+          >
+            {t.taskLibraryTitle}
+          </button>
+        </nav>
+
         <main className="main-content">
-          <section className="workflow-card">
+          <div
+            id="workflow-panel"
+            role="tabpanel"
+            aria-labelledby="workflow-tab"
+            hidden={activeArea !== "workflow"}
+          >
+            <section className="workflow-card">
             <div className="card-heading">
               <div>
                 <span className="section-kicker">{t.workflowEyebrow}</span>
@@ -458,7 +529,7 @@ function App() {
             </div>
           </section>
 
-          <section className="activity-region">
+            <section className="activity-region">
             {!hasActivity && (
               <div className={`empty-state ${audioPath ? "has-file" : ""}`}>
                 <div className="empty-visual" aria-hidden="true">
@@ -534,7 +605,24 @@ function App() {
                 <span>{status}</span>
               </div>
             )}
-          </section>
+            </section>
+          </div>
+
+          {libraryOpened && (
+            <div
+              id="library-panel"
+              role="tabpanel"
+              aria-labelledby="library-tab"
+              hidden={activeArea !== "library"}
+            >
+              <TaskLibrary
+                locale={locale}
+                labels={t}
+                refreshToken={libraryRefreshToken}
+                onReturnToWorkflow={showWorkflow}
+              />
+            </div>
+          )}
         </main>
       </div>
 

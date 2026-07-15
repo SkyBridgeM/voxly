@@ -54,6 +54,39 @@ export interface RuntimePreflight {
   deepseek_api_key: CredentialPreflight;
 }
 
+export interface ArtifactSummary {
+  kind: string;
+  status: string;
+  reference: string | null;
+  has_error: boolean;
+  retryable: boolean | null;
+}
+
+export interface TaskSummary {
+  task_id: string;
+  title: string;
+  title_source: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tags: string[];
+  output_mode: string;
+  primary_artifacts: ArtifactSummary[];
+  has_partial_errors: boolean;
+  task_folder: string;
+}
+
+export interface DiscoveryIssue {
+  task_folder: string;
+  code: string;
+  message: string;
+}
+
+export interface DiscoveryResult {
+  tasks: TaskSummary[];
+  issues: DiscoveryIssue[];
+}
+
 export interface BackendErrorInfo {
   category: string;
   message: string;
@@ -80,6 +113,11 @@ export interface RunCallbacks {
 /** Returns runtime/backend policy metadata only; no credentials are included. */
 export async function getRuntimeInfo(): Promise<RuntimeInfo> {
   return invoke<RuntimeInfo>("get_runtime_info");
+}
+
+/** Returns presentation-safe Task Library data from the configured output root. */
+export async function listTasks(): Promise<DiscoveryResult> {
+  return invoke<DiscoveryResult>("list_tasks");
 }
 
 /**
