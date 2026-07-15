@@ -21,6 +21,7 @@ import { ResultPanel } from "./components/ResultPanel";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
+const MAX_RETAINED_LOGS = 1000;
 
 function App() {
   const buildRuntimeMode: RuntimeMode = import.meta.env.DEV ? "development" : "production";
@@ -54,6 +55,8 @@ function App() {
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const pendingLogsRef = useRef<LogEntry[]>([]);
+  const logFrameRef = useRef<number | null>(null);
 
   const [mimoApiKey, setMimoApiKey] = useState("");
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
@@ -63,6 +66,38 @@ function App() {
   const [preflightError, setPreflightError] = useState<string | null>(null);
 
   const t = translations[locale];
+
+  const flushPendingLogs = useCallback(() => {
+    if (logFrameRef.current !== null) {
+      cancelAnimationFrame(logFrameRef.current);
+    }
+    logFrameRef.current = null;
+    const pending = pendingLogsRef.current.splice(0);
+    if (pending.length === 0) return;
+    setLogs((previous) =>
+      [...previous, ...pending].slice(-MAX_RETAINED_LOGS)
+    );
+  }, []);
+
+  const queueLog = useCallback(
+    (entry: LogEntry) => {
+      pendingLogsRef.current.push(entry);
+      if (logFrameRef.current === null) {
+        logFrameRef.current = requestAnimationFrame(flushPendingLogs);
+      }
+    },
+    [flushPendingLogs]
+  );
+
+  useEffect(
+    () => () => {
+      if (logFrameRef.current !== null) {
+        cancelAnimationFrame(logFrameRef.current);
+      }
+      pendingLogsRef.current = [];
+    },
+    []
+  );
 
   const refreshPreflight = useCallback(async () => {
     setPreflightLoading(true);
@@ -183,6 +218,11 @@ function App() {
     setMinutesPath(null);
     setStatus(null);
     setStatusOk(null);
+    pendingLogsRef.current = [];
+    if (logFrameRef.current !== null) {
+      cancelAnimationFrame(logFrameRef.current);
+      logFrameRef.current = null;
+    }
     setLogs([]);
     setErrorMessage("");
 
@@ -192,7 +232,7 @@ function App() {
         outputMode,
         { mimoApiKey, deepseekApiKey, deepseekModel, backend },
         {
-          onLog: (entry) => setLogs((prev) => [...prev, entry]),
+          onLog: queueLog,
           onProgress: (event) => setProgress(event),
           onDone: () => {},
         }
@@ -212,6 +252,7 @@ function App() {
       setStatus(error.message);
       setStatusOk(false);
     } finally {
+      flushPendingLogs();
       setIsRunning(false);
       setProgress(null);
     }
@@ -224,6 +265,8 @@ function App() {
     deepseekModel,
     backend,
     t,
+    queueLog,
+    flushPendingLogs,
   ]);
 
   const handleOpenFolder = useCallback(async () => {

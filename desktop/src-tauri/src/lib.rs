@@ -1595,10 +1595,9 @@ fn run_and_check(
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
-fn run_meeting_asr(
+fn run_meeting_asr_blocking(
     app: AppHandle,
-    active: State<'_, ActiveProcess>,
+    active: ActiveProcess,
     audio_path: String,
     output_mode: String,
     backend: Option<String>,
@@ -1693,7 +1692,41 @@ fn run_meeting_asr(
     let secrets = std::iter::once(credentials.mimo.clone())
         .chain(credentials.deepseek.iter().cloned())
         .collect::<Vec<_>>();
-    run_and_check(&app, active.inner(), cmd, &output_mode, &abs_out, &secrets)
+    run_and_check(&app, &active, cmd, &output_mode, &abs_out, &secrets)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn run_meeting_asr(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    audio_path: String,
+    output_mode: String,
+    backend: Option<String>,
+    mimo_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
+    deepseek_model: Option<String>,
+) -> Result<RunResult, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_meeting_asr_blocking(
+            app,
+            active,
+            audio_path,
+            output_mode,
+            backend,
+            mimo_api_key,
+            deepseek_api_key,
+            deepseek_model,
+        )
+    })
+    .await
+    .map_err(|error| {
+        String::from(BackendError::ProcessFailed {
+            message: format!("Run worker failed: {error}"),
+            code: None,
+        })
+    })?
 }
 
 // ---------------------------------------------------------------------------
@@ -1740,10 +1773,9 @@ fn validate_output_mode(mode: &str) -> Result<String, BackendError> {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
-fn resume_meeting_asr(
+fn resume_meeting_asr_blocking(
     app: AppHandle,
-    active: State<'_, ActiveProcess>,
+    active: ActiveProcess,
     task_dir: String,
     output_mode: Option<String>,
     backend: Option<String>,
@@ -1888,14 +1920,41 @@ fn resume_meeting_asr(
         .chain(credentials.deepseek.iter().cloned())
         .collect::<Vec<_>>();
 
-    run_and_check(
-        &app,
-        active.inner(),
-        cmd,
-        &effective_mode,
-        &output_root,
-        &secrets,
-    )
+    run_and_check(&app, &active, cmd, &effective_mode, &output_root, &secrets)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn resume_meeting_asr(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_dir: String,
+    output_mode: Option<String>,
+    backend: Option<String>,
+    mimo_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
+    deepseek_model: Option<String>,
+) -> Result<RunResult, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        resume_meeting_asr_blocking(
+            app,
+            active,
+            task_dir,
+            output_mode,
+            backend,
+            mimo_api_key,
+            deepseek_api_key,
+            deepseek_model,
+        )
+    })
+    .await
+    .map_err(|error| {
+        String::from(BackendError::ProcessFailed {
+            message: format!("Resume worker failed: {error}"),
+            code: None,
+        })
+    })?
 }
 
 // ---------------------------------------------------------------------------
