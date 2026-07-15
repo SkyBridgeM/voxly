@@ -105,14 +105,16 @@ function App() {
     []
   );
 
-  const refreshPreflight = useCallback(async () => {
+  const refreshPreflight = useCallback(async (
+    selectedBackend: BackendKind = backend
+  ) => {
     setPreflightLoading(true);
     setPreflightError(null);
     try {
       const result = await getRuntimePreflight({
         mimoApiKey,
         deepseekApiKey,
-        backend,
+        backend: selectedBackend,
       });
       setPreflight(result);
     } catch {
@@ -721,9 +723,12 @@ function App() {
                     <select
                       id="settings-backend"
                       value={backend}
-                      onChange={(e) =>
-                        setBackend(e.target.value === "go" ? "go" : "python")
-                      }
+                      onChange={(e) => {
+                        const selectedBackend =
+                          e.target.value === "go" ? "go" : "python";
+                        setBackend(selectedBackend);
+                        void refreshPreflight(selectedBackend);
+                      }}
                     >
                       <option value="python">{t.backendPython}</option>
                       <option value="go">{t.backendGoExperimental}</option>
