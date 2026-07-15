@@ -1,11 +1,11 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 mod credentials;
@@ -667,8 +667,8 @@ fn configured_output_root_path(
 fn output_root_preflight(app: &AppHandle) -> Result<OutputRootPreflight, BackendError> {
     let settings_path = desktop_settings_path(app)?;
     let settings = load_desktop_settings(&settings_path)?;
-    if let Some(configured) = configured_output_root_path(&settings)? {
-        return Ok(output_root_preflight_for(&configured, true));
+    if let Some(preflight) = configured_output_root_preflight(&settings) {
+        return Ok(preflight);
     }
 
     let runtime_mode = RuntimeMode::current();
@@ -685,6 +685,21 @@ fn output_root_preflight(app: &AppHandle) -> Result<OutputRootPreflight, Backend
     };
     let default_root = get_default_output_root(runtime_mode, documents_dir.as_deref())?;
     Ok(output_root_preflight_for(&default_root, false))
+}
+
+fn configured_output_root_preflight(settings: &DesktopSettings) -> Option<OutputRootPreflight> {
+    settings.output_root.as_deref().map(|value| {
+        let configured = PathBuf::from(value);
+        if value.trim().is_empty() || !configured.is_absolute() {
+            return OutputRootPreflight {
+                path: value.to_string(),
+                configured: true,
+                ready: false,
+                message: "Configured output root is invalid.".to_string(),
+            };
+        }
+        output_root_preflight_for(&configured, true)
+    })
 }
 
 fn credential_status_message(status: &CredentialStatus) -> String {
@@ -808,7 +823,7 @@ struct DesktopSettings {
     development_backend: Option<BackendKind>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct OutputRootInfo {
     output_root: String,
     configured: bool,
@@ -898,11 +913,60 @@ fn set_configured_output_root(
     settings_path: &Path,
     output_root: &Path,
 ) -> Result<PathBuf, BackendError> {
-    let canonical = validate_output_root(output_root)?;
+    let canonical = validate_selected_output_root(output_root)?;
     let mut settings = load_desktop_settings(settings_path)?;
     settings.output_root = Some(canonical.to_string_lossy().to_string());
     save_desktop_settings(settings_path, &settings)?;
     Ok(canonical)
+}
+
+fn validate_selected_output_root(path: &Path) -> Result<PathBuf, BackendError> {
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(BackendError::InvalidInput {
+            message: "Output folder must be an absolute path.".to_string(),
+        });
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Output folder is unavailable.".to_string(),
+        })?;
+    if !canonical.is_dir() {
+        return Err(BackendError::InvalidInput {
+            message: "Output folder is not a directory.".to_string(),
+        });
+    }
+    probe_output_root_writable(&canonical)?;
+    Ok(canonical)
+}
+
+fn probe_output_root_writable(path: &Path) -> Result<(), BackendError> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let probe = path.join(format!(
+        ".meeting-asr-write-probe-{}-{nonce}",
+        std::process::id()
+    ));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Output folder is not writable.".to_string(),
+        })?;
+    drop(file);
+    fs::remove_file(&probe).map_err(|_| BackendError::InvalidInput {
+        message: "Output folder writability check could not be cleaned up.".to_string(),
+    })?;
+    Ok(())
+}
+
+fn reset_configured_output_root(settings_path: &Path) -> Result<(), BackendError> {
+    let mut settings = load_desktop_settings(settings_path)?;
+    settings.output_root = None;
+    save_desktop_settings(settings_path, &settings)
 }
 
 fn select_output_root_path(
@@ -970,7 +1034,7 @@ fn resolve_task_library_output_root(app: &AppHandle) -> Result<Option<PathBuf>, 
 #[tauri::command]
 fn get_output_root(app: AppHandle) -> Result<OutputRootInfo, String> {
     let runtime_mode = RuntimeMode::current();
-    let (output_root, configured) = resolve_output_root(&app).map_err(String::from)?;
+    let (output_root, configured) = resolve_output_root_path(&app).map_err(String::from)?;
     Ok(OutputRootInfo {
         output_root: output_root.to_string_lossy().to_string(),
         configured,
@@ -978,8 +1042,12 @@ fn get_output_root(app: AppHandle) -> Result<OutputRootInfo, String> {
     })
 }
 
-#[tauri::command]
-fn set_output_root(app: AppHandle, output_root: String) -> Result<OutputRootInfo, String> {
+fn set_output_root_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    output_root: String,
+) -> Result<OutputRootInfo, String> {
+    ensure_output_root_mutation_allowed(&active).map_err(String::from)?;
     let settings_path = desktop_settings_path(&app).map_err(String::from)?;
     let output_root = set_configured_output_root(&settings_path, Path::new(&output_root))
         .map_err(String::from)?;
@@ -988,6 +1056,115 @@ fn set_output_root(app: AppHandle, output_root: String) -> Result<OutputRootInfo
         configured: true,
         runtime_mode: RuntimeMode::current(),
     })
+}
+
+#[tauri::command]
+async fn set_output_root(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    output_root: String,
+) -> Result<OutputRootInfo, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || set_output_root_blocking(app, active, output_root))
+        .await
+        .map_err(|_| output_root_worker_error())?
+}
+
+fn reset_output_root_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+) -> Result<OutputRootInfo, String> {
+    ensure_output_root_mutation_allowed(&active).map_err(String::from)?;
+    let settings_path = desktop_settings_path(&app).map_err(String::from)?;
+    reset_configured_output_root(&settings_path).map_err(String::from)?;
+    let runtime_mode = RuntimeMode::current();
+    let (output_root, configured) = resolve_output_root_path(&app).map_err(String::from)?;
+    Ok(OutputRootInfo {
+        output_root: output_root.to_string_lossy().to_string(),
+        configured,
+        runtime_mode,
+    })
+}
+
+#[tauri::command]
+async fn reset_output_root(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+) -> Result<OutputRootInfo, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || reset_output_root_blocking(app, active))
+        .await
+        .map_err(|_| output_root_worker_error())?
+}
+
+fn output_root_worker_error() -> String {
+    String::from(BackendError::ProcessFailed {
+        message: "Output folder worker failed.".to_string(),
+        code: None,
+    })
+}
+
+fn validate_output_root_for_open(path: &Path) -> Result<PathBuf, BackendError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Output folder is unavailable.".to_string(),
+        })?;
+    if !canonical.is_dir() {
+        return Err(BackendError::InvalidInput {
+            message: "Output folder is unavailable.".to_string(),
+        });
+    }
+    Ok(canonical)
+}
+
+#[cfg(target_os = "macos")]
+fn perform_open_output_root(path: &Path) -> Result<(), BackendError> {
+    perform_open_output_root_with("open", path)
+}
+
+#[cfg(target_os = "windows")]
+fn perform_open_output_root(path: &Path) -> Result<(), BackendError> {
+    perform_open_output_root_with("explorer.exe", path)
+}
+
+#[cfg(target_os = "linux")]
+fn perform_open_output_root(path: &Path) -> Result<(), BackendError> {
+    perform_open_output_root_with("xdg-open", path)
+}
+
+fn perform_open_output_root_with(program: &str, path: &Path) -> Result<(), BackendError> {
+    let status =
+        Command::new(program)
+            .arg(path)
+            .status()
+            .map_err(|_| BackendError::InvalidInput {
+                message: "Could not open the output folder.".to_string(),
+            })?;
+    if !status.success() {
+        return Err(BackendError::InvalidInput {
+            message: "Could not open the output folder.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn open_output_root_blocking(app: AppHandle) -> Result<(), String> {
+    let (path, _) = resolve_output_root_path(&app).map_err(String::from)?;
+    let canonical = validate_output_root_for_open(&path).map_err(String::from)?;
+    perform_open_output_root(&canonical).map_err(String::from)
+}
+
+#[tauri::command]
+async fn open_output_root(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_output_root_blocking(app))
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Output folder worker failed.".to_string(),
+                code: None,
+            })
+        })?
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,6 +1499,13 @@ struct ActiveProcess {
 }
 
 impl ActiveProcess {
+    fn is_active(&self) -> bool {
+        match self.child.lock() {
+            Ok(guard) => guard.is_some(),
+            Err(_) => true,
+        }
+    }
+
     fn terminate(&self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(child) = guard.as_mut() {
@@ -1329,6 +1513,19 @@ impl ActiveProcess {
             }
         }
     }
+}
+
+fn ensure_output_root_mutation_allowed(active: &ActiveProcess) -> Result<(), BackendError> {
+    validate_output_root_mutation_state(active.is_active())
+}
+
+fn validate_output_root_mutation_state(is_active: bool) -> Result<(), BackendError> {
+    if is_active {
+        return Err(BackendError::InvalidInput {
+            message: "Cannot change output folder while processing.".to_string(),
+        });
+    }
+    Ok(())
 }
 
 struct ProcessRunner {
@@ -2583,6 +2780,8 @@ pub fn run() {
             get_runtime_preflight,
             get_output_root,
             set_output_root,
+            reset_output_root,
+            open_output_root,
             open_task_folder,
             run_meeting_asr,
             resume_meeting_asr,
@@ -3232,6 +3431,7 @@ mod tests {
         let base = test_dir("meeting-asr-desktop-settings");
         let settings_path = base.join(DESKTOP_SETTINGS_FILE);
         let output_root = base.join("output");
+        fs::create_dir_all(&output_root).unwrap();
 
         let saved = set_configured_output_root(&settings_path, &output_root).unwrap();
         let settings = load_desktop_settings(&settings_path).unwrap();
@@ -3245,12 +3445,106 @@ mod tests {
     }
 
     #[test]
+    fn test_selected_output_root_requires_existing_writable_directory() {
+        let base = test_dir("meeting-asr-selected-output-root");
+        let root = base.join("output");
+        fs::create_dir_all(&root).unwrap();
+
+        let canonical = validate_selected_output_root(&root).unwrap();
+        assert_eq!(canonical, root.canonicalize().unwrap());
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+
+        assert!(validate_selected_output_root(Path::new("")).is_err());
+        assert!(validate_selected_output_root(Path::new("relative-output")).is_err());
+        assert!(validate_selected_output_root(&base.join("missing")).is_err());
+
+        let file = base.join("file.txt");
+        fs::write(&file, "not a directory").unwrap();
+        assert!(validate_selected_output_root(&file).is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_selected_output_root_canonicalizes_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let base = test_dir("meeting-asr-selected-output-root-symlink");
+        let root = base.join("output");
+        let link = base.join("output-link");
+        fs::create_dir_all(&root).unwrap();
+        symlink(&root, &link).unwrap();
+        assert_eq!(
+            validate_selected_output_root(&link).unwrap(),
+            root.canonicalize().unwrap()
+        );
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_reset_output_root_clears_only_configured_root() {
+        let base = test_dir("meeting-asr-reset-output-root");
+        let settings_path = base.join(DESKTOP_SETTINGS_FILE);
+        let root = base.join("output");
+        fs::create_dir_all(&root).unwrap();
+        let settings = DesktopSettings {
+            output_root: Some(root.to_string_lossy().to_string()),
+            language: Some("zh".to_string()),
+            ..Default::default()
+        };
+        save_desktop_settings(&settings_path, &settings).unwrap();
+
+        reset_configured_output_root(&settings_path).unwrap();
+        let reloaded = load_desktop_settings(&settings_path).unwrap();
+        assert_eq!(reloaded.output_root, None);
+        assert_eq!(reloaded.language.as_deref(), Some("zh"));
+
+        let default = get_default_output_root(RuntimeMode::Development, None).unwrap();
+        assert_eq!(
+            select_output_root_path(&reloaded, RuntimeMode::Development, None).unwrap(),
+            (default, false)
+        );
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_output_root_mutation_rejects_active_processing() {
+        assert!(validate_output_root_mutation_state(false).is_ok());
+        let error = validate_output_root_mutation_state(true)
+            .unwrap_err()
+            .to_json_string();
+        assert!(error.contains("Cannot change output folder while processing."));
+        assert!(!error.contains("output_root"));
+    }
+
+    #[test]
+    fn test_open_output_root_requires_existing_directory() {
+        let base = test_dir("meeting-asr-open-output-root");
+        fs::create_dir_all(&base).unwrap();
+        assert_eq!(
+            validate_output_root_for_open(&base).unwrap(),
+            base.canonicalize().unwrap()
+        );
+        assert!(validate_output_root_for_open(&base.join("missing")).is_err());
+        let file = base.join("file.txt");
+        fs::write(&file, "file").unwrap();
+        assert!(validate_output_root_for_open(&file).is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
     fn test_configured_output_root_rejects_relative_path() {
         let settings = DesktopSettings {
             output_root: Some("relative-output".to_string()),
             ..Default::default()
         };
         assert!(configured_output_root_path(&settings).is_err());
+
+        let preflight = configured_output_root_preflight(&settings).unwrap();
+        assert!(preflight.configured);
+        assert!(!preflight.ready);
+        assert_eq!(preflight.path, "relative-output");
+        assert_eq!(preflight.message, "Configured output root is invalid.");
     }
 
     #[test]
@@ -4023,6 +4317,37 @@ mod tests {
         let worker = task_artifact_worker_error();
         assert!(worker.contains(r#""category":"process_failed""#));
         assert!(worker.contains("Task artifact worker failed"));
+    }
+
+    #[test]
+    fn test_task_artifact_resolution_uses_newly_configured_root() {
+        let base = test_dir("meeting-asr-artifact-configured-root");
+        let old_root = base.join("old-root");
+        let new_root = base.join("new-root");
+        let old_task = old_root.join("task");
+        let new_task = new_root.join("task");
+        fs::create_dir_all(&old_task).unwrap();
+        fs::create_dir_all(&new_root).unwrap();
+        fs::write(old_task.join("artifact.md"), "old").unwrap();
+
+        let settings_path = base.join(DESKTOP_SETTINGS_FILE);
+        let configured = set_configured_output_root(&settings_path, &new_root).unwrap();
+        assert_eq!(configured, new_root.canonicalize().unwrap());
+
+        let discovery = artifact_discovery("task", "artifact.md");
+        assert!(
+            resolve_validated_task_artifact(&configured, &discovery, "task", "artifact.md")
+                .is_err()
+        );
+
+        fs::create_dir_all(&new_task).unwrap();
+        fs::write(new_task.join("artifact.md"), "new").unwrap();
+        assert_eq!(
+            resolve_validated_task_artifact(&configured, &discovery, "task", "artifact.md")
+                .unwrap(),
+            new_task.join("artifact.md").canonicalize().unwrap()
+        );
+        fs::remove_dir_all(base).ok();
     }
 
     // --- interrupted ---

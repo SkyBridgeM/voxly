@@ -5,6 +5,7 @@ import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
@@ -12,12 +13,16 @@ import {
   saveEnvKey,
   getRuntimeInfo,
   getRuntimePreflight,
+  setOutputRoot,
+  resetOutputRoot,
+  openOutputRoot,
   parseBackendError,
   type BackendKind,
   type RuntimeMode,
   type RuntimePreflight,
   type LogEntry,
   type OutputMode,
+  type OutputRootInfo,
   type ProgressEvent,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
@@ -74,6 +79,9 @@ function App() {
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const changeOutputFolderButtonRef = useRef<HTMLButtonElement>(null);
+  const outputMutationInFlightRef = useRef(false);
+  const outputOpenInFlightRef = useRef(false);
   const pendingLogsRef = useRef<LogEntry[]>([]);
   const logFrameRef = useRef<number | null>(null);
 
@@ -83,6 +91,14 @@ function App() {
   const [preflight, setPreflight] = useState<RuntimePreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | null>(null);
+  const [outputRootInfo, setOutputRootInfo] = useState<OutputRootInfo | null>(null);
+  const [outputPickerPending, setOutputPickerPending] = useState(false);
+  const [outputMutationPending, setOutputMutationPending] = useState(false);
+  const [outputOpenPending, setOutputOpenPending] = useState(false);
+  const [outputLocationFeedback, setOutputLocationFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
 
   const t = translations[locale];
 
@@ -130,6 +146,11 @@ function App() {
         backend: selectedBackend,
       });
       setPreflight(result);
+      setOutputRootInfo({
+        output_root: result.output_root.path,
+        configured: result.output_root.configured,
+        runtime_mode: result.runtime_mode,
+      });
     } catch {
       setPreflight(null);
       setPreflightError(t.preflightUnavailable);
@@ -338,8 +359,126 @@ function App() {
 
   const handleOpenSettings = () => {
     setShowSettings(true);
+    setOutputLocationFeedback(null);
     void refreshPreflight();
   };
+
+  const outputLocationError = useCallback((error: unknown) => {
+    const message = parseBackendError(String(error)).message;
+    if (message.includes("while processing")) return t.outputFolderChangeBlocked;
+    if (message.includes("not writable")) return t.outputFolderNotWritable;
+    if (
+      message.includes("unavailable") ||
+      message.includes("not a directory") ||
+      message.includes("absolute path") ||
+      message.includes("output folder") ||
+      message.includes("desktop settings")
+    ) {
+      return t.outputFolderUnavailable;
+    }
+    return t.outputFolderUnavailable;
+  }, [
+    t.outputFolderChangeBlocked,
+    t.outputFolderNotWritable,
+    t.outputFolderUnavailable,
+  ]);
+
+  const refreshAfterOutputRootChange = useCallback(async () => {
+    if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
+    await refreshPreflight();
+  }, [libraryOpened, refreshPreflight]);
+
+  const handleChangeOutputFolder = useCallback(async () => {
+    if (isRunning || outputMutationInFlightRef.current) return;
+    outputMutationInFlightRef.current = true;
+    setOutputPickerPending(true);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: t.chooseOutputFolder,
+        defaultPath: outputRootInfo?.output_root,
+      });
+      if (typeof selected !== "string") return;
+
+      setOutputMutationPending(true);
+      setOutputLocationFeedback(null);
+      try {
+        const next = await setOutputRoot(selected);
+        setOutputRootInfo(next);
+        setOutputLocationFeedback({
+          tone: "success",
+          message: t.outputFolderChanged,
+        });
+        await refreshAfterOutputRootChange();
+      } catch (error) {
+        setOutputLocationFeedback({
+          tone: "error",
+          message: outputLocationError(error),
+        });
+      } finally {
+        setOutputMutationPending(false);
+      }
+    } finally {
+      outputMutationInFlightRef.current = false;
+      setOutputPickerPending(false);
+      requestAnimationFrame(() => changeOutputFolderButtonRef.current?.focus());
+    }
+  }, [
+    isRunning,
+    outputRootInfo?.output_root,
+    t.chooseOutputFolder,
+    t.outputFolderChanged,
+    outputLocationError,
+    refreshAfterOutputRootChange,
+  ]);
+
+  const handleResetOutputFolder = useCallback(async () => {
+    if (isRunning || outputMutationInFlightRef.current) return;
+    outputMutationInFlightRef.current = true;
+    setOutputMutationPending(true);
+    setOutputLocationFeedback(null);
+    try {
+      const next = await resetOutputRoot();
+      setOutputRootInfo(next);
+      setOutputLocationFeedback({
+        tone: "success",
+        message: t.outputFolderReset,
+      });
+      await refreshAfterOutputRootChange();
+    } catch (error) {
+      setOutputLocationFeedback({
+        tone: "error",
+        message: outputLocationError(error),
+      });
+    } finally {
+      outputMutationInFlightRef.current = false;
+      setOutputMutationPending(false);
+    }
+  }, [
+    isRunning,
+    t.outputFolderReset,
+    outputLocationError,
+    refreshAfterOutputRootChange,
+  ]);
+
+  const handleOpenOutputFolder = useCallback(async () => {
+    if (outputOpenInFlightRef.current) return;
+    outputOpenInFlightRef.current = true;
+    setOutputOpenPending(true);
+    setOutputLocationFeedback(null);
+    try {
+      await openOutputRoot();
+    } catch (error) {
+      setOutputLocationFeedback({
+        tone: "error",
+        message: outputLocationError(error),
+      });
+    } finally {
+      outputOpenInFlightRef.current = false;
+      setOutputOpenPending(false);
+    }
+  }, [outputLocationError]);
 
   const handleSaveKey = async (key: string, value: string) => {
     if (!value.trim()) return;
@@ -984,22 +1123,70 @@ function App() {
                     </div>
                   </div>
                 </div>
-                {preflight ? (
+                {outputRootInfo || preflight ? (
                   <div className="output-location-card">
                     <div className="output-location-meta">
-                      <span className="preflight-label">{t.outputRoot}</span>
-                      <span
-                        className={
-                          preflight.output_root.ready
-                            ? "preflight-value ready"
-                            : "preflight-value not-ready"
+                      <span className="preflight-label">{t.currentOutputFolder}</span>
+                      {preflight && (
+                        <span
+                          className={
+                            preflight.output_root.ready
+                              ? "preflight-value ready"
+                              : "preflight-value not-ready"
+                          }
+                        >
+                          {preflight.output_root.ready ? t.ready : t.notReady}
+                        </span>
+                      )}
+                    </div>
+                    <code>{outputRootInfo?.output_root ?? preflight?.output_root.path}</code>
+                    <p className="output-location-warning">{t.outputFolderMoveWarning}</p>
+                    <div className="output-location-actions">
+                      <button
+                        ref={changeOutputFolderButtonRef}
+                        className="btn-secondary"
+                        onClick={() => void handleChangeOutputFolder()}
+                        disabled={
+                          isRunning || outputPickerPending || outputMutationPending
+                        }
+                        title={isRunning ? t.outputFolderChangeBlocked : undefined}
+                      >
+                        {t.changeOutputFolder}
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => void handleOpenOutputFolder()}
+                        disabled={
+                          outputOpenPending ||
+                          outputPickerPending ||
+                          outputMutationPending
                         }
                       >
-                        {preflight.output_root.ready ? t.ready : t.notReady}
-                      </span>
+                        {t.openOutputFolderAction}
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => void handleResetOutputFolder()}
+                        disabled={
+                          isRunning ||
+                          outputPickerPending ||
+                          outputMutationPending ||
+                          !outputRootInfo?.configured
+                        }
+                        title={isRunning ? t.outputFolderChangeBlocked : undefined}
+                      >
+                        {t.resetOutputFolder}
+                      </button>
                     </div>
-                    <code>{preflight.output_root.path}</code>
-                    <p>{preflight.output_root.message}</p>
+                    {outputLocationFeedback && (
+                      <p
+                        className={`output-location-feedback ${outputLocationFeedback.tone}`}
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {outputLocationFeedback.message}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="preflight-empty">{t.preflightPrompt}</div>

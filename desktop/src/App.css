@@ -1862,6 +1862,36 @@ button:disabled {
   line-height: 1.4;
 }
 
+.output-location-card .output-location-warning {
+  color: var(--text-primary);
+}
+
+.output-location-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.output-location-actions button {
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: 0.66rem;
+}
+
+.output-location-card .output-location-feedback {
+  margin-top: 9px;
+  font-weight: 700;
+}
+
+.output-location-card .output-location-feedback.success {
+  color: var(--success);
+}
+
+.output-location-card .output-location-feedback.error {
+  color: var(--error);
+}
+
 .modal-error .modal-body {
   display: flex;
   align-items: flex-start;
