@@ -901,23 +901,32 @@ fn resolve_output_root(app: &AppHandle) -> Result<(PathBuf, bool), BackendError>
     validate_output_root(&path).map(|root| (root, configured))
 }
 
-fn validate_existing_output_root(path: &Path) -> Result<PathBuf, BackendError> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|_| BackendError::InvalidInput {
-            message: "Task Library output root is unavailable.".to_string(),
-        })?;
+fn validate_task_library_output_root(
+    path: &Path,
+    configured: bool,
+) -> Result<Option<PathBuf>, BackendError> {
+    let canonical = match path.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(error) if !configured && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(_) => {
+            return Err(BackendError::InvalidInput {
+                message: "Task Library output root is unavailable.".to_string(),
+            });
+        }
+    };
     if !canonical.is_dir() {
         return Err(BackendError::InvalidInput {
             message: "Task Library output root is unavailable.".to_string(),
         });
     }
-    Ok(canonical)
+    Ok(Some(canonical))
 }
 
-fn resolve_existing_output_root(app: &AppHandle) -> Result<PathBuf, BackendError> {
-    let (path, _) = resolve_output_root_path(app)?;
-    validate_existing_output_root(&path)
+fn resolve_task_library_output_root(app: &AppHandle) -> Result<Option<PathBuf>, BackendError> {
+    let (path, configured) = resolve_output_root_path(app)?;
+    validate_task_library_output_root(&path, configured)
 }
 
 #[tauri::command]
@@ -2060,34 +2069,52 @@ fn run_task_library_sidecar(
     )
 }
 
-fn list_tasks_blocking(app: AppHandle) -> Result<DiscoveryResult, String> {
-    let output_root = resolve_existing_output_root(&app).map_err(|_| {
-        String::from(BackendError::InvalidInput {
-            message: "Task Library output root is unavailable.".to_string(),
-        })
-    })?;
+fn discover_tasks_for_root<F>(
+    output_root: Option<PathBuf>,
+    discover: F,
+) -> Result<DiscoveryResult, BackendError>
+where
+    F: FnOnce(&Path) -> Result<DiscoveryResult, BackendError>,
+{
+    match output_root {
+        Some(root) => discover(&root),
+        None => Ok(DiscoveryResult {
+            tasks: Vec::new(),
+            issues: Vec::new(),
+        }),
+    }
+}
+
+fn list_tasks_from_existing_root(output_root: &Path) -> Result<DiscoveryResult, BackendError> {
     let runtime_mode = RuntimeMode::current();
     let packaged_executable_dir = if runtime_mode == RuntimeMode::Production {
-        Some(packaged_go_executable_dir().map_err(|_| {
-            String::from(BackendError::BackendNotFound {
+        Some(
+            packaged_go_executable_dir().map_err(|_| BackendError::BackendNotFound {
                 message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
-            })
-        })?)
+            })?,
+        )
     } else {
         None
     };
     let binary =
         discover_go_binary(runtime_mode, packaged_executable_dir.as_deref()).map_err(|_| {
-            String::from(BackendError::BackendNotFound {
+            BackendError::BackendNotFound {
                 message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
-            })
+            }
         })?;
-    validate_go_binary(&binary).map_err(|_| {
-        String::from(BackendError::BackendNotFound {
-            message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
+    validate_go_binary(&binary).map_err(|_| BackendError::BackendNotFound {
+        message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
+    })?;
+    run_task_library_sidecar(&binary, output_root)
+}
+
+fn list_tasks_blocking(app: AppHandle) -> Result<DiscoveryResult, String> {
+    let output_root = resolve_task_library_output_root(&app).map_err(|_| {
+        String::from(BackendError::InvalidInput {
+            message: "Task Library output root is unavailable.".to_string(),
         })
     })?;
-    run_task_library_sidecar(&binary, &output_root).map_err(String::from)
+    discover_tasks_for_root(output_root, list_tasks_from_existing_root).map_err(String::from)
 }
 
 #[tauri::command]
@@ -2848,19 +2875,46 @@ mod tests {
     }
 
     #[test]
-    fn test_task_library_output_root_uses_existing_settings_policy_without_creation() {
+    fn test_task_library_missing_default_root_is_empty_without_creation() {
+        let default_root = test_dir("meeting-asr-task-library-default");
+        assert!(!default_root.exists());
+        let resolved = validate_task_library_output_root(&default_root, false).unwrap();
+        assert_eq!(resolved, None);
+        assert!(!default_root.exists());
+        let result = discover_tasks_for_root(resolved, |_| panic!("sidecar must not run")).unwrap();
+        assert!(result.tasks.is_empty());
+        assert!(result.issues.is_empty());
+    }
+
+    #[test]
+    fn test_task_library_missing_configured_root_is_safe_error() {
         let configured = test_dir("meeting-asr-task-library-configured");
-        let settings = DesktopSettings {
-            output_root: Some(configured.to_string_lossy().to_string()),
-            ..Default::default()
-        };
-        let (selected, is_configured) =
-            select_output_root_path(&settings, RuntimeMode::Development, None).unwrap();
-        assert_eq!(selected, configured);
-        assert!(is_configured);
+        let error = validate_task_library_output_root(&configured, true).unwrap_err();
+        let encoded = error.to_json_string();
+        assert!(encoded.contains("Task Library output root is unavailable."));
+        assert!(!encoded.contains(&configured.to_string_lossy().to_string()));
         assert!(!configured.exists());
-        assert!(validate_existing_output_root(&configured).is_err());
-        assert!(!configured.exists());
+    }
+
+    #[test]
+    fn test_task_library_existing_empty_root_invokes_discovery() {
+        let root = test_dir("meeting-asr-task-library-existing-empty");
+        fs::create_dir_all(&root).unwrap();
+        let resolved = validate_task_library_output_root(&root, false).unwrap();
+        let mut called = false;
+        let result = discover_tasks_for_root(resolved, |received| {
+            called = true;
+            assert_eq!(received, root.canonicalize().unwrap());
+            Ok(DiscoveryResult {
+                tasks: Vec::new(),
+                issues: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert!(called);
+        assert!(result.tasks.is_empty());
+        assert!(result.issues.is_empty());
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -3327,6 +3381,49 @@ mod tests {
         assert_eq!(result.tasks[0].primary_artifacts[0].retryable, Some(true));
         assert_eq!(result.issues.len(), 1);
         assert_eq!(result.issues[0].code, "invalid_manifest");
+    }
+
+    #[test]
+    fn test_task_library_transport_decodes_completed_failed_and_unavailable_states() {
+        let json = br#"{
+          "tasks": [
+            {
+              "task_id":"completed","title":"Completed","title_source":"filename",
+              "status":"completed","created_at":"2026-07-15T01:00:00Z",
+              "updated_at":"2026-07-15T02:00:00Z","tags":[],
+              "output_mode":"transcript","primary_artifacts":[
+                {"kind":"transcript","status":"completed","reference":"transcript.md","has_error":false}
+              ],"has_partial_errors":false,"task_folder":"completed-task"
+            },
+            {
+              "task_id":"failed","title":"Failed","title_source":"fallback",
+              "status":"failed","created_at":"2026-07-15T01:00:00Z",
+              "updated_at":"2026-07-15T02:00:00Z","tags":[],
+              "output_mode":"notes","primary_artifacts":[
+                {"kind":"notes","status":"unavailable","has_error":false},
+                {"kind":"transcript","status":"failed","has_error":true,"retryable":false}
+              ],"has_partial_errors":false,"task_folder":"failed-task"
+            }
+          ],
+          "issues": []
+        }"#;
+        let result = decode_task_library_process_output(true, Some(0), json).unwrap();
+        assert_eq!(result.tasks[0].status, "completed");
+        assert_eq!(result.tasks[0].primary_artifacts[0].retryable, None);
+        assert_eq!(result.tasks[1].status, "failed");
+        assert_eq!(result.tasks[1].primary_artifacts[0].status, "unavailable");
+        assert_eq!(result.tasks[1].primary_artifacts[0].retryable, None);
+        assert_eq!(result.tasks[1].primary_artifacts[1].status, "failed");
+        assert_eq!(result.tasks[1].primary_artifacts[1].retryable, Some(false));
+    }
+
+    #[test]
+    fn test_task_library_transport_decodes_empty_result() {
+        let result =
+            decode_task_library_process_output(true, Some(0), br#"{"tasks":[],"issues":[]}"#)
+                .unwrap();
+        assert!(result.tasks.is_empty());
+        assert!(result.issues.is_empty());
     }
 
     #[test]
