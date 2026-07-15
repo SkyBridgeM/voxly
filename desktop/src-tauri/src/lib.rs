@@ -344,6 +344,43 @@ struct RunResult {
     minutes_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ArtifactSummary {
+    kind: String,
+    status: String,
+    reference: Option<String>,
+    has_error: bool,
+    retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TaskSummary {
+    task_id: String,
+    title: String,
+    title_source: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    tags: Vec<String>,
+    output_mode: String,
+    primary_artifacts: Vec<ArtifactSummary>,
+    has_partial_errors: bool,
+    task_folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DiscoveryIssue {
+    task_folder: String,
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DiscoveryResult {
+    tasks: Vec<TaskSummary>,
+    issues: Vec<DiscoveryIssue>,
+}
+
 // ---------------------------------------------------------------------------
 // Project helpers
 // ---------------------------------------------------------------------------
@@ -819,16 +856,6 @@ fn validate_output_root(path: &Path) -> Result<PathBuf, BackendError> {
     Ok(canonical)
 }
 
-fn get_configured_output_root(settings: &DesktopSettings) -> Result<Option<PathBuf>, BackendError> {
-    match settings.output_root.as_deref() {
-        None => Ok(None),
-        Some(value) if value.trim().is_empty() => Err(BackendError::InvalidInput {
-            message: "Configured output root cannot be empty.".to_string(),
-        }),
-        Some(value) => validate_output_root(Path::new(value)).map(Some),
-    }
-}
-
 fn set_configured_output_root(
     settings_path: &Path,
     output_root: &Path,
@@ -840,13 +867,20 @@ fn set_configured_output_root(
     Ok(canonical)
 }
 
-fn resolve_output_root(app: &AppHandle) -> Result<(PathBuf, bool), BackendError> {
-    let settings_path = desktop_settings_path(app)?;
-    let settings = load_desktop_settings(&settings_path)?;
-    if let Some(configured) = get_configured_output_root(&settings)? {
+fn select_output_root_path(
+    settings: &DesktopSettings,
+    runtime_mode: RuntimeMode,
+    documents_dir: Option<&Path>,
+) -> Result<(PathBuf, bool), BackendError> {
+    if let Some(configured) = configured_output_root_path(settings)? {
         return Ok((configured, true));
     }
+    get_default_output_root(runtime_mode, documents_dir).map(|root| (root, false))
+}
 
+fn resolve_output_root_path(app: &AppHandle) -> Result<(PathBuf, bool), BackendError> {
+    let settings_path = desktop_settings_path(app)?;
+    let settings = load_desktop_settings(&settings_path)?;
     let runtime_mode = RuntimeMode::current();
     let documents_dir = if runtime_mode == RuntimeMode::Production {
         Some(
@@ -859,8 +893,31 @@ fn resolve_output_root(app: &AppHandle) -> Result<(PathBuf, bool), BackendError>
     } else {
         None
     };
-    let default_root = get_default_output_root(runtime_mode, documents_dir.as_deref())?;
-    validate_output_root(&default_root).map(|root| (root, false))
+    select_output_root_path(&settings, runtime_mode, documents_dir.as_deref())
+}
+
+fn resolve_output_root(app: &AppHandle) -> Result<(PathBuf, bool), BackendError> {
+    let (path, configured) = resolve_output_root_path(app)?;
+    validate_output_root(&path).map(|root| (root, configured))
+}
+
+fn validate_existing_output_root(path: &Path) -> Result<PathBuf, BackendError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Task Library output root is unavailable.".to_string(),
+        })?;
+    if !canonical.is_dir() {
+        return Err(BackendError::InvalidInput {
+            message: "Task Library output root is unavailable.".to_string(),
+        });
+    }
+    Ok(canonical)
+}
+
+fn resolve_existing_output_root(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    let (path, _) = resolve_output_root_path(app)?;
+    validate_existing_output_root(&path)
 }
 
 #[tauri::command]
@@ -1958,6 +2015,94 @@ async fn resume_meeting_asr(
 }
 
 // ---------------------------------------------------------------------------
+// Read-only Task Library command
+// ---------------------------------------------------------------------------
+
+fn decode_task_library_process_output(
+    success: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+) -> Result<DiscoveryResult, BackendError> {
+    if !success {
+        return Err(BackendError::ProcessFailed {
+            message: format!(
+                "Task Library sidecar exited with code {}.",
+                code.unwrap_or(-1)
+            ),
+            code,
+        });
+    }
+    serde_json::from_slice(stdout).map_err(|_| BackendError::ProcessFailed {
+        message: "Task Library sidecar returned invalid JSON.".to_string(),
+        code: Some(0),
+    })
+}
+
+fn run_task_library_sidecar(
+    binary: &Path,
+    output_root: &Path,
+) -> Result<DiscoveryResult, BackendError> {
+    let output = Command::new(binary)
+        .arg("list-tasks")
+        .arg("--output-root")
+        .arg(output_root)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .output()
+        .map_err(|_| BackendError::ProcessFailed {
+            message: "Could not start the Task Library sidecar.".to_string(),
+            code: None,
+        })?;
+    decode_task_library_process_output(
+        output.status.success(),
+        output.status.code(),
+        &output.stdout,
+    )
+}
+
+fn list_tasks_blocking(app: AppHandle) -> Result<DiscoveryResult, String> {
+    let output_root = resolve_existing_output_root(&app).map_err(|_| {
+        String::from(BackendError::InvalidInput {
+            message: "Task Library output root is unavailable.".to_string(),
+        })
+    })?;
+    let runtime_mode = RuntimeMode::current();
+    let packaged_executable_dir = if runtime_mode == RuntimeMode::Production {
+        Some(packaged_go_executable_dir().map_err(|_| {
+            String::from(BackendError::BackendNotFound {
+                message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
+            })
+        })?)
+    } else {
+        None
+    };
+    let binary =
+        discover_go_binary(runtime_mode, packaged_executable_dir.as_deref()).map_err(|_| {
+            String::from(BackendError::BackendNotFound {
+                message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
+            })
+        })?;
+    validate_go_binary(&binary).map_err(|_| {
+        String::from(BackendError::BackendNotFound {
+            message: "Go sidecar is unavailable for Task Library discovery.".to_string(),
+        })
+    })?;
+    run_task_library_sidecar(&binary, &output_root).map_err(String::from)
+}
+
+#[tauri::command]
+async fn list_tasks(app: AppHandle) -> Result<DiscoveryResult, String> {
+    tauri::async_runtime::spawn_blocking(move || list_tasks_blocking(app))
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Task Library worker failed.".to_string(),
+                code: None,
+            })
+        })?
+}
+
+// ---------------------------------------------------------------------------
 // open_task_folder
 // ---------------------------------------------------------------------------
 
@@ -2091,6 +2236,7 @@ pub fn run() {
             open_task_folder,
             run_meeting_asr,
             resume_meeting_asr,
+            list_tasks,
             get_credential_status,
             save_credential,
             delete_credential,
@@ -2683,7 +2829,7 @@ mod tests {
 
         let saved = set_configured_output_root(&settings_path, &output_root).unwrap();
         let settings = load_desktop_settings(&settings_path).unwrap();
-        assert_eq!(get_configured_output_root(&settings).unwrap(), Some(saved));
+        assert_eq!(configured_output_root_path(&settings).unwrap(), Some(saved));
 
         let json = fs::read_to_string(&settings_path).unwrap();
         assert!(json.contains("output_root"));
@@ -2698,7 +2844,23 @@ mod tests {
             output_root: Some("relative-output".to_string()),
             ..Default::default()
         };
-        assert!(get_configured_output_root(&settings).is_err());
+        assert!(configured_output_root_path(&settings).is_err());
+    }
+
+    #[test]
+    fn test_task_library_output_root_uses_existing_settings_policy_without_creation() {
+        let configured = test_dir("meeting-asr-task-library-configured");
+        let settings = DesktopSettings {
+            output_root: Some(configured.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let (selected, is_configured) =
+            select_output_root_path(&settings, RuntimeMode::Development, None).unwrap();
+        assert_eq!(selected, configured);
+        assert!(is_configured);
+        assert!(!configured.exists());
+        assert!(validate_existing_output_root(&configured).is_err());
+        assert!(!configured.exists());
     }
 
     #[test]
@@ -3123,6 +3285,71 @@ mod tests {
         assert!(validate_output_mode("transcript").is_ok());
         assert!(validate_output_mode("notes").is_ok());
         assert!(validate_output_mode("minutes").is_ok());
+    }
+
+    // --- Task Library transport ---
+
+    fn task_library_json() -> &'static [u8] {
+        br#"{
+          "tasks": [{
+            "task_id": "task-1",
+            "title": "Interview",
+            "title_source": "user",
+            "status": "completed_with_errors",
+            "created_at": "2026-07-15T01:00:00Z",
+            "updated_at": "2026-07-15T02:00:00Z",
+            "tags": ["work"],
+            "output_mode": "minutes",
+            "primary_artifacts": [
+              {"kind":"minutes","status":"failed","has_error":true,"retryable":true},
+              {"kind":"notes","status":"completed","reference":"notes.md","has_error":false},
+              {"kind":"transcript","status":"completed","reference":"transcript.md","has_error":false}
+            ],
+            "has_partial_errors": true,
+            "task_folder": "task-folder"
+          }],
+          "issues": [{
+            "task_folder": "invalid-task",
+            "code": "invalid_manifest",
+            "message": "Task manifest is invalid."
+          }]
+        }"#
+    }
+
+    #[test]
+    fn test_task_library_successful_typed_decoding() {
+        let result = decode_task_library_process_output(true, Some(0), task_library_json())
+            .expect("decode Task Library output");
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].status, "completed_with_errors");
+        assert!(result.tasks[0].has_partial_errors);
+        assert_eq!(result.tasks[0].primary_artifacts[0].kind, "minutes");
+        assert_eq!(result.tasks[0].primary_artifacts[0].retryable, Some(true));
+        assert_eq!(result.issues.len(), 1);
+        assert_eq!(result.issues[0].code, "invalid_manifest");
+    }
+
+    #[test]
+    fn test_task_library_malformed_json_is_safe_error() {
+        let error = decode_task_library_process_output(true, Some(0), b"not-json").unwrap_err();
+        let encoded = error.to_json_string();
+        assert!(encoded.contains(r#""category":"process_failed""#));
+        assert!(encoded.contains("invalid JSON"));
+        assert!(!encoded.contains("not-json"));
+    }
+
+    #[test]
+    fn test_task_library_nonzero_exit_is_safe_error() {
+        let error = decode_task_library_process_output(
+            false,
+            Some(7),
+            br#"{"secret":"must-not-be-exposed"}"#,
+        )
+        .unwrap_err();
+        let encoded = error.to_json_string();
+        assert!(encoded.contains(r#""category":"process_failed""#));
+        assert!(encoded.contains(r#""code":7"#));
+        assert!(!encoded.contains("secret"));
     }
 
     // --- interrupted ---

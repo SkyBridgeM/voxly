@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/yudi/meet-asr/core-go/tasklibrary"
 )
 
 const version = "0.2.0-minutes"
@@ -27,6 +31,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "list-tasks":
+		if err := runListTasks(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("meeting-asr-go %s\n", version)
 	case "help", "--help", "-h":
@@ -44,6 +53,7 @@ func printUsage() {
 Usage:
   meeting-asr-go transcribe <audio_path> [flags]
   meeting-asr-go resume <task_dir> [flags]
+  meeting-asr-go list-tasks --output-root <path>
 
 Flags:
   --output-mode transcript   Output mode: transcript, notes, or minutes
@@ -56,6 +66,33 @@ Flags:
   --obsidian-template-path path  Path to Obsidian template
 
 `, version)
+}
+
+func runListTasks(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("list-tasks", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	outputRoot := fs.String("output-root", "", "Application-owned output root")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("list-tasks does not accept positional arguments")
+	}
+	if strings.TrimSpace(*outputRoot) == "" {
+		return fmt.Errorf("--output-root is required")
+	}
+	if !filepath.IsAbs(*outputRoot) {
+		return fmt.Errorf("--output-root must be absolute")
+	}
+
+	result, err := tasklibrary.Discover(*outputRoot)
+	if err != nil {
+		return fmt.Errorf("discovering tasks: %w", err)
+	}
+	if err := json.NewEncoder(stdout).Encode(result); err != nil {
+		return fmt.Errorf("encoding task library result: %w", err)
+	}
+	return nil
 }
 
 // reorderArgs moves all flags (and their values) before positional arguments.
