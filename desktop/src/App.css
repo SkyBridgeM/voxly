@@ -297,6 +297,286 @@ button {
   scrollbar-gutter: stable;
 }
 
+.workspace-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  margin: 0 2px 14px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.workspace-tabs button {
+  min-height: 34px;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.workspace-tabs button[aria-selected="true"] {
+  color: var(--accent-ink);
+  background: var(--surface-elevated);
+  box-shadow: 0 2px 7px rgba(46, 67, 61, 0.08);
+}
+
+.workspace-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.task-library {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.library-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 27px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-card);
+}
+
+.library-heading h2 {
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
+
+.library-heading p {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.library-state,
+.library-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 170px;
+  padding: 24px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.library-state.library-error,
+.library-empty {
+  flex-direction: column;
+  text-align: center;
+}
+
+.library-empty .empty-visual {
+  margin: 0 auto;
+}
+
+.library-empty h3 {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.library-empty p {
+  margin: 5px 0 14px;
+}
+
+.library-inline-error,
+.library-issues {
+  padding: 11px 14px;
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  font-size: 0.75rem;
+}
+
+.library-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.library-inline-error button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: inherit;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.library-issues summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.library-issues ul {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0 18px;
+}
+
+.library-task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.library-task-list[aria-busy="true"] {
+  opacity: 0.72;
+}
+
+.library-task-card {
+  padding: 19px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-elevated);
+  box-shadow: 0 5px 16px rgba(46, 67, 61, 0.04);
+}
+
+.library-task-header,
+.library-task-meta,
+.library-artifact-main,
+.library-artifact-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.library-task-header {
+  align-items: flex-start;
+}
+
+.library-task-header h3 {
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.library-task-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.library-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.library-status.success {
+  color: var(--success);
+  border-color: var(--success-border);
+  background: var(--success-soft);
+}
+
+.library-status.warning {
+  color: var(--warning);
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.library-status.error {
+  color: var(--error);
+  border-color: var(--error-border);
+  background: var(--error-soft);
+}
+
+.library-status.active {
+  color: var(--accent-ink);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.library-task-meta {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.library-partial-error {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+.library-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.library-tags span {
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  font-size: 0.66rem;
+}
+
+.library-artifacts {
+  margin-top: 15px;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.library-artifacts h4 {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.library-artifacts ul {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+}
+
+.library-artifact {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.library-artifact-main strong {
+  font-size: 0.76rem;
+}
+
+.library-artifact-meta {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+
 .workflow-card {
   overflow: hidden;
   border: 1px solid rgba(197, 210, 206, 0.88);
@@ -1641,7 +1921,8 @@ select:focus-visible,
   }
 
   .card-heading,
-  .workflow-body {
+  .workflow-body,
+  .library-heading {
     padding-right: 20px;
     padding-left: 20px;
   }
@@ -1688,6 +1969,26 @@ select:focus-visible,
   .file-row {
     align-items: stretch;
     flex-wrap: wrap;
+  }
+
+  .workspace-tabs {
+    align-self: stretch;
+  }
+
+  .workspace-tabs button {
+    flex: 1;
+  }
+
+  .library-heading,
+  .library-task-header,
+  .library-inline-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .library-heading .btn-secondary,
+  .library-task-header .library-status {
+    align-self: flex-start;
   }
 
   .file-copy {

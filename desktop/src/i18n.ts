@@ -106,6 +106,41 @@ export interface Translations {
   themeSystem: string;
   themeLight: string;
   themeDark: string;
+  workspaceNavigation: string;
+  newTask: string;
+  taskLibraryTitle: string;
+  taskLibraryDescription: string;
+  refreshing: string;
+  taskLibraryLoading: string;
+  taskLibraryEmpty: string;
+  taskLibraryEmptyDescription: string;
+  taskLibraryLoadError: string;
+  retry: string;
+  partialErrors: string;
+  discoveryIssues: string;
+  updatedAt: string;
+  createdAt: string;
+  outputMode: string;
+  outputs: string;
+  tags: string;
+  available: string;
+  unavailable: string;
+  artifactError: string;
+  retryable: string;
+  notRetryable: string;
+  invalidDate: string;
+  statusRunning: string;
+  statusCompleted: string;
+  statusCompletedWithErrors: string;
+  statusFailed: string;
+  statusInterrupted: string;
+  statusPending: string;
+  statusProcessing: string;
+  statusUnavailable: string;
+  statusUnknown: string;
+  artifactTranscript: string;
+  artifactNotes: string;
+  artifactMinutes: string;
 }
 
 export const translations: Record<Locale, Translations> = {
@@ -218,6 +253,41 @@ export const translations: Record<Locale, Translations> = {
     themeSystem: "跟随系统",
     themeLight: "浅色",
     themeDark: "深色",
+    workspaceNavigation: "工作区导航",
+    newTask: "新建任务",
+    taskLibraryTitle: "任务库",
+    taskLibraryDescription: "查看最近处理的任务、状态和主要输出。",
+    refreshing: "刷新中…",
+    taskLibraryLoading: "正在载入任务库…",
+    taskLibraryEmpty: "还没有任务",
+    taskLibraryEmptyDescription: "完成音频处理后，任务会显示在这里。",
+    taskLibraryLoadError: "暂时无法载入任务库。",
+    retry: "重试",
+    partialErrors: "部分输出有问题",
+    discoveryIssues: "部分任务无法读取",
+    updatedAt: "更新",
+    createdAt: "创建",
+    outputMode: "输出模式",
+    outputs: "主要输出",
+    tags: "标签",
+    available: "可用",
+    unavailable: "不可用",
+    artifactError: "生成出错",
+    retryable: "可重试",
+    notRetryable: "不可重试",
+    invalidDate: "时间未知",
+    statusRunning: "运行中",
+    statusCompleted: "已完成",
+    statusCompletedWithErrors: "完成但有错误",
+    statusFailed: "失败",
+    statusInterrupted: "已中断",
+    statusPending: "等待中",
+    statusProcessing: "处理中",
+    statusUnavailable: "不可用",
+    statusUnknown: "未知状态",
+    artifactTranscript: "转写文本",
+    artifactNotes: "笔记准备",
+    artifactMinutes: "会议纪要",
   },
   en: {
     appTitle: "Meeting ASR Desktop",
@@ -328,6 +398,41 @@ export const translations: Record<Locale, Translations> = {
     themeSystem: "System",
     themeLight: "Light",
     themeDark: "Dark",
+    workspaceNavigation: "Workspace navigation",
+    newTask: "New task",
+    taskLibraryTitle: "Task Library",
+    taskLibraryDescription: "Review recent processed tasks, their status, and primary outputs.",
+    refreshing: "Refreshing…",
+    taskLibraryLoading: "Loading Task Library…",
+    taskLibraryEmpty: "No tasks yet",
+    taskLibraryEmptyDescription: "Completed audio tasks will appear here.",
+    taskLibraryLoadError: "Task Library could not be loaded.",
+    retry: "Retry",
+    partialErrors: "Some outputs have errors",
+    discoveryIssues: "Some tasks could not be read",
+    updatedAt: "Updated",
+    createdAt: "Created",
+    outputMode: "Output mode",
+    outputs: "Primary outputs",
+    tags: "Tags",
+    available: "Available",
+    unavailable: "Unavailable",
+    artifactError: "Generation error",
+    retryable: "Retryable",
+    notRetryable: "Not retryable",
+    invalidDate: "Unknown time",
+    statusRunning: "Running",
+    statusCompleted: "Completed",
+    statusCompletedWithErrors: "Completed with errors",
+    statusFailed: "Failed",
+    statusInterrupted: "Interrupted",
+    statusPending: "Pending",
+    statusProcessing: "Processing",
+    statusUnavailable: "Unavailable",
+    statusUnknown: "Unknown status",
+    artifactTranscript: "Transcript",
+    artifactNotes: "Notes preparation",
+    artifactMinutes: "Meeting minutes",
   },
 };
 
