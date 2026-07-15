@@ -120,6 +120,20 @@ export async function listTasks(): Promise<DiscoveryResult> {
   return invoke<DiscoveryResult>("list_tasks");
 }
 
+export async function openTaskArtifact(
+  taskFolder: string,
+  artifactReference: string
+): Promise<void> {
+  return invoke("open_task_artifact", { taskFolder, artifactReference });
+}
+
+export async function revealTaskArtifact(
+  taskFolder: string,
+  artifactReference: string
+): Promise<void> {
+  return invoke("reveal_task_artifact", { taskFolder, artifactReference });
+}
+
 /**
  * Returns local runtime readiness metadata only. Credential values are sent
  * only for the current invocation and are never returned by Rust.

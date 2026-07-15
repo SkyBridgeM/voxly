@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -204,6 +205,12 @@ enum BackendError {
     Interrupted { message: String },
     #[serde(rename = "process_failed")]
     ProcessFailed { message: String, code: Option<i32> },
+    #[serde(rename = "artifact_unavailable")]
+    ArtifactUnavailable { message: String },
+    #[serde(rename = "artifact_validation_failed")]
+    ArtifactValidationFailed { message: String },
+    #[serde(rename = "artifact_action_failed")]
+    ArtifactActionFailed { message: String },
 }
 
 impl BackendError {
@@ -2161,6 +2168,291 @@ async fn list_tasks(app: AppHandle) -> Result<DiscoveryResult, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Secure Task Library artifact actions
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum TaskArtifactAction {
+    Open,
+    Reveal,
+}
+
+fn validated_relative_hint(
+    value: &str,
+    label: &str,
+    allow_nested: bool,
+) -> Result<PathBuf, BackendError> {
+    if value.is_empty() || value.contains(['\0', '\\', ':']) {
+        return Err(BackendError::InvalidInput {
+            message: format!("{label} is invalid."),
+        });
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(BackendError::InvalidInput {
+            message: format!("{label} must be a relative identifier."),
+        });
+    }
+    let components = path.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || (!allow_nested && components.len() != 1)
+    {
+        return Err(BackendError::InvalidInput {
+            message: format!("{label} contains invalid path components."),
+        });
+    }
+    Ok(path.to_path_buf())
+}
+
+fn resolve_validated_task_artifact(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    artifact_reference: &str,
+) -> Result<PathBuf, BackendError> {
+    let task_hint = validated_relative_hint(task_folder, "Task folder", false)?;
+    let artifact_hint = validated_relative_hint(artifact_reference, "Artifact reference", true)?;
+
+    let task = discovery
+        .tasks
+        .iter()
+        .find(|task| task.task_folder == task_folder)
+        .ok_or_else(|| BackendError::ArtifactUnavailable {
+            message: "Task is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    let listed = task.primary_artifacts.iter().any(|artifact| {
+        artifact.status == "completed" && artifact.reference.as_deref() == Some(artifact_reference)
+    });
+    if !listed {
+        return Err(BackendError::ArtifactUnavailable {
+            message: "Artifact is no longer listed for this task. Refresh the Task Library."
+                .to_string(),
+        });
+    }
+
+    let canonical_root =
+        output_root
+            .canonicalize()
+            .map_err(|_| BackendError::ArtifactValidationFailed {
+                message: "Task Library output root is unavailable.".to_string(),
+            })?;
+    if !canonical_root.is_dir() {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Task Library output root is unavailable.".to_string(),
+        });
+    }
+
+    let canonical_task = canonical_root.join(task_hint).canonicalize().map_err(|_| {
+        BackendError::ArtifactUnavailable {
+            message: "Task folder is no longer available. Refresh the Task Library.".to_string(),
+        }
+    })?;
+    if !canonical_task.is_dir() || !canonical_task.starts_with(&canonical_root) {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Task folder failed containment validation.".to_string(),
+        });
+    }
+
+    let canonical_artifact = canonical_task
+        .join(artifact_hint)
+        .canonicalize()
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    if !canonical_artifact.starts_with(&canonical_task)
+        || !canonical_artifact.starts_with(&canonical_root)
+    {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Artifact failed containment validation.".to_string(),
+        });
+    }
+    if !canonical_artifact.is_file() {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Artifact target is not a regular file.".to_string(),
+        });
+    }
+    Ok(canonical_artifact)
+}
+
+#[cfg(target_os = "macos")]
+fn perform_task_artifact_action(
+    path: &Path,
+    action: TaskArtifactAction,
+) -> Result<(), BackendError> {
+    let mut command = Command::new("open");
+    if matches!(action, TaskArtifactAction::Reveal) {
+        command.arg("-R");
+    }
+    let status = command
+        .arg(path)
+        .status()
+        .map_err(|_| BackendError::ArtifactActionFailed {
+            message: "Could not start the system artifact action.".to_string(),
+        })?;
+    if !status.success() {
+        return Err(BackendError::ArtifactActionFailed {
+            message: "The system artifact action failed.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn perform_task_artifact_action(
+    path: &Path,
+    action: TaskArtifactAction,
+) -> Result<(), BackendError> {
+    let mut command = Command::new("explorer.exe");
+    if matches!(action, TaskArtifactAction::Reveal) {
+        command.arg("/select,");
+    }
+    let status = command
+        .arg(path)
+        .status()
+        .map_err(|_| BackendError::ArtifactActionFailed {
+            message: "Could not start the system artifact action.".to_string(),
+        })?;
+    if !status.success() {
+        return Err(BackendError::ArtifactActionFailed {
+            message: "The system artifact action failed.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn perform_task_artifact_action(
+    path: &Path,
+    action: TaskArtifactAction,
+) -> Result<(), BackendError> {
+    let target = match action {
+        TaskArtifactAction::Open => path,
+        TaskArtifactAction::Reveal => {
+            path.parent()
+                .ok_or_else(|| BackendError::ArtifactActionFailed {
+                    message: "Could not resolve the artifact folder.".to_string(),
+                })?
+        }
+    };
+    let status = Command::new("xdg-open").arg(target).status().map_err(|_| {
+        BackendError::ArtifactActionFailed {
+            message: "Could not start the system artifact action.".to_string(),
+        }
+    })?;
+    if !status.success() {
+        return Err(BackendError::ArtifactActionFailed {
+            message: "The system artifact action failed.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn run_validated_task_artifact_action<F>(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    artifact_reference: &str,
+    requested_action: TaskArtifactAction,
+    action: F,
+) -> Result<(), BackendError>
+where
+    F: FnOnce(&Path, TaskArtifactAction) -> Result<(), BackendError>,
+{
+    let artifact =
+        resolve_validated_task_artifact(output_root, discovery, task_folder, artifact_reference)?;
+    // Keep validation adjacent to the action. Platform APIs cannot eliminate
+    // every filesystem race, so every request revalidates and nothing is cached.
+    action(&artifact, requested_action)
+}
+
+fn task_artifact_action_blocking(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+    action: TaskArtifactAction,
+) -> Result<(), String> {
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(|_| {
+            String::from(BackendError::ArtifactValidationFailed {
+                message: "Task Library output root is unavailable.".to_string(),
+            })
+        })?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty. Refresh the Task Library.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    run_validated_task_artifact_action(
+        &output_root,
+        &discovery,
+        &task_folder,
+        &artifact_reference,
+        action,
+        perform_task_artifact_action,
+    )
+    .map_err(String::from)
+}
+
+async fn task_artifact_action(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+    action: TaskArtifactAction,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        task_artifact_action_blocking(app, task_folder, artifact_reference, action)
+    })
+    .await
+    .map_err(|_| task_artifact_worker_error())?
+}
+
+fn task_artifact_worker_error() -> String {
+    String::from(BackendError::ProcessFailed {
+        message: "Task artifact worker failed.".to_string(),
+        code: None,
+    })
+}
+
+#[tauri::command]
+async fn open_task_artifact(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<(), String> {
+    task_artifact_action(
+        app,
+        task_folder,
+        artifact_reference,
+        TaskArtifactAction::Open,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn reveal_task_artifact(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<(), String> {
+    task_artifact_action(
+        app,
+        task_folder,
+        artifact_reference,
+        TaskArtifactAction::Reveal,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // open_task_folder
 // ---------------------------------------------------------------------------
 
@@ -2295,6 +2587,8 @@ pub fn run() {
             run_meeting_asr,
             resume_meeting_asr,
             list_tasks,
+            open_task_artifact,
+            reveal_task_artifact,
             get_credential_status,
             save_credential,
             delete_credential,
@@ -3532,6 +3826,203 @@ mod tests {
         assert!(encoded.contains(r#""category":"process_failed""#));
         assert!(encoded.contains(r#""code":7"#));
         assert!(!encoded.contains("secret"));
+    }
+
+    fn artifact_discovery(task_folder: &str, reference: &str) -> DiscoveryResult {
+        DiscoveryResult {
+            tasks: vec![TaskSummary {
+                task_id: "task-id".to_string(),
+                title: "Task".to_string(),
+                title_source: "fallback".to_string(),
+                status: "completed".to_string(),
+                created_at: "2026-07-15T01:00:00Z".to_string(),
+                updated_at: "2026-07-15T02:00:00Z".to_string(),
+                tags: Vec::new(),
+                output_mode: "transcript".to_string(),
+                primary_artifacts: vec![ArtifactSummary {
+                    kind: "transcript".to_string(),
+                    status: "completed".to_string(),
+                    reference: Some(reference.to_string()),
+                    has_error: false,
+                    retryable: None,
+                }],
+                has_partial_errors: false,
+                task_folder: task_folder.to_string(),
+            }],
+            issues: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_task_artifact_open_and_reveal_use_validated_regular_file() {
+        use std::cell::Cell;
+
+        let base = test_dir("meeting-asr-task-artifact-actions");
+        let root = base.join("root");
+        let nested = root.join("task").join("outputs");
+        let artifact = nested.join("transcript.md");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(&artifact, "transcript").unwrap();
+        let discovery = artifact_discovery("task", "outputs/transcript.md");
+
+        for requested_action in [TaskArtifactAction::Open, TaskArtifactAction::Reveal] {
+            let called = Cell::new(false);
+            run_validated_task_artifact_action(
+                &root,
+                &discovery,
+                "task",
+                "outputs/transcript.md",
+                requested_action,
+                |validated, actual_action| {
+                    assert_eq!(validated, artifact.canonicalize().unwrap());
+                    assert_eq!(
+                        matches!(actual_action, TaskArtifactAction::Reveal),
+                        matches!(requested_action, TaskArtifactAction::Reveal)
+                    );
+                    called.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(called.get());
+        }
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_task_artifact_rejects_hostile_and_unlisted_inputs() {
+        let base = test_dir("meeting-asr-task-artifact-inputs");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("transcript.md"), "transcript").unwrap();
+        fs::write(task.join("other.md"), "other").unwrap();
+        let discovery = artifact_discovery("task", "transcript.md");
+
+        let invalid = [
+            ("", "transcript.md"),
+            ("/absolute-task", "transcript.md"),
+            ("C:\\task", "transcript.md"),
+            ("task/child", "transcript.md"),
+            ("task", ""),
+            ("task", "/absolute.md"),
+            ("task", "C:/absolute.md"),
+            ("task", "../outside.md"),
+            ("task", "nested/../../outside.md"),
+            ("task\0bad", "transcript.md"),
+        ];
+        for (task_folder, reference) in invalid {
+            assert!(
+                resolve_validated_task_artifact(&root, &discovery, task_folder, reference).is_err()
+            );
+        }
+        assert!(resolve_validated_task_artifact(
+            &root,
+            &discovery,
+            "missing-task",
+            "transcript.md"
+        )
+        .is_err());
+        assert!(resolve_validated_task_artifact(&root, &discovery, "task", "other.md").is_err());
+
+        let mut failed_discovery = artifact_discovery("task", "transcript.md");
+        failed_discovery.tasks[0].primary_artifacts[0].status = "failed".to_string();
+        assert!(
+            resolve_validated_task_artifact(&root, &failed_discovery, "task", "transcript.md")
+                .is_err()
+        );
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_task_artifact_rejects_missing_paths_and_directory_target() {
+        let base = test_dir("meeting-asr-task-artifact-missing");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        let discovery = artifact_discovery("task", "artifact.md");
+
+        assert!(resolve_validated_task_artifact(
+            &base.join("missing-root"),
+            &discovery,
+            "task",
+            "artifact.md"
+        )
+        .is_err());
+        assert!(resolve_validated_task_artifact(
+            &root,
+            &artifact_discovery("missing-task", "artifact.md"),
+            "missing-task",
+            "artifact.md"
+        )
+        .is_err());
+        assert!(resolve_validated_task_artifact(&root, &discovery, "task", "artifact.md").is_err());
+
+        fs::create_dir(task.join("artifact.md")).unwrap();
+        assert!(resolve_validated_task_artifact(&root, &discovery, "task", "artifact.md").is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_task_artifact_rejects_task_and_artifact_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let base = test_dir("meeting-asr-task-artifact-symlinks");
+        let root = base.join("root");
+        let outside_task = base.join("root-evil");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside_task).unwrap();
+        fs::write(outside_task.join("artifact.md"), "outside").unwrap();
+        symlink(&outside_task, root.join("task")).unwrap();
+        assert!(resolve_validated_task_artifact(
+            &root,
+            &artifact_discovery("task", "artifact.md"),
+            "task",
+            "artifact.md"
+        )
+        .is_err());
+
+        fs::remove_file(root.join("task")).unwrap();
+        let task = root.join("task");
+        fs::create_dir_all(task.join("nested")).unwrap();
+        let outside_file = base.join("outside.md");
+        fs::write(&outside_file, "outside").unwrap();
+        symlink(&outside_file, task.join("artifact.md")).unwrap();
+        symlink(&outside_task, task.join("nested").join("escape")).unwrap();
+        assert!(resolve_validated_task_artifact(
+            &root,
+            &artifact_discovery("task", "artifact.md"),
+            "task",
+            "artifact.md"
+        )
+        .is_err());
+        assert!(resolve_validated_task_artifact(
+            &root,
+            &artifact_discovery("task", "nested/escape/artifact.md"),
+            "task",
+            "nested/escape/artifact.md"
+        )
+        .is_err());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_task_artifact_errors_are_structured_and_path_safe() {
+        let error = resolve_validated_task_artifact(
+            Path::new("/sensitive/private/root"),
+            &artifact_discovery("task", "artifact.md"),
+            "missing-task",
+            "artifact.md",
+        )
+        .unwrap_err()
+        .to_json_string();
+        assert!(error.contains(r#""category":"artifact_unavailable""#));
+        assert!(!error.contains("/sensitive/private/root"));
+
+        let worker = task_artifact_worker_error();
+        assert!(worker.contains(r#""category":"process_failed""#));
+        assert!(worker.contains("Task artifact worker failed"));
     }
 
     // --- interrupted ---
