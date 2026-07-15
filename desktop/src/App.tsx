@@ -94,6 +94,7 @@ function App() {
       if (logFrameRef.current !== null) {
         cancelAnimationFrame(logFrameRef.current);
       }
+      pendingLogsRef.current = [];
     },
     []
   );
