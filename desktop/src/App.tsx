@@ -22,6 +22,17 @@ import "./App.css";
 
 type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
+const DEVELOPMENT_BACKEND_OPTIONS = ["go", "python"] as const satisfies readonly BackendKind[];
+
+function resolveInitialBackend(
+  runtimeMode: RuntimeMode,
+  savedBackend: string | null
+): BackendKind {
+  if (runtimeMode === "production") return "go";
+  return savedBackend === "python" || savedBackend === "go"
+    ? savedBackend
+    : "go";
+}
 
 function App() {
   const buildRuntimeMode: RuntimeMode = import.meta.env.DEV ? "development" : "production";
@@ -33,11 +44,7 @@ function App() {
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript");
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
-    buildRuntimeMode === "production"
-      ? "go"
-      : localStorage.getItem("backend") === "go"
-        ? "go"
-        : "python"
+    resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
   );
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -99,11 +106,17 @@ function App() {
     []
   );
 
-  const refreshPreflight = useCallback(async () => {
+  const refreshPreflight = useCallback(async (
+    selectedBackend: BackendKind = backend
+  ) => {
     setPreflightLoading(true);
     setPreflightError(null);
     try {
-      const result = await getRuntimePreflight({ mimoApiKey, deepseekApiKey });
+      const result = await getRuntimePreflight({
+        mimoApiKey,
+        deepseekApiKey,
+        backend: selectedBackend,
+      });
       setPreflight(result);
     } catch {
       setPreflight(null);
@@ -111,7 +124,7 @@ function App() {
     } finally {
       setPreflightLoading(false);
     }
-  }, [mimoApiKey, deepseekApiKey, t.preflightUnavailable]);
+  }, [backend, mimoApiKey, deepseekApiKey, t.preflightUnavailable]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -139,7 +152,12 @@ function App() {
       .then((info) => {
         if (!active) return;
         setRuntimeMode(info.runtime_mode);
-        setBackend(info.backend);
+        setBackend(
+          resolveInitialBackend(
+            info.runtime_mode,
+            localStorage.getItem("backend")
+          )
+        );
       })
       .catch(() => {
         // Standalone frontend builds do not have a Tauri command bridge.
@@ -706,12 +724,20 @@ function App() {
                     <select
                       id="settings-backend"
                       value={backend}
-                      onChange={(e) =>
-                        setBackend(e.target.value === "go" ? "go" : "python")
-                      }
+                      onChange={(e) => {
+                        const selectedBackend =
+                          e.target.value === "go" ? "go" : "python";
+                        setBackend(selectedBackend);
+                        void refreshPreflight(selectedBackend);
+                      }}
                     >
-                      <option value="python">{t.backendPython}</option>
-                      <option value="go">{t.backendGoExperimental}</option>
+                      {DEVELOPMENT_BACKEND_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option === "go"
+                            ? t.backendGoExperimental
+                            : t.backendPython}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}

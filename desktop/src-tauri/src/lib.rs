@@ -432,7 +432,7 @@ fn resolve_backend_kind(
     runtime_mode: RuntimeMode,
 ) -> Result<BackendKind, BackendError> {
     match runtime_mode {
-        RuntimeMode::Development => parse_backend_kind(requested.unwrap_or("python")),
+        RuntimeMode::Development => parse_backend_kind(requested.unwrap_or("go")),
         RuntimeMode::Production => match requested.unwrap_or("go") {
             "go" => Ok(BackendKind::Go),
             "python" => Err(BackendError::InvalidInput {
@@ -455,7 +455,7 @@ fn runtime_info_for(runtime_mode: RuntimeMode) -> RuntimeInfo {
     RuntimeInfo {
         runtime_mode,
         backend: match runtime_mode {
-            RuntimeMode::Development => BackendKind::Python,
+            RuntimeMode::Development => BackendKind::Go,
             RuntimeMode::Production => BackendKind::Go,
         },
     }
@@ -524,12 +524,42 @@ fn preflight_sidecar_at(executable_dir: &Path) -> PreflightCheck {
     }
 }
 
-fn preflight_sidecar(runtime_mode: RuntimeMode) -> PreflightCheck {
-    if runtime_mode == RuntimeMode::Development {
-        return preflight_check(
+fn preflight_development_go_result(discovered: Result<PathBuf, BackendError>) -> PreflightCheck {
+    let binary = match discovered {
+        Ok(binary) => binary,
+        Err(_) => {
+            return preflight_check(
+                false,
+                "Development Go binary is unavailable. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY, or select Python as the development fallback.",
+            );
+        }
+    };
+
+    match validate_go_binary(&binary) {
+        Ok(()) => preflight_check(
             true,
-            "Not required in development; Go remains experimental.",
-        );
+            "Development Go binary is available and version-valid.",
+        ),
+        Err(_) => preflight_check(
+            false,
+            "Development Go binary is unavailable or invalid. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY, or select Python as the development fallback.",
+        ),
+    }
+}
+
+fn preflight_development_go() -> PreflightCheck {
+    preflight_development_go_result(discover_development_go_binary())
+}
+
+fn preflight_sidecar(runtime_mode: RuntimeMode, backend: BackendKind) -> PreflightCheck {
+    if runtime_mode == RuntimeMode::Development {
+        return match backend {
+            BackendKind::Go => preflight_development_go(),
+            BackendKind::Python => preflight_check(
+                true,
+                "Python development fallback is selected; the Go binary is not required.",
+            ),
+        };
     }
 
     match packaged_go_executable_dir() {
@@ -719,11 +749,12 @@ fn get_runtime_preflight(
     app: AppHandle,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
+    backend: Option<String>,
 ) -> Result<RuntimePreflight, String> {
     let runtime_mode = RuntimeMode::current();
-    let backend = runtime_info_for(runtime_mode).backend;
+    let backend = resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
-    let sidecar = preflight_sidecar(runtime_mode);
+    let sidecar = preflight_sidecar(runtime_mode, backend);
     let ffmpeg = check_ffmpeg_at(Path::new("ffmpeg"));
     let output_root = output_root_preflight(&app).map_err(String::from)?;
     let store = KeyringCredentialStore;
@@ -2663,7 +2694,7 @@ mod tests {
     fn test_development_backend_policy_preserves_selector_and_default() {
         assert_eq!(
             resolve_backend_kind(None, RuntimeMode::Development).unwrap(),
-            BackendKind::Python
+            BackendKind::Go
         );
         assert_eq!(
             resolve_backend_kind(Some("python"), RuntimeMode::Development).unwrap(),
@@ -2673,6 +2704,60 @@ mod tests {
             resolve_backend_kind(Some("go"), RuntimeMode::Development).unwrap(),
             BackendKind::Go
         );
+        assert!(matches!(
+            resolve_backend_kind(Some("invalid"), RuntimeMode::Development),
+            Err(BackendError::InvalidInput { .. })
+        ));
+    }
+
+    #[test]
+    fn test_runtime_info_reports_go_as_development_policy_default() {
+        assert_eq!(
+            runtime_info_for(RuntimeMode::Development).backend,
+            BackendKind::Go
+        );
+    }
+
+    #[test]
+    fn test_python_development_fallback_does_not_require_go_binary() {
+        let check = preflight_sidecar(RuntimeMode::Development, BackendKind::Python);
+        assert!(check.ready);
+        assert!(check.message.contains("Python development fallback"));
+    }
+
+    #[test]
+    fn test_missing_development_go_binary_is_not_ready_and_does_not_fallback() {
+        let check = preflight_development_go_result(Err(BackendError::BackendNotFound {
+            message: "synthetic missing binary".to_string(),
+        }));
+        assert!(!check.ready);
+        assert!(check.message.contains("Build core-go/meeting-asr-go"));
+        assert!(check.message.contains("MEETING_ASR_GO_BINARY"));
+        assert!(check.message.contains("select Python"));
+        assert!(!check.message.contains("synthetic missing binary"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_available_development_go_binary_is_ready() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = test_dir("meeting-asr-preflight-development-go");
+        fs::create_dir_all(&base).unwrap();
+        let binary = base.join("meeting-asr-go");
+        fs::write(
+            &binary,
+            b"#!/bin/sh\nprintf '%s\\n' 'meeting-asr-go version test'\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let check = preflight_development_go_result(Ok(binary));
+        assert!(check.ready);
+        assert!(check.message.contains("version-valid"));
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]
