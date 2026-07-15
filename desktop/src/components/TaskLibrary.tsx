@@ -194,31 +194,45 @@ export function TaskLibrary({
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const requestIdRef = useRef(0);
+  const mountedRef = useRef(false);
   const inFlightRef = useRef(false);
+  const pendingRefreshRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    const requestId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await listTasks();
-      if (requestId === requestIdRef.current) setResult(next);
-    } catch {
-      if (requestId === requestIdRef.current) setError(labels.taskLibraryLoadError);
-    } finally {
-      if (requestId === requestIdRef.current) {
-        inFlightRef.current = false;
-        setLoading(false);
-      }
+    if (inFlightRef.current) {
+      pendingRefreshRef.current = true;
+      return;
     }
+
+    inFlightRef.current = true;
+    if (mountedRef.current) setLoading(true);
+
+    do {
+      pendingRefreshRef.current = false;
+      if (mountedRef.current) setError(null);
+      try {
+        const next = await listTasks();
+        if (mountedRef.current) setResult(next);
+      } catch {
+        if (mountedRef.current) setError(labels.taskLibraryLoadError);
+      }
+    } while (mountedRef.current && pendingRefreshRef.current);
+
+    inFlightRef.current = false;
+    if (mountedRef.current) setLoading(false);
   }, [labels.taskLibraryLoadError]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
-    // refreshToken intentionally requests a reload after a successful run.
+    return () => {
+      mountedRef.current = false;
+      pendingRefreshRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (refreshToken > 0) void refresh();
   }, [refreshToken]);
 
   return (
