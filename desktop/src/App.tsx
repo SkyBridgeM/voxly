@@ -23,7 +23,7 @@ import "./App.css";
 type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
 
-export function resolveInitialBackend(
+function resolveInitialBackend(
   runtimeMode: RuntimeMode,
   savedBackend: string | null
 ): BackendKind {
