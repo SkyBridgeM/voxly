@@ -22,6 +22,7 @@ import "./App.css";
 
 type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
+const DEVELOPMENT_BACKEND_OPTIONS = ["go", "python"] as const satisfies readonly BackendKind[];
 
 function resolveInitialBackend(
   runtimeMode: RuntimeMode,
@@ -730,8 +731,13 @@ function App() {
                         void refreshPreflight(selectedBackend);
                       }}
                     >
-                      <option value="python">{t.backendPython}</option>
-                      <option value="go">{t.backendGoExperimental}</option>
+                      {DEVELOPMENT_BACKEND_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option === "go"
+                            ? t.backendGoExperimental
+                            : t.backendPython}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}
