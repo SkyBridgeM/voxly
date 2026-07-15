@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listTasks,
+  openTaskArtifact,
+  revealTaskArtifact,
   type ArtifactSummary,
   type DiscoveryResult,
   type TaskSummary,
@@ -45,6 +47,12 @@ export interface TaskLibraryLabels {
   artifactTranscript: string;
   artifactNotes: string;
   artifactMinutes: string;
+  openArtifact: string;
+  revealArtifact: string;
+  openingArtifact: string;
+  revealingArtifact: string;
+  artifactActionFailed: string;
+  refreshLibraryHint: string;
 }
 
 interface TaskLibraryProps {
@@ -103,10 +111,19 @@ function outputModeLabel(mode: string, labels: TaskLibraryLabels) {
 function ArtifactItem({
   artifact,
   labels,
+  actionKey,
+  pendingAction,
+  actionError,
+  onAction,
 }: {
   artifact: ArtifactSummary;
   labels: TaskLibraryLabels;
+  actionKey: string;
+  pendingAction: "open" | "reveal" | null;
+  actionError: string | null;
+  onAction: (actionKey: string, action: "open" | "reveal", reference: string) => void;
 }) {
+  const available = artifact.status === "completed" && Boolean(artifact.reference);
   return (
     <li className="library-artifact">
       <div className="library-artifact-main">
@@ -116,12 +133,35 @@ function ArtifactItem({
         </span>
       </div>
       <div className="library-artifact-meta">
-        <span>{artifact.reference ? labels.available : labels.unavailable}</span>
+        <span>{available ? labels.available : labels.unavailable}</span>
         {artifact.has_error && <span>{labels.artifactError}</span>}
         {artifact.retryable !== null && (
           <span>{artifact.retryable ? labels.retryable : labels.notRetryable}</span>
         )}
       </div>
+      {available && artifact.reference && (
+        <div className="library-artifact-actions">
+          <button
+            className="btn-secondary"
+            onClick={() => onAction(actionKey, "open", artifact.reference!)}
+            disabled={pendingAction !== null}
+          >
+            {pendingAction === "open" ? labels.openingArtifact : labels.openArtifact}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => onAction(actionKey, "reveal", artifact.reference!)}
+            disabled={pendingAction !== null}
+          >
+            {pendingAction === "reveal" ? labels.revealingArtifact : labels.revealArtifact}
+          </button>
+        </div>
+      )}
+      {actionError && (
+        <p className="library-artifact-error" role="status">
+          {actionError} {labels.refreshLibraryHint}
+        </p>
+      )}
     </li>
   );
 }
@@ -130,10 +170,21 @@ function TaskCard({
   task,
   locale,
   labels,
+  pendingActions,
+  actionErrors,
+  onArtifactAction,
 }: {
   task: TaskSummary;
   locale: "zh" | "en";
   labels: TaskLibraryLabels;
+  pendingActions: ReadonlyMap<string, "open" | "reveal">;
+  actionErrors: ReadonlyMap<string, string>;
+  onArtifactAction: (
+    taskFolder: string,
+    actionKey: string,
+    action: "open" | "reveal",
+    reference: string
+  ) => void;
 }) {
   return (
     <article className="library-task-card" aria-labelledby={`task-${task.task_id}`}>
@@ -177,6 +228,12 @@ function TaskCard({
               key={`${artifact.kind}-${index}`}
               artifact={artifact}
               labels={labels}
+              actionKey={`${task.task_folder}:${artifact.kind}:${index}`}
+              pendingAction={pendingActions.get(`${task.task_folder}:${artifact.kind}:${index}`) ?? null}
+              actionError={actionErrors.get(`${task.task_folder}:${artifact.kind}:${index}`) ?? null}
+              onAction={(actionKey, action, reference) =>
+                onArtifactAction(task.task_folder, actionKey, action, reference)
+              }
             />
           ))}
         </ul>
@@ -197,6 +254,13 @@ export function TaskLibrary({
   const mountedRef = useRef(false);
   const inFlightRef = useRef(false);
   const pendingRefreshRef = useRef(false);
+  const pendingArtifactActionsRef = useRef(new Set<string>());
+  const [pendingActions, setPendingActions] = useState(
+    () => new Map<string, "open" | "reveal">()
+  );
+  const [actionErrors, setActionErrors] = useState(
+    () => new Map<string, string>()
+  );
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) {
@@ -212,7 +276,10 @@ export function TaskLibrary({
       if (mountedRef.current) setError(null);
       try {
         const next = await listTasks();
-        if (mountedRef.current) setResult(next);
+        if (mountedRef.current) {
+          setResult(next);
+          setActionErrors(new Map());
+        }
       } catch {
         if (mountedRef.current) setError(labels.taskLibraryLoadError);
       }
@@ -228,12 +295,54 @@ export function TaskLibrary({
     return () => {
       mountedRef.current = false;
       pendingRefreshRef.current = false;
+      pendingArtifactActionsRef.current.clear();
     };
   }, []);
 
   useEffect(() => {
     if (refreshToken > 0) void refresh();
   }, [refreshToken]);
+
+  const handleArtifactAction = useCallback(
+    async (
+      taskFolder: string,
+      actionKey: string,
+      action: "open" | "reveal",
+      reference: string
+    ) => {
+      if (pendingArtifactActionsRef.current.has(actionKey)) return;
+      pendingArtifactActionsRef.current.add(actionKey);
+      setPendingActions((previous) => new Map(previous).set(actionKey, action));
+      setActionErrors((previous) => {
+        const next = new Map(previous);
+        next.delete(actionKey);
+        return next;
+      });
+      try {
+        if (action === "open") {
+          await openTaskArtifact(taskFolder, reference);
+        } else {
+          await revealTaskArtifact(taskFolder, reference);
+        }
+      } catch {
+        if (mountedRef.current) {
+          setActionErrors((previous) =>
+            new Map(previous).set(actionKey, labels.artifactActionFailed)
+          );
+        }
+      } finally {
+        pendingArtifactActionsRef.current.delete(actionKey);
+        if (mountedRef.current) {
+          setPendingActions((previous) => {
+            const next = new Map(previous);
+            next.delete(actionKey);
+            return next;
+          });
+        }
+      }
+    },
+    [labels.artifactActionFailed]
+  );
 
   return (
     <section className="task-library" aria-labelledby="task-library-title">
@@ -298,7 +407,15 @@ export function TaskLibrary({
       {result && result.tasks.length > 0 && (
         <div className="library-task-list" aria-busy={loading}>
           {result.tasks.map((task) => (
-            <TaskCard key={task.task_id} task={task} locale={locale} labels={labels} />
+            <TaskCard
+              key={task.task_id}
+              task={task}
+              locale={locale}
+              labels={labels}
+              pendingActions={pendingActions}
+              actionErrors={actionErrors}
+              onArtifactAction={handleArtifactAction}
+            />
           ))}
         </div>
       )}

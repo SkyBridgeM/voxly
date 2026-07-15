@@ -453,6 +453,25 @@ button {
   gap: 12px;
 }
 
+.library-artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.library-artifact-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.68rem;
+}
+
+.library-artifact-error {
+  margin-top: 8px;
+  color: var(--error);
+  font-size: 0.68rem;
+}
+
 .library-task-header {
   align-items: flex-start;
 }

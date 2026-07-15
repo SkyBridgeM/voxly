@@ -141,6 +141,12 @@ export interface Translations {
   artifactTranscript: string;
   artifactNotes: string;
   artifactMinutes: string;
+  openArtifact: string;
+  revealArtifact: string;
+  openingArtifact: string;
+  revealingArtifact: string;
+  artifactActionFailed: string;
+  refreshLibraryHint: string;
 }
 
 export const translations: Record<Locale, Translations> = {
@@ -288,6 +294,12 @@ export const translations: Record<Locale, Translations> = {
     artifactTranscript: "转写文本",
     artifactNotes: "笔记准备",
     artifactMinutes: "会议纪要",
+    openArtifact: "打开",
+    revealArtifact: "在访达中显示",
+    openingArtifact: "正在打开…",
+    revealingArtifact: "正在定位…",
+    artifactActionFailed: "无法访问此文件。",
+    refreshLibraryHint: "请刷新任务库后重试。",
   },
   en: {
     appTitle: "Meeting ASR Desktop",
@@ -433,6 +445,12 @@ export const translations: Record<Locale, Translations> = {
     artifactTranscript: "Transcript",
     artifactNotes: "Notes preparation",
     artifactMinutes: "Meeting minutes",
+    openArtifact: "Open",
+    revealArtifact: "Show in Finder",
+    openingArtifact: "Opening…",
+    revealingArtifact: "Revealing…",
+    artifactActionFailed: "This file could not be accessed.",
+    refreshLibraryHint: "Refresh the Task Library and try again.",
   },
 };
 
