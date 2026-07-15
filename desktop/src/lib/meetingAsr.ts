@@ -89,10 +89,12 @@ export async function getRuntimeInfo(): Promise<RuntimeInfo> {
 export async function getRuntimePreflight(options: {
   mimoApiKey?: string;
   deepseekApiKey?: string;
+  backend?: BackendKind;
 } = {}): Promise<RuntimePreflight> {
   return invoke<RuntimePreflight>("get_runtime_preflight", {
     mimoApiKey: options.mimoApiKey || undefined,
     deepseekApiKey: options.deepseekApiKey || undefined,
+    backend: options.backend,
   });
 }
 
