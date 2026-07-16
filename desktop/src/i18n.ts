@@ -18,6 +18,9 @@ export interface Translations {
   modeNotesDesc: string;
   modeMinutes: string;
   modeMinutesDesc: string;
+  modeGenerate: string;
+  modeGenerateDesc: string;
+  templateLabel: string;
   start: string;
   processing: string;
   openOutputFolder: string;
@@ -158,12 +161,21 @@ export interface Translations {
   revealingArtifact: string;
   artifactActionFailed: string;
   refreshLibraryHint: string;
+  canonicalTranscript: string;
+  generatedContent: string;
+  generationHistory: string;
+  generateContent: string;
+  generateAgain: string;
+  generatingContent: string;
+  generationFailed: string;
+  latestVersion: string;
+  legacyArtifact: string;
 }
 
 export const translations: Record<Locale, Translations> = {
   zh: {
     appTitle: "Meeting ASR Desktop",
-    appSubtitle: "用于转写、笔记准备和 AI 会议纪要的实验性桌面工作流",
+    appSubtitle: "将音频转写为文本，并按模板生成所需内容",
     appKicker: "本地会议工作台",
     workflowEyebrow: "新建任务",
     workflowTitle: "处理会议录音",
@@ -179,6 +191,9 @@ export const translations: Record<Locale, Translations> = {
     modeNotesDesc: "转写 + notes_input.md",
     modeMinutes: "会议纪要",
     modeMinutesDesc: "转写 + AI 纪要",
+    modeGenerate: "转写 + 生成内容",
+    modeGenerateDesc: "先完成转写，再用内置模板生成内容",
+    templateLabel: "内容模板",
     start: "开始",
     processing: "处理中...",
     openOutputFolder: "打开任务文件夹",
@@ -202,12 +217,10 @@ export const translations: Record<Locale, Translations> = {
     completedSuccessfully: "处理完成",
     exitedWithCode: "退出码",
     terminatedBySignal: "被信号终止",
-    transcriptWarning:
-      "transcript 模式会将音频发送至 MiMo ASR 进行转写。请勿上传未授权的敏感会议内容。\n\nTranscript mode sends audio to MiMo ASR for transcription.",
+    transcriptWarning: "音频会发送至 MiMo ASR 进行转写。不会调用内容生成模型。",
     notesWarning:
       "notes 模式会将音频发送至 MiMo ASR 转写，并在本地生成 notes_input.md；不会将转写文本发送至 DeepSeek。\n\nNotes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
-    llmWarning:
-      "minutes 模式会将转写文本发送至 DeepSeek 生成会议总结。请勿上传未授权的敏感会议内容。\n\nMinutes mode sends transcript text to DeepSeek for summary generation.",
+    llmWarning: "音频将发送至 MiMo ASR，完成后的转写文本将发送至 DeepSeek，并按所选模板生成内容。",
     backend: "处理后端",
     backendPython: "Python（开发备用）",
     backendGoExperimental: "Go（开发默认 / 推荐）",
@@ -322,10 +335,19 @@ export const translations: Record<Locale, Translations> = {
     revealingArtifact: "正在定位…",
     artifactActionFailed: "无法访问此文件。",
     refreshLibraryHint: "请刷新任务库后重试。",
+    canonicalTranscript: "规范转写",
+    generatedContent: "生成内容",
+    generationHistory: "历史版本",
+    generateContent: "生成内容",
+    generateAgain: "再次生成",
+    generatingContent: "生成中…",
+    generationFailed: "生成失败；已有转写和历史版本保持不变。",
+    latestVersion: "最新成功版本",
+    legacyArtifact: "旧版输出",
   },
   en: {
     appTitle: "Meeting ASR Desktop",
-    appSubtitle: "Experimental desktop workflow for transcripts, notes preparation, and AI meeting minutes",
+    appSubtitle: "Transcribe audio, then generate the content you need from a built-in template",
     appKicker: "Local meeting workspace",
     workflowEyebrow: "New task",
     workflowTitle: "Process a meeting recording",
@@ -341,6 +363,9 @@ export const translations: Record<Locale, Translations> = {
     modeNotesDesc: "Transcript + notes_input.md",
     modeMinutes: "Meeting minutes",
     modeMinutesDesc: "Transcript + AI minutes",
+    modeGenerate: "Transcript + generated content",
+    modeGenerateDesc: "Complete the transcript, then generate from a built-in template",
+    templateLabel: "Content template",
     start: "Start",
     processing: "Processing...",
     openOutputFolder: "Open Task Folder",
@@ -364,12 +389,10 @@ export const translations: Record<Locale, Translations> = {
     completedSuccessfully: "Completed successfully",
     exitedWithCode: "Exited with code",
     terminatedBySignal: "Terminated by signal",
-    transcriptWarning:
-      "Transcript mode sends audio to MiMo ASR for transcription. Do not upload unauthorized sensitive meeting content.",
+    transcriptWarning: "Audio is sent to MiMo ASR for transcription. No content-generation model is called.",
     notesWarning:
       "Notes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
-    llmWarning:
-      "Minutes mode sends transcript text to DeepSeek for summary generation. Do not upload unauthorized sensitive meeting content.",
+    llmWarning: "Audio is sent to MiMo ASR. The completed transcript is then sent to DeepSeek using the selected template.",
     backend: "Processing backend",
     backendPython: "Python (development fallback)",
     backendGoExperimental: "Go (development default / recommended)",
@@ -484,6 +507,15 @@ export const translations: Record<Locale, Translations> = {
     revealingArtifact: "Revealing…",
     artifactActionFailed: "This file could not be accessed.",
     refreshLibraryHint: "Refresh the Task Library and try again.",
+    canonicalTranscript: "Canonical transcript",
+    generatedContent: "Generated content",
+    generationHistory: "Version history",
+    generateContent: "Generate content",
+    generateAgain: "Generate again",
+    generatingContent: "Generating…",
+    generationFailed: "Generation failed. The transcript and earlier versions are unchanged.",
+    latestVersion: "Latest successful version",
+    legacyArtifact: "Legacy output",
   },
 };
 

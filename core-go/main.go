@@ -36,6 +36,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "list-templates":
+		if err := json.NewEncoder(os.Stdout).Encode(BuiltInTemplates()); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "generate-content":
+		if err := runGenerateContent(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("meeting-asr-go %s\n", version)
 	case "help", "--help", "-h":
@@ -54,9 +64,12 @@ Usage:
   meeting-asr-go transcribe <audio_path> [flags]
   meeting-asr-go resume <task_dir> [flags]
   meeting-asr-go list-tasks --output-root <path>
+  meeting-asr-go list-templates
+  meeting-asr-go generate-content --task-dir <path> --template-id <id>
 
 Flags:
-  --output-mode transcript   Output mode: transcript, notes, or minutes
+  --output-mode transcript_only   Output mode: transcript_only or transcript_and_generate
+  --template-id id           Built-in template for transcript_and_generate
   --output-dir output        Base output directory
   --chunk-minutes 5          Chunk length in minutes
   --max-upload-mb 10         Max upload size in MB
@@ -66,6 +79,55 @@ Flags:
   --obsidian-template-path path  Path to Obsidian template
 
 `, version)
+}
+
+func runGenerateContent(args []string) error {
+	fs := flag.NewFlagSet("generate-content", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	taskDir := fs.String("task-dir", "", "Validated task directory")
+	templateID := fs.String("template-id", "", "Built-in template ID")
+	envFile := fs.String("env-file", "", "Explicit .env path")
+	projectRoot := fs.String("project-root", "", "Project root")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || !filepath.IsAbs(*taskDir) {
+		return fmt.Errorf("--task-dir must be an absolute path")
+	}
+	if _, err := LookupPromptTemplate(*templateID); err != nil {
+		return err
+	}
+	lock, err := AcquireTaskLock(*taskDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	m, err := LoadManifest(*taskDir)
+	if err != nil {
+		return err
+	}
+	if err := ensureCanonicalTranscript(*taskDir, m); err != nil {
+		return err
+	}
+	settings, err := loadResumeSettings(*envFile, *projectRoot)
+	if err != nil {
+		return err
+	}
+	if err := ValidateMinutesProvider(settings); err != nil {
+		return err
+	}
+	if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
+		return err
+	}
+	record, err := GenerateContent(*taskDir, m, *templateID, settings, deepSeekGenerator{})
+	if record != nil {
+		fmt.Printf("Generation ID: %s\n", record.GenerationID)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Generated artifact: %s\n", record.ArtifactReference)
+	return nil
 }
 
 func runListTasks(args []string, stdout io.Writer) error {
@@ -129,6 +191,7 @@ func reorderArgs(args []string) []string {
 func runTranscribe(args []string) error {
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	outputMode := fs.String("output-mode", "transcript", "Output mode")
+	templateID := fs.String("template-id", "structured-notes", "Built-in generation template")
 	outputDir := fs.String("output-dir", "output", "Base output directory")
 	chunkMinutes := fs.Int("chunk-minutes", 0, "Chunk length in minutes (0 = use .env or default)")
 	maxUploadMB := fs.Float64("max-upload-mb", 0, "Max upload size in MB (0 = use .env or default)")
@@ -142,9 +205,11 @@ func runTranscribe(args []string) error {
 		return err
 	}
 
-	if *outputMode != "transcript" && *outputMode != "notes" && *outputMode != "minutes" {
-		return fmt.Errorf("invalid --output-mode %q. Supported: transcript, notes, minutes", *outputMode)
+	normalizedMode, normalizedTemplate, err := normalizeProcessingSelection(*outputMode, *templateID)
+	if err != nil {
+		return err
 	}
+	*outputMode, *templateID = normalizedMode, normalizedTemplate
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: meeting-asr-go transcribe <audio_path>")
@@ -227,7 +292,7 @@ func runTranscribe(args []string) error {
 	}
 
 	// Fail fast on unsupported minutes provider before expensive work.
-	if *outputMode == "minutes" {
+	if *outputMode == "transcript_and_generate" {
 		if err := ValidateMinutesProvider(settings); err != nil {
 			return err
 		}
@@ -243,10 +308,32 @@ func runTranscribe(args []string) error {
 	}
 
 	// Run the workflow.
-	return runWorkflow(absAudio, absOutput, settings, *outputMode)
+	return runWorkflowV2(absAudio, absOutput, settings, *outputMode, *templateID)
 }
 
-func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode string) error {
+func normalizeProcessingSelection(mode, templateID string) (string, string, error) {
+	switch mode {
+	case "transcript", "transcript_only":
+		return "transcript_only", "", nil
+	case "notes":
+		return "transcript_and_generate", "structured-notes", nil
+	case "minutes":
+		return "transcript_and_generate", "meeting-minutes", nil
+	case "transcript_and_generate":
+		if _, err := LookupPromptTemplate(templateID); err != nil {
+			return "", "", err
+		}
+		return mode, templateID, nil
+	default:
+		return "", "", fmt.Errorf("invalid --output-mode %q", mode)
+	}
+}
+
+func runWorkflowV2(audioPath, outputDir string, settings *Settings, outputMode, templateID string) error {
+	return runWorkflow(audioPath, outputDir, settings, outputMode, templateID)
+}
+
+func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode string, selectedTemplate ...string) error {
 	// 1. Create task directory.
 	audioStem := filepath.Base(audioPath)
 	audioStem = audioStem[:len(audioStem)-len(filepath.Ext(audioStem))]
@@ -264,6 +351,9 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 	// 3. Create manifest.
 	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, "mimo", settings.MimoModel)
+	if outputMode == "transcript_and_generate" && len(selectedTemplate) > 0 {
+		manifest.RequestedTemplateID = selectedTemplate[0]
+	}
 	if err := SetTaskState(taskDir, manifest, TaskValidatingAudio); err != nil {
 		return fmt.Errorf("creating manifest: %w", err)
 	}
@@ -358,11 +448,16 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, IsRetryableError(err))
 		return err
 	}
+	if err := completeCanonicalTranscript(taskDir, transcriptPath, manifest); err != nil {
+		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, false)
+		return err
+	}
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		return fmt.Errorf("saving manifest: %w", err)
 	}
 
-	// 7. notes_input.md (notes and minutes modes).
+	// 7. Legacy notes/minutes branches are retained only for direct internal
+	// compatibility tests. New CLI selections always use Processing Model V2.
 	var notesInputPath string
 	if outputMode == "notes" || outputMode == "minutes" {
 		if err := SetTaskState(taskDir, manifest, TaskNotesGenerating); err != nil {
@@ -386,6 +481,23 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		if err := SaveManifest(taskDir, manifest); err != nil {
 			return fmt.Errorf("saving manifest: %w", err)
 		}
+	}
+
+	var generatedContentPath string
+	if outputMode == "transcript_and_generate" {
+		templateID := "structured-notes"
+		if len(selectedTemplate) > 0 && selectedTemplate[0] != "" {
+			templateID = selectedTemplate[0]
+		}
+		fmt.Println("Status: Generating content")
+		record, err := GenerateContent(taskDir, manifest, templateID, settings, deepSeekGenerator{})
+		if err != nil {
+			// Transcript remains valid; failed generation metadata is durable.
+			manifest.State = TaskCompleted
+			_ = SaveManifest(taskDir, manifest)
+			return fmt.Errorf("generating content: %w", err)
+		}
+		generatedContentPath = filepath.Join(taskDir, filepath.FromSlash(record.ArtifactReference))
 	}
 
 	// 8. meeting_minutes.md (minutes mode only).
@@ -455,6 +567,9 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 	if minutesPath != "" {
 		fmt.Printf("Meeting minutes saved: %s\n", minutesPath)
+	}
+	if generatedContentPath != "" {
+		fmt.Printf("Generated content saved: %s\n", generatedContentPath)
 	}
 	fmt.Printf("Task folder: %s\n", taskDir)
 

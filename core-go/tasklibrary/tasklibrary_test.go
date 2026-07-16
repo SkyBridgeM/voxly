@@ -287,9 +287,45 @@ func TestDiscoverDoesNotMutateFilesystem(t *testing.T) {
 	}
 }
 
+func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "v2")
+	if err := os.MkdirAll(filepath.Join(taskDir, "generated", "structured-notes"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "transcript.md"), []byte("hello\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "generated", "structured-notes", "gen_1.md"), []byte("one\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	retryable := true
+	m := manifestFor("v2", "completed_with_errors", "2026-07-16T02:00:00Z", "transcript_and_generate")
+	m.SchemaVersion = taskmanifest.LatestSchemaVersion
+	m.RequestedTemplateID = "structured-notes"
+	m.Artifacts.Transcript.Path = "transcript.md"
+	m.CanonicalTranscript = &taskmanifest.CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "hash", HashContractVersion: 1, CreatedAt: "2026-07-16T01:00:00Z", ASRProvider: "mimo", ASRModel: "model", Status: "completed"}
+	m.Generations = []taskmanifest.GenerationRecord{
+		{GenerationID: "gen_1", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:10:00Z", UpdatedAt: "2026-07-16T01:10:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "one", Status: "completed", ArtifactReference: "generated/structured-notes/gen_1.md"},
+		{GenerationID: "gen_2", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:20:00Z", UpdatedAt: "2026-07-16T01:20:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
+	}
+	writeTask(t, root, "v2", m)
+	result, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != 1 || !result.Tasks[0].CanGenerate || len(result.Tasks[0].GeneratedContent) != 1 {
+		t.Fatalf("summary = %#v", result.Tasks)
+	}
+	group := result.Tasks[0].GeneratedContent[0]
+	if group.Latest == nil || group.Latest.GenerationID != "gen_1" || len(group.Versions) != 2 || group.Versions[0].Status != "failed" {
+		t.Fatalf("group = %#v", group)
+	}
+}
+
 func manifestFor(taskID, status, updatedAt, outputMode string) *taskmanifest.TaskManifest {
 	return &taskmanifest.TaskManifest{
-		SchemaVersion:   taskmanifest.CurrentSchemaVersion,
+		SchemaVersion:   taskmanifest.LegacySchemaVersion,
 		TaskID:          taskID,
 		CreatedAt:       "2026-07-14T08:00:00Z",
 		UpdatedAt:       updatedAt,

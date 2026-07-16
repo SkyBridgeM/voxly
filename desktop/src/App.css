@@ -2107,3 +2107,47 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
   }
 }
+
+.template-selector,
+.task-generation-action {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.template-selector select,
+.task-generation-action select {
+  width: 100%;
+  min-width: 0;
+}
+
+.template-selector p,
+.task-generation-action p {
+  margin: 0;
+}
+
+.library-generated {
+  margin-top: 18px;
+}
+
+.generation-group {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.generation-group-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.generation-group details {
+  margin-top: 10px;
+}

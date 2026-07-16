@@ -178,18 +178,17 @@ func TestRunTranscribe_UnsupportedOutputMode(t *testing.T) {
 	}
 }
 
-func TestRunTranscribe_NotesModeNoDeepSeekKey(t *testing.T) {
+func TestRunTranscribe_NotesAliasRequiresDeepSeekKey(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	// Has MIMO_API_KEY but no DEEPSEEK_API_KEY — notes mode should still work
-	// (it fails at ffmpeg, not at key validation).
+	// The deprecated notes alias now maps to structured-notes generation.
 	os.WriteFile(envPath, []byte("MIMO_API_KEY=test-key\n"), 0644)
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
 	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "notes", audioPath})
-	if err != nil && strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
-		t.Errorf("notes mode should not require DEEPSEEK_API_KEY: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
+		t.Fatalf("notes alias error = %v", err)
 	}
 }
 
@@ -412,7 +411,7 @@ func TestRunTranscribe_MinutesProviderNotDeepSeek(t *testing.T) {
 	}
 }
 
-func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
+func TestRunResume_MinutesAliasRejectsUnsupportedProvider(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROVIDER=openai\n"), 0644); err != nil {
@@ -462,9 +461,9 @@ func TestRunResume_MinutesProviderNotDeepSeek(t *testing.T) {
 		taskDir,
 	})
 	if err == nil {
-		t.Fatal("expected error for missing DEEPSEEK_API_KEY")
+		t.Fatal("expected error for unsupported minutes provider")
 	}
-	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
-		t.Errorf("error should mention DEEPSEEK_API_KEY, got: %v", err)
+	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") || !strings.Contains(err.Error(), `got "openai"`) {
+		t.Errorf("error should identify the required and configured providers, got: %v", err)
 	}
 }

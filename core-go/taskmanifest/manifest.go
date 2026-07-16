@@ -7,15 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
+	"regexp"
 	"strings"
 )
 
 const (
-	CurrentSchemaVersion = "1.0"
+	CurrentSchemaVersion = "2.0"
+	LatestSchemaVersion  = CurrentSchemaVersion
+	LegacySchemaVersion  = "1.0"
 	ManifestFilename     = "task_manifest.json"
 )
 
 var ErrUnsupportedSchemaVersion = errors.New("unsupported task manifest schema version")
+var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 var artifactStatuses = map[string]struct{}{
 	"pending": {}, "processing": {}, "completed": {}, "failed": {}, "unavailable": {},
@@ -37,6 +42,7 @@ type TaskManifest struct {
 	Backend                 string                     `json:"-"`
 	Provider                string                     `json:"-"`
 	OutputMode              string                     `json:"-"`
+	RequestedTemplateID     string                     `json:"-"`
 	Status                  string                     `json:"-"`
 	State                   string                     `json:"-"`
 	Attempt                 int                        `json:"-"`
@@ -53,6 +59,53 @@ type TaskManifest struct {
 	ExecutionUnknownFields  map[string]json.RawMessage `json:"-"`
 	InputUnknownFields      map[string]json.RawMessage `json:"-"`
 	CheckpointUnknownFields map[string]json.RawMessage `json:"-"`
+	CanonicalTranscript     *CanonicalTranscript       `json:"-"`
+	Generations             []GenerationRecord         `json:"-"`
+}
+
+// CanonicalTranscript identifies the immutable transcript revision used by
+// generated content. Hashes cover the exact canonical file bytes.
+type CanonicalTranscript struct {
+	TranscriptID        string                     `json:"transcript_id"`
+	RevisionID          string                     `json:"revision_id"`
+	ArtifactReference   string                     `json:"artifact_reference"`
+	ContentSHA256       string                     `json:"content_sha256"`
+	HashContractVersion int                        `json:"hash_contract_version"`
+	CreatedAt           string                     `json:"created_at"`
+	ASRProvider         string                     `json:"asr_provider"`
+	ASRModel            string                     `json:"asr_model"`
+	Status              string                     `json:"status"`
+	UnknownFields       map[string]json.RawMessage `json:"-"`
+}
+
+// GenerationRecord is one append-only user-requested generation. Technical
+// retries remain attempts within the same record; Generate again appends one.
+type GenerationRecord struct {
+	GenerationID               string                     `json:"generation_id"`
+	TemplateID                 string                     `json:"template_id"`
+	TemplateRevision           int                        `json:"template_revision"`
+	TemplateDisplayName        string                     `json:"template_display_name"`
+	TemplateInstructions       string                     `json:"template_instructions"`
+	CreatedAt                  string                     `json:"created_at"`
+	UpdatedAt                  string                     `json:"updated_at"`
+	SourceTranscriptRevisionID string                     `json:"source_transcript_revision_id"`
+	SourceTranscriptSHA256     string                     `json:"source_transcript_sha256"`
+	LLMProvider                string                     `json:"llm_provider"`
+	LLMModel                   string                     `json:"llm_model"`
+	PromptCompositionVersion   int                        `json:"prompt_composition_version"`
+	PromptHash                 string                     `json:"prompt_hash"`
+	Status                     string                     `json:"status"`
+	ArtifactReference          string                     `json:"artifact_reference,omitempty"`
+	Error                      *ArtifactError             `json:"error,omitempty"`
+	Attempts                   []GenerationAttempt        `json:"attempts,omitempty"`
+	UnknownFields              map[string]json.RawMessage `json:"-"`
+}
+
+type GenerationAttempt struct {
+	Attempt   int            `json:"attempt"`
+	CreatedAt string         `json:"created_at"`
+	Status    string         `json:"status"`
+	Error     *ArtifactError `json:"error,omitempty"`
 }
 
 type SourceInfo struct {
@@ -103,6 +156,7 @@ type ExecutionMetadata struct {
 	Backend       string                     `json:"backend"`
 	Provider      string                     `json:"provider"`
 	OutputMode    string                     `json:"output_mode"`
+	TemplateID    string                     `json:"template_id,omitempty"`
 	Status        string                     `json:"status"`
 	Stage         string                     `json:"stage,omitempty"`
 	Attempt       int                        `json:"attempt,omitempty"`
@@ -205,7 +259,7 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	if strings.TrimSpace(manifest.SchemaVersion) == "" {
 		return errors.New("task manifest missing schema_version")
 	}
-	if manifest.SchemaVersion != CurrentSchemaVersion {
+	if manifest.SchemaVersion != CurrentSchemaVersion && manifest.SchemaVersion != LegacySchemaVersion {
 		return fmt.Errorf("%w: %q", ErrUnsupportedSchemaVersion, manifest.SchemaVersion)
 	}
 	if strings.TrimSpace(manifest.TaskID) == "" {
@@ -216,7 +270,8 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	}
 	execution := ExecutionMetadata{
 		Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
-		Status: manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+		TemplateID: manifest.RequestedTemplateID,
+		Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
 		CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
 	}
 	if err := execution.validate(); err != nil {
@@ -249,10 +304,90 @@ func (manifest *TaskManifest) ValidateManifest() error {
 			return err
 		}
 	}
+	if manifest.SchemaVersion == LatestSchemaVersion && (manifest.OutputMode == "transcript_only" || manifest.OutputMode == "transcript_and_generate" || len(manifest.Generations) > 0) {
+		if manifest.CanonicalTranscript == nil {
+			return errors.New("task manifest v2 missing canonical_transcript")
+		}
+		if err := manifest.CanonicalTranscript.validate(); err != nil {
+			return err
+		}
+		for i := range manifest.Generations {
+			if err := manifest.Generations[i].validate(); err != nil {
+				return fmt.Errorf("generation[%d]: %w", i, err)
+			}
+		}
+	}
 	if err := rejectSensitiveFields(manifest); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (transcript CanonicalTranscript) validate() error {
+	if strings.TrimSpace(transcript.TranscriptID) == "" || strings.TrimSpace(transcript.RevisionID) == "" {
+		return errors.New("canonical transcript missing identity")
+	}
+	if transcript.Status != "pending" && transcript.Status != "processing" && transcript.Status != "completed" && transcript.Status != "failed" {
+		return fmt.Errorf("canonical transcript has invalid status %q", transcript.Status)
+	}
+	if transcript.Status == "completed" {
+		if strings.TrimSpace(transcript.ArtifactReference) == "" || strings.TrimSpace(transcript.ContentSHA256) == "" || transcript.HashContractVersion != 1 {
+			return errors.New("completed canonical transcript missing reference or hash contract")
+		}
+		if !safeRelativeReference(transcript.ArtifactReference) {
+			return errors.New("canonical transcript has unsafe artifact reference")
+		}
+	}
+	return nil
+}
+
+func (generation GenerationRecord) validate() error {
+	if !safeIDPattern.MatchString(generation.GenerationID) || !safeIDPattern.MatchString(generation.TemplateID) || generation.TemplateRevision < 1 {
+		return errors.New("generation missing identity or template revision")
+	}
+	if generation.Status != "pending" && generation.Status != "processing" && generation.Status != "completed" && generation.Status != "failed" {
+		return fmt.Errorf("generation has invalid status %q", generation.Status)
+	}
+	if strings.TrimSpace(generation.SourceTranscriptRevisionID) == "" || strings.TrimSpace(generation.SourceTranscriptSHA256) == "" {
+		return errors.New("generation missing source transcript identity")
+	}
+	if strings.TrimSpace(generation.TemplateDisplayName) == "" || strings.TrimSpace(generation.TemplateInstructions) == "" || strings.TrimSpace(generation.CreatedAt) == "" || strings.TrimSpace(generation.UpdatedAt) == "" {
+		return errors.New("generation missing template snapshot or timestamps")
+	}
+	if strings.TrimSpace(generation.LLMProvider) == "" || strings.TrimSpace(generation.LLMModel) == "" || generation.PromptCompositionVersion < 1 || strings.TrimSpace(generation.PromptHash) == "" {
+		return errors.New("generation missing provider or prompt provenance")
+	}
+	if generation.Status == "completed" && strings.TrimSpace(generation.ArtifactReference) == "" {
+		return errors.New("completed generation missing artifact reference")
+	}
+	if generation.ArtifactReference != "" && !safeRelativeReference(generation.ArtifactReference) {
+		return errors.New("generation has unsafe artifact reference")
+	}
+	if generation.Status == "failed" && generation.Error == nil {
+		return errors.New("failed generation missing structured error")
+	}
+	if generation.Status != "failed" && generation.Error != nil {
+		return errors.New("non-failed generation must not contain error")
+	}
+	for i, attempt := range generation.Attempts {
+		if attempt.Attempt < 1 || strings.TrimSpace(attempt.CreatedAt) == "" {
+			return fmt.Errorf("attempt[%d] missing identity", i)
+		}
+		if attempt.Status != "processing" && attempt.Status != "completed" && attempt.Status != "failed" {
+			return fmt.Errorf("attempt[%d] has invalid status", i)
+		}
+		if attempt.Status == "failed" && attempt.Error == nil {
+			return fmt.Errorf("attempt[%d] missing error", i)
+		}
+		if attempt.Status != "failed" && attempt.Error != nil {
+			return fmt.Errorf("attempt[%d] has unexpected error", i)
+		}
+	}
+	return nil
+}
+
+func safeRelativeReference(value string) bool {
+	return value != "" && !strings.ContainsAny(value, `\\:`) && !strings.HasPrefix(value, "/") && path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../")
 }
 
 func (execution ExecutionMetadata) validate() error {
@@ -264,6 +399,9 @@ func (execution ExecutionMetadata) validate() error {
 	}
 	if strings.TrimSpace(execution.OutputMode) == "" {
 		return errors.New("task manifest missing execution.output_mode")
+	}
+	if execution.OutputMode == "transcript_and_generate" && !safeIDPattern.MatchString(execution.TemplateID) {
+		return errors.New("task manifest missing execution.template_id")
 	}
 	if _, ok := taskStatuses[execution.Status]; !ok {
 		return fmt.Errorf("task manifest has invalid execution.status %q", execution.Status)
@@ -404,18 +542,20 @@ func marshalWithUnknown(known any, unknown map[string]json.RawMessage) ([]byte, 
 
 func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	type wireManifest struct {
-		SchemaVersion string              `json:"schema_version"`
-		TaskID        string              `json:"task_id"`
-		CreatedAt     string              `json:"created_at"`
-		UpdatedAt     string              `json:"updated_at"`
-		Execution     ExecutionMetadata   `json:"execution"`
-		Input         InputMetadata       `json:"input"`
-		Artifacts     Artifacts           `json:"artifacts"`
-		Checkpoint    *CheckpointMetadata `json:"checkpoint,omitempty"`
-		UserMetadata  *UserMetadata       `json:"user_metadata,omitempty"`
+		SchemaVersion       string               `json:"schema_version"`
+		TaskID              string               `json:"task_id"`
+		CreatedAt           string               `json:"created_at"`
+		UpdatedAt           string               `json:"updated_at"`
+		Execution           ExecutionMetadata    `json:"execution"`
+		Input               InputMetadata        `json:"input"`
+		Artifacts           Artifacts            `json:"artifacts"`
+		Checkpoint          *CheckpointMetadata  `json:"checkpoint,omitempty"`
+		UserMetadata        *UserMetadata        `json:"user_metadata,omitempty"`
+		CanonicalTranscript *CanonicalTranscript `json:"canonical_transcript,omitempty"`
+		Generations         []GenerationRecord   `json:"generations,omitempty"`
 	}
 	var wire wireManifest
-	unknown, err := unmarshalWithUnknown(data, &wire, "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata")
+	unknown, err := unmarshalWithUnknown(data, &wire, "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata", "canonical_transcript", "generations")
 	if err != nil {
 		return err
 	}
@@ -425,9 +565,12 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	manifest.UpdatedAt = wire.UpdatedAt
 	manifest.UserMetadata = wire.UserMetadata
 	manifest.UnknownFields = unknown
+	manifest.CanonicalTranscript = wire.CanonicalTranscript
+	manifest.Generations = wire.Generations
 	manifest.Backend = wire.Execution.Backend
 	manifest.Provider = wire.Execution.Provider
 	manifest.OutputMode = wire.Execution.OutputMode
+	manifest.RequestedTemplateID = wire.Execution.TemplateID
 	manifest.Status = wire.Execution.Status
 	manifest.State = wire.Execution.Stage
 	manifest.Attempt = wire.Execution.Attempt
@@ -454,15 +597,17 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 
 func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 	type wireManifest struct {
-		SchemaVersion string              `json:"schema_version"`
-		TaskID        string              `json:"task_id"`
-		CreatedAt     string              `json:"created_at"`
-		UpdatedAt     string              `json:"updated_at"`
-		Execution     ExecutionMetadata   `json:"execution"`
-		Input         InputMetadata       `json:"input"`
-		Artifacts     Artifacts           `json:"artifacts"`
-		Checkpoint    *CheckpointMetadata `json:"checkpoint,omitempty"`
-		UserMetadata  *UserMetadata       `json:"user_metadata,omitempty"`
+		SchemaVersion       string               `json:"schema_version"`
+		TaskID              string               `json:"task_id"`
+		CreatedAt           string               `json:"created_at"`
+		UpdatedAt           string               `json:"updated_at"`
+		Execution           ExecutionMetadata    `json:"execution"`
+		Input               InputMetadata        `json:"input"`
+		Artifacts           Artifacts            `json:"artifacts"`
+		Checkpoint          *CheckpointMetadata  `json:"checkpoint,omitempty"`
+		UserMetadata        *UserMetadata        `json:"user_metadata,omitempty"`
+		CanonicalTranscript *CanonicalTranscript `json:"canonical_transcript,omitempty"`
+		Generations         []GenerationRecord   `json:"generations,omitempty"`
 	}
 	wire := wireManifest{
 		SchemaVersion: manifest.SchemaVersion,
@@ -471,7 +616,8 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 		UpdatedAt:     manifest.UpdatedAt,
 		Execution: ExecutionMetadata{
 			Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
-			Status: manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+			TemplateID: manifest.RequestedTemplateID,
+			Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
 			CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
 			UnknownFields: manifest.ExecutionUnknownFields,
 		},
@@ -486,7 +632,9 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 			IntegrityVersion: manifest.IntegrityVersion, Chunks: manifest.Chunks,
 			UnknownFields: manifest.CheckpointUnknownFields,
 		},
-		UserMetadata: manifest.UserMetadata,
+		UserMetadata:        manifest.UserMetadata,
+		CanonicalTranscript: manifest.CanonicalTranscript,
+		Generations:         manifest.Generations,
 	}
 	return marshalWithUnknown(wire, manifest.UnknownFields)
 }
@@ -520,7 +668,7 @@ func (manifest *TaskManifest) CountCompletedChunks() int {
 
 func (metadata *ExecutionMetadata) UnmarshalJSON(data []byte) error {
 	type plain ExecutionMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "status", "stage", "attempt", "completed_at", "error_summary")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "template_id", "status", "stage", "attempt", "completed_at", "error_summary")
 	metadata.UnknownFields = unknown
 	return err
 }
@@ -599,4 +747,28 @@ func (metadata *UserMetadata) UnmarshalJSON(data []byte) error {
 func (metadata UserMetadata) MarshalJSON() ([]byte, error) {
 	type plain UserMetadata
 	return marshalWithUnknown(plain(metadata), metadata.UnknownFields)
+}
+
+func (transcript *CanonicalTranscript) UnmarshalJSON(data []byte) error {
+	type plain CanonicalTranscript
+	unknown, err := unmarshalWithUnknown(data, (*plain)(transcript), "transcript_id", "revision_id", "artifact_reference", "content_sha256", "hash_contract_version", "created_at", "asr_provider", "asr_model", "status")
+	transcript.UnknownFields = unknown
+	return err
+}
+
+func (transcript CanonicalTranscript) MarshalJSON() ([]byte, error) {
+	type plain CanonicalTranscript
+	return marshalWithUnknown(plain(transcript), transcript.UnknownFields)
+}
+
+func (generation *GenerationRecord) UnmarshalJSON(data []byte) error {
+	type plain GenerationRecord
+	unknown, err := unmarshalWithUnknown(data, (*plain)(generation), "generation_id", "template_id", "template_revision", "template_display_name", "template_instructions", "created_at", "updated_at", "source_transcript_revision_id", "source_transcript_sha256", "llm_provider", "llm_model", "prompt_composition_version", "prompt_hash", "status", "artifact_reference", "error", "attempts")
+	generation.UnknownFields = unknown
+	return err
+}
+
+func (generation GenerationRecord) MarshalJSON() ([]byte, error) {
+	type plain GenerationRecord
+	return marshalWithUnknown(plain(generation), generation.UnknownFields)
 }

@@ -17,6 +17,7 @@ import {
   resetOutputRoot,
   openOutputRoot,
   parseBackendError,
+  listPromptTemplates,
   type BackendKind,
   type RuntimeMode,
   type RuntimePreflight,
@@ -24,6 +25,7 @@ import {
   type OutputMode,
   type OutputRootInfo,
   type ProgressEvent,
+  type PromptTemplateSummary,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
@@ -53,7 +55,9 @@ function App() {
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
-  const [outputMode, setOutputMode] = useState<OutputMode>("transcript");
+  const [outputMode, setOutputMode] = useState<OutputMode>("transcript_only");
+  const [templates, setTemplates] = useState<PromptTemplateSummary[]>([]);
+  const [templateId, setTemplateId] = useState("structured-notes");
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
     resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
@@ -64,6 +68,7 @@ function App() {
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
   const [notesInputPath, setNotesInputPath] = useState<string | null>(null);
   const [minutesPath, setMinutesPath] = useState<string | null>(null);
+  const [generatedContentPath, setGeneratedContentPath] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [statusOk, setStatusOk] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -202,6 +207,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    listPromptTemplates().then((next) => {
+      if (!active) return;
+      setTemplates(next);
+      if (next.length > 0 && !next.some((template) => template.id === templateId)) setTemplateId(next[0].id);
+    }).catch(() => { if (active) setTemplates([]); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (!showSettings) return;
 
     const dialog = settingsDialogRef.current;
@@ -267,6 +282,7 @@ function App() {
     setTranscriptPath(null);
     setNotesInputPath(null);
     setMinutesPath(null);
+    setGeneratedContentPath(null);
     setStatus(null);
     setStatusOk(null);
     pendingLogsRef.current = [];
@@ -281,7 +297,7 @@ function App() {
       const result = await runMeetingAsr(
         audioPath,
         outputMode,
-        { mimoApiKey, deepseekApiKey, deepseekModel, backend },
+        { mimoApiKey, deepseekApiKey, deepseekModel, backend, templateId },
         {
           onLog: queueLog,
           onProgress: (event) => setProgress(event),
@@ -293,6 +309,7 @@ function App() {
       if (result.transcript_path) setTranscriptPath(result.transcript_path);
       if (result.notes_input_path) setNotesInputPath(result.notes_input_path);
       if (result.minutes_path) setMinutesPath(result.minutes_path);
+      if (result.generated_content_path) setGeneratedContentPath(result.generated_content_path);
 
       setStatus(t.completedSuccessfully);
       setStatusOk(true);
@@ -303,6 +320,7 @@ function App() {
       setShowError(true);
       setStatus(error.message);
       setStatusOk(false);
+      if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } finally {
       flushPendingLogs();
       setIsRunning(false);
@@ -316,6 +334,7 @@ function App() {
     deepseekApiKey,
     deepseekModel,
     backend,
+    templateId,
     t,
     queueLog,
     flushPendingLogs,
@@ -330,6 +349,7 @@ function App() {
   const showLibrary = () => {
     setLibraryOpened(true);
     setActiveArea("library");
+    void refreshPreflight();
   };
 
   const handleWorkspaceTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -509,11 +529,9 @@ function App() {
 
   const outputModeLabel = (mode: OutputMode) => {
     switch (mode) {
-      case "notes":
-        return t.modeNotes;
-      case "minutes":
-        return t.modeMinutes;
-      case "transcript":
+      case "transcript_and_generate":
+        return t.modeGenerate;
+      case "transcript_only":
       default:
         return t.modeTranscript;
     }
@@ -532,7 +550,7 @@ function App() {
       : t.developmentCredentialPlaceholder;
 
   const preflightReadyForMode =
-    outputMode === "minutes" ? preflight?.ready_for_minutes : preflight?.ready;
+    outputMode === "transcript_and_generate" ? preflight?.ready_for_minutes : preflight?.ready;
 
   const hasActivity = isRunning || logs.length > 0 || taskFolder || status;
 
@@ -647,21 +665,23 @@ function App() {
                 <RunControls
                   outputMode={outputMode}
                   onModeChange={setOutputMode}
+                  templates={templates}
+                  templateId={templateId}
+                  onTemplateChange={setTemplateId}
+                  locale={locale}
                   onStartRun={startRun}
                   isRunning={isRunning}
                   audioPath={audioPath}
                   labels={{
                     modeTranscript: t.modeTranscript,
                     modeTranscriptDesc: t.modeTranscriptDesc,
-                    modeNotes: t.modeNotes,
-                    modeNotesDesc: t.modeNotesDesc,
-                    modeMinutes: t.modeMinutes,
-                    modeMinutesDesc: t.modeMinutesDesc,
+                    modeGenerate: t.modeGenerate,
+                    modeGenerateDesc: t.modeGenerateDesc,
+                    templateLabel: t.templateLabel,
                     start: t.start,
                     processing: t.processing,
                     llmWarning: t.llmWarning,
                     transcriptWarning: t.transcriptWarning,
-                    notesWarning: t.notesWarning,
                   }}
                 />
               </div>
@@ -699,6 +719,7 @@ function App() {
                 merging: t.merging,
                 preparingNotes: t.preparingNotes,
                 generatingMinutes: t.generatingMinutes,
+                generatingContent: t.generatingContent,
                 done: t.done,
                 showLogs: t.showLogs,
                 hideLogs: t.hideLogs,
@@ -710,6 +731,7 @@ function App() {
               transcriptPath={transcriptPath}
               notesInputPath={notesInputPath}
               minutesPath={minutesPath}
+              generatedContentPath={generatedContentPath}
               onOpenFolder={handleOpenFolder}
               labels={{
                 resultsTitle: t.resultsTitle,
@@ -721,6 +743,7 @@ function App() {
                 transcript: t.transcript,
                 notesInput: t.notesInput,
                 meetingMinutes: t.meetingMinutes,
+                generatedContent: t.generatedContent,
                 openTaskFolder: t.openTaskFolder,
               }}
             />
@@ -759,6 +782,10 @@ function App() {
                 labels={t}
                 refreshToken={libraryRefreshToken}
                 onReturnToWorkflow={showWorkflow}
+                deepseekApiKey={deepseekApiKey}
+                deepseekModel={deepseekModel}
+                templates={templates}
+                llmReady={Boolean(preflight?.ready_for_minutes)}
               />
             </div>
           )}

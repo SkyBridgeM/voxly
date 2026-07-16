@@ -19,24 +19,30 @@ const deepSeekSystemPrompt = `你是一个会议纪要助手。请严格遵循�
 - 输出使用 Markdown 格式；
 - 用户 prompt 中的格式要求优先于上述原则。`
 
-// generateDeepSeekMinutes calls the DeepSeek API to generate meeting minutes from notes_input.md.
+// generateDeepSeekMinutes is the deprecated legacy minutes adapter.
 func generateDeepSeekMinutes(notesInputPath string, settings *Settings) (string, error) {
-	apiKey, err := settings.RequireDeepSeekAPIKey()
-	if err != nil {
-		return "", err
-	}
-
 	notesData, err := os.ReadFile(notesInputPath)
 	if err != nil {
 		return "", fmt.Errorf("reading notes input: %w", err)
 	}
 	notesText := strings.TrimSpace(string(notesData))
 
+	return generateDeepSeekContent(deepSeekSystemPrompt, notesText, settings)
+}
+
+// generateDeepSeekContent is the provider boundary for Processing Model V2.
+// Template selection and transcript framing are owned by prompt composition,
+// not by this adapter.
+func generateDeepSeekContent(systemPrompt, userPrompt string, settings *Settings) (string, error) {
+	apiKey, err := settings.RequireDeepSeekAPIKey()
+	if err != nil {
+		return "", err
+	}
 	payload := map[string]interface{}{
 		"model": settings.DeepSeekModel,
 		"messages": []map[string]string{
-			{"role": "system", "content": deepSeekSystemPrompt},
-			{"role": "user", "content": notesText},
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
 		},
 		"stream": false,
 	}

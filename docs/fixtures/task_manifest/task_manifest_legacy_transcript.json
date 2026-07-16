@@ -1,0 +1,7 @@
+{
+  "schema_version":"1.0","task_id":"legacy-transcript","created_at":"2026-07-01T00:00:00Z","updated_at":"2026-07-01T00:05:00Z",
+  "execution":{"backend":"go","provider":"mimo","output_mode":"transcript","status":"completed","stage":"COMPLETED","attempt":1},
+  "input":{"source_reference":"audio/example.wav","source_ownership":"task_copy","format":"wav","original_name":"example.wav"},
+  "artifacts":{"transcript":{"status":"completed","path":"transcript.md"},"notes":{"status":"unavailable"},"minutes":{"status":"unavailable"}},
+  "checkpoint":{"integrity_version":1,"chunks":{"chunk_minutes":5,"max_upload_mb":10,"asr_provider":"mimo","asr_model":"mimo-v2.5-asr","total":0,"items":[]}}
+}

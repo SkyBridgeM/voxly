@@ -15,7 +15,7 @@ import (
 	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
-const currentSchemaVersion = taskmanifest.CurrentSchemaVersion
+const currentSchemaVersion = taskmanifest.LatestSchemaVersion
 
 // TaskManifest is the runtime's only durable task model. Manifest remains an
 // alias for existing workflow helper signatures; it is not a legacy format.
@@ -80,7 +80,9 @@ func LoadLegacyManifest(taskDir string) (*legacyManifest, error) {
 
 // SaveManifest atomically writes task_manifest.json to a task directory.
 func SaveManifest(taskDir string, m *Manifest) error {
-	m.SchemaVersion = currentSchemaVersion
+	if m.SchemaVersion == "" {
+		m.SchemaVersion = currentSchemaVersion
+	}
 	m.UpdatedAt = nowFunc().Format(time.RFC3339)
 	if m.Backend == "" {
 		m.Backend = "go"
@@ -144,7 +146,7 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 		sizeBytes = info.Size()
 	}
 
-	return &Manifest{
+	m := &Manifest{
 		SchemaVersion:    currentSchemaVersion,
 		IntegrityVersion: 1,
 		TaskID:           filepath.Base(taskDir),
@@ -172,14 +174,23 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 		},
 		Artifacts: Artifacts{
 			Transcript: ArtifactInfo{Path: filepath.Join(taskDir, "transcript.md"), State: ArtifactPending},
-			NotesInput: ArtifactInfo{Path: filepath.Join(taskDir, "notes_input.md"), State: requestedArtifactState(outputMode == "notes" || outputMode == "minutes")},
-			Minutes:    ArtifactInfo{Path: filepath.Join(taskDir, "meeting_minutes.md"), State: requestedArtifactState(outputMode == "minutes")},
+			NotesInput: ArtifactInfo{Path: legacyArtifactPath(taskDir, "notes_input.md", outputMode == "notes" || outputMode == "minutes"), State: requestedArtifactState(outputMode == "notes" || outputMode == "minutes")},
+			Minutes:    ArtifactInfo{Path: legacyArtifactPath(taskDir, "meeting_minutes.md", outputMode == "minutes"), State: requestedArtifactState(outputMode == "minutes")},
 		},
 		LastError:   nil,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		CompletedAt: nil,
 	}
+	_ = initializeCanonicalTranscript(taskDir, m)
+	return m
+}
+
+func legacyArtifactPath(taskDir, name string, requested bool) string {
+	if !requested {
+		return ""
+	}
+	return filepath.Join(taskDir, name)
 }
 
 func requestedArtifactState(requested bool) ArtifactState {
@@ -197,6 +208,17 @@ func taskStatus(m *Manifest) string {
 		for _, artifact := range requiredArtifacts(m) {
 			if artifact.State != ArtifactReady {
 				return "processing"
+			}
+		}
+		if m.OutputMode == "transcript_and_generate" && len(m.Generations) == 0 {
+			return "completed_with_errors"
+		}
+		for i := range m.Generations {
+			if m.Generations[i].Status == "pending" || m.Generations[i].Status == "processing" {
+				return "processing"
+			}
+			if m.Generations[i].Status == "failed" {
+				return "completed_with_errors"
 			}
 		}
 		return "completed"
@@ -332,8 +354,8 @@ func MarkTaskCompleted(taskDir string, m *Manifest) error {
 // ValidateManifest checks that the manifest has valid schema, required fields,
 // and safe task-local paths. All paths must remain within the task directory.
 func ValidateManifest(taskDir string, m *Manifest) error {
-	if m.SchemaVersion != currentSchemaVersion {
-		return fmt.Errorf("unsupported schema version %q (expected %q)", m.SchemaVersion, currentSchemaVersion)
+	if m.SchemaVersion != currentSchemaVersion && m.SchemaVersion != taskmanifest.LegacySchemaVersion {
+		return fmt.Errorf("unsupported schema version %q", m.SchemaVersion)
 	}
 	if m.IntegrityVersion != 0 && m.IntegrityVersion != 1 {
 		return fmt.Errorf("unsupported integrity_version %d", m.IntegrityVersion)
@@ -341,7 +363,7 @@ func ValidateManifest(taskDir string, m *Manifest) error {
 	if m.TaskID == "" {
 		return fmt.Errorf("manifest missing task_id")
 	}
-	if m.OutputMode != "transcript" && m.OutputMode != "notes" && m.OutputMode != "minutes" {
+	if m.OutputMode != "transcript" && m.OutputMode != "notes" && m.OutputMode != "minutes" && m.OutputMode != "transcript_only" && m.OutputMode != "transcript_and_generate" {
 		return fmt.Errorf("invalid output_mode %q", m.OutputMode)
 	}
 	if !validTaskStates[m.State] {

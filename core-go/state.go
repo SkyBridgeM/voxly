@@ -11,6 +11,7 @@ const (
 	TaskMerging           TaskState = "MERGING"
 	TaskNotesGenerating   TaskState = "NOTES_GENERATING"
 	TaskMinutesGenerating TaskState = "MINUTES_GENERATING"
+	TaskContentGenerating TaskState = "CONTENT_GENERATING"
 	TaskValidatingOutputs TaskState = "VALIDATING_OUTPUTS"
 	TaskCompleted         TaskState = "COMPLETED"
 	TaskFailed            TaskState = "FAILED"
@@ -46,6 +47,7 @@ var validTaskStates = map[TaskState]bool{
 	TaskMerging:           true,
 	TaskNotesGenerating:   true,
 	TaskMinutesGenerating: true,
+	TaskContentGenerating: true,
 	TaskValidatingOutputs: true,
 	TaskCompleted:         true,
 	TaskFailed:            true,
@@ -89,6 +91,16 @@ func ResumeStage(m *Manifest) (TaskState, bool) {
 		}
 
 		return TaskMerging, false
+	}
+
+	if m.OutputMode == "transcript_and_generate" {
+		if len(m.Generations) == 0 {
+			return TaskContentGenerating, false
+		}
+		last := m.Generations[len(m.Generations)-1]
+		if last.Status == "processing" || (last.Status == "failed" && last.Error != nil && last.Error.Retryable != nil && *last.Error.Retryable) {
+			return TaskContentGenerating, false
+		}
 	}
 
 	// Notes input required but missing or invalid.

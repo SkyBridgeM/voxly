@@ -1,0 +1,12 @@
+{
+  "schema_version": "2.0",
+  "task_id": "task-v2-generation-failure",
+  "created_at": "2026-07-16T02:00:00Z",
+  "updated_at": "2026-07-16T02:06:00Z",
+  "execution": {"backend":"go","provider":"mimo","output_mode":"transcript_and_generate","template_id":"meeting-minutes","status":"completed_with_errors","stage":"COMPLETED","attempt":1},
+  "input": {"source_reference":"audio/example.wav","source_ownership":"task_copy","format":"wav","original_name":"example.wav"},
+  "artifacts": {"transcript":{"status":"completed","path":"transcript.md","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"notes":{"status":"unavailable"},"minutes":{"status":"unavailable"}},
+  "checkpoint": {"integrity_version":1,"chunks":{"chunk_minutes":5,"max_upload_mb":10,"asr_provider":"mimo","asr_model":"mimo-v2.5-asr","total":0,"items":[]}},
+  "canonical_transcript": {"transcript_id":"canonical","revision_id":"tr_fixture_3","artifact_reference":"transcript.md","content_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","hash_contract_version":1,"created_at":"2026-07-16T02:04:00Z","asr_provider":"mimo","asr_model":"mimo-v2.5-asr","status":"completed"},
+  "generations": [{"generation_id":"gen_fixture_failed","template_id":"meeting-minutes","template_revision":1,"template_display_name":"Meeting minutes","template_instructions":"Create meeting minutes.","created_at":"2026-07-16T02:05:00Z","updated_at":"2026-07-16T02:06:00Z","source_transcript_revision_id":"tr_fixture_3","source_transcript_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","llm_provider":"deepseek","llm_model":"deepseek-v4-flash","prompt_composition_version":1,"prompt_hash":"prompt-failed","status":"failed","error":{"code":"generation_failed","message":"Content generation provider request failed.","retryable":true},"attempts":[{"attempt":1,"created_at":"2026-07-16T02:05:00Z","status":"failed","error":{"code":"generation_failed","message":"Content generation provider request failed.","retryable":true}}]}]
+}
