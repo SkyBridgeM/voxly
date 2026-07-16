@@ -34,25 +34,61 @@ func CalculateRetryChunkSeconds(initialSeconds int) []int {
 // SplitAudio splits an audio file into chunks using ffmpeg.
 // Returns the sorted list of chunk file paths.
 func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes int64) ([]string, error) {
+	return SplitAudioWithCapabilities(
+		inputPath,
+		chunksDir,
+		chunkMinutes,
+		maxUploadBytes,
+		MimoCapabilities(defaultMimoModel),
+	)
+}
+
+// SplitAudioWithCapabilities executes the deterministic provider-aware plan.
+// The planner owns chunk duration, overlap, concurrency, and retry durations;
+// this function only realizes that plan with ffmpeg and validates produced
+// chunk sizes.
+func SplitAudioWithCapabilities(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes int64, capabilities ASRProviderCapabilities) ([]string, error) {
 	if err := ensureFFmpeg(); err != nil {
 		return nil, err
 	}
 	if err := ValidateAudioFormat(inputPath); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(inputPath); err != nil {
+	info, err := os.Stat(inputPath)
+	if err != nil {
 		return nil, fmt.Errorf("audio file not found: %s", inputPath)
 	}
 
 	inputFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(inputPath)), ".")
 	chunkFormat := chunkAudioFormat(inputFormat)
-	initialSeconds := chunkMinutes * 60
-	if initialSeconds < minChunkSeconds {
-		initialSeconds = minChunkSeconds
+	requestedChunkDurationMS, err := chunkMinutesToMilliseconds(chunkMinutes)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := PlanChunks(ChunkPlannerInput{
+		Audio: AudioMetadata{
+			SizeBytes: info.Size(),
+			Format:    inputFormat,
+		},
+		Capabilities:             capabilities,
+		Strategy:                 ChunkStrategyProviderAuto,
+		RequestedChunkDurationMS: requestedChunkDurationMS,
+		MaximumChunkBytes:        maxUploadBytes,
+		RequestedConcurrency:     1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("planning audio chunks: %w", err)
+	}
+	if plan.OverlapMS != 0 || plan.EffectiveConcurrency != 1 {
+		return nil, fmt.Errorf("current Mimo splitter cannot execute overlap or concurrent chunk plans")
 	}
 
 	var attempted []int
-	for _, chunkSeconds := range CalculateRetryChunkSeconds(initialSeconds) {
+	for _, chunkDurationMS := range plan.RetryChunkDurationsMS {
+		if chunkDurationMS%1000 != 0 {
+			return nil, fmt.Errorf("planned chunk duration must use whole seconds")
+		}
+		chunkSeconds := int(chunkDurationMS / 1000)
 		attempted = append(attempted, chunkSeconds)
 		if err := clearChunks(chunksDir, chunkFormat); err != nil {
 			return nil, err
@@ -66,7 +102,7 @@ func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes in
 			return nil, err
 		}
 
-		oversize := filterOversize(chunks, maxUploadBytes)
+		oversize := filterOversize(chunks, plan.MaximumChunkBytes)
 		if len(oversize) == 0 {
 			return chunks, nil
 		}
@@ -86,6 +122,18 @@ func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes in
 	}
 
 	return nil, fmt.Errorf("unable to split audio below upload limit. Attempted chunk lengths: %v", attempted)
+}
+
+func chunkMinutesToMilliseconds(minutes int) (int64, error) {
+	if minutes < 0 {
+		return 0, fmt.Errorf("chunk minutes cannot be negative")
+	}
+	const millisecondsPerMinute = int64(60 * 1000)
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if int64(minutes) > maxInt64/millisecondsPerMinute {
+		return 0, fmt.Errorf("chunk duration overflows milliseconds")
+	}
+	return int64(minutes) * millisecondsPerMinute, nil
 }
 
 func chunkAudioFormat(inputFormat string) string {

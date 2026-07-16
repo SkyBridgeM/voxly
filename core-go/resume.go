@@ -219,7 +219,13 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 	}
 
 	chunksDir := filepath.Join(taskDir, "chunks")
-	chunks, err := SplitAudio(sourceAudio, chunksDir, m.Chunks.ChunkMinutes, int64(m.Chunks.MaxUploadMB*1024*1024))
+	chunks, err := SplitAudioWithCapabilities(
+		sourceAudio,
+		chunksDir,
+		m.Chunks.ChunkMinutes,
+		int64(m.Chunks.MaxUploadMB*1024*1024),
+		MimoCapabilities(settings.MimoModel),
+	)
 	if err != nil {
 		return err
 	}
