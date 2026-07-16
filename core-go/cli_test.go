@@ -381,9 +381,9 @@ func TestRunResume_CLIFlagPathResolvesRelativeToCwd(t *testing.T) {
 	}
 }
 
-// --- MINUTES_PROVIDER validation tests ---
+// --- Legacy MINUTES_PROVIDER compatibility tests ---
 
-func TestRunTranscribe_MinutesProviderNotDeepSeek(t *testing.T) {
+func TestRunTranscribe_LegacyMinutesProviderDoesNotOverrideV2LLMConfig(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROVIDER=openai\n"), 0644); err != nil {
@@ -401,17 +401,14 @@ func TestRunTranscribe_MinutesProviderNotDeepSeek(t *testing.T) {
 		audioPath,
 	})
 	if err == nil {
-		t.Fatal("expected error for unsupported MINUTES_PROVIDER")
+		t.Fatal("expected error for missing generated-content credential")
 	}
-	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") {
-		t.Errorf("error should mention required provider, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), `"openai"`) {
-		t.Errorf("error should mention actual provider, got: %v", err)
+	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") || strings.Contains(err.Error(), "MINUTES_PROVIDER") {
+		t.Errorf("V2 should use explicit LLM config and proceed to credential validation, got: %v", err)
 	}
 }
 
-func TestRunResume_MinutesAliasRejectsUnsupportedProvider(t *testing.T) {
+func TestRunResume_LegacyMinutesProviderDoesNotOverrideV2LLMConfig(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	if err := os.WriteFile(envPath, []byte("MIMO_API_KEY=test\nMINUTES_PROVIDER=openai\n"), 0644); err != nil {
@@ -461,9 +458,9 @@ func TestRunResume_MinutesAliasRejectsUnsupportedProvider(t *testing.T) {
 		taskDir,
 	})
 	if err == nil {
-		t.Fatal("expected error for unsupported minutes provider")
+		t.Fatal("expected error for missing generated-content credential")
 	}
-	if !strings.Contains(err.Error(), "MINUTES_PROVIDER=deepseek") || !strings.Contains(err.Error(), `got "openai"`) {
-		t.Errorf("error should identify the required and configured providers, got: %v", err)
+	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") || strings.Contains(err.Error(), "MINUTES_PROVIDER") {
+		t.Errorf("V2 should use explicit LLM config and proceed to credential validation, got: %v", err)
 	}
 }

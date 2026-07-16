@@ -41,6 +41,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "list-providers":
+		if err := json.NewEncoder(os.Stdout).Encode(BuiltInProviderCatalog()); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "generate-content":
 		if err := runGenerateContent(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -65,11 +70,16 @@ Usage:
   meeting-asr-go resume <task_dir> [flags]
   meeting-asr-go list-tasks --output-root <path>
   meeting-asr-go list-templates
+  meeting-asr-go list-providers
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
 
 Flags:
   --output-mode transcript_only   Output mode: transcript_only or transcript_and_generate
   --template-id id           Built-in template for transcript_and_generate
+  --asr-provider mimo        Speech-recognition provider
+  --asr-model model          Speech-recognition model
+  --llm-provider deepseek    Generated-content provider
+  --llm-model model          Generated-content model
   --output-dir output        Base output directory
   --chunk-minutes 5          Chunk length in minutes
   --max-upload-mb 10         Max upload size in MB
@@ -86,6 +96,8 @@ func runGenerateContent(args []string) error {
 	fs.SetOutput(io.Discard)
 	taskDir := fs.String("task-dir", "", "Validated task directory")
 	templateID := fs.String("template-id", "", "Built-in template ID")
+	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
+	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 	envFile := fs.String("env-file", "", "Explicit .env path")
 	projectRoot := fs.String("project-root", "", "Project root")
 	if err := fs.Parse(args); err != nil {
@@ -113,13 +125,20 @@ func runGenerateContent(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidateMinutesProvider(settings); err != nil {
+	settings.LLMProvider = *llmProvider
+	settings.DeepSeekModel = *llmModel
+	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
 		return err
 	}
 	if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
 		return err
 	}
-	record, err := GenerateContent(*taskDir, m, *templateID, settings, deepSeekGenerator{})
+	fmt.Printf("LLM provider=%s model=%s\n", settings.LLMProvider, settings.DeepSeekModel)
+	generator, err := ResolveLLMContentGenerator(settings.LLMConfig())
+	if err != nil {
+		return err
+	}
+	record, err := GenerateContent(*taskDir, m, *templateID, settings, generator)
 	if record != nil {
 		fmt.Printf("Generation ID: %s\n", record.GenerationID)
 	}
@@ -199,6 +218,10 @@ func runTranscribe(args []string) error {
 	projectRoot := fs.String("project-root", "", "Explicit project root for .env lookup")
 	promptPath := fs.String("prompt-path", "", "Path to prompt template")
 	obsidianTemplatePath := fs.String("obsidian-template-path", "", "Path to Obsidian template")
+	asrProvider := fs.String("asr-provider", string(ASRProviderMimo), "Speech-recognition provider")
+	asrModel := fs.String("asr-model", string(ASRModelMimoV25), "Speech-recognition model")
+	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
+	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
@@ -285,17 +308,26 @@ func runTranscribe(args []string) error {
 	if *obsidianTemplatePath != "" {
 		settings.ObsidianTemplatePath = resolveCLIPath(*obsidianTemplatePath)
 	}
+	settings.ASRProvider = *asrProvider
+	settings.MimoModel = *asrModel
+	settings.LLMProvider = *llmProvider
+	settings.DeepSeekModel = *llmModel
+	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
+		return err
+	}
+	if *outputMode == "transcript_and_generate" {
+		if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
+			return err
+		}
+	}
 
 	// Validate API key (always needed).
 	if _, err := settings.RequireMimoAPIKey(); err != nil {
 		return err
 	}
 
-	// Fail fast on unsupported minutes provider before expensive work.
+	// Fail fast on unsupported generated-content configuration before expensive work.
 	if *outputMode == "transcript_and_generate" {
-		if err := ValidateMinutesProvider(settings); err != nil {
-			return err
-		}
 		if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
 			return err
 		}
@@ -334,6 +366,10 @@ func runWorkflowV2(audioPath, outputDir string, settings *Settings, outputMode, 
 }
 
 func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode string, selectedTemplate ...string) error {
+	capabilities, err := ResolveASRCapabilities(settings.ASRConfig())
+	if err != nil {
+		return err
+	}
 	// 1. Create task directory.
 	audioStem := filepath.Base(audioPath)
 	audioStem = audioStem[:len(audioStem)-len(filepath.Ext(audioStem))]
@@ -350,12 +386,16 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 
 	// 3. Create manifest.
-	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, "mimo", settings.MimoModel)
+	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, settings.ASRProvider, settings.MimoModel)
 	if outputMode == "transcript_and_generate" && len(selectedTemplate) > 0 {
 		manifest.RequestedTemplateID = selectedTemplate[0]
 	}
 	if err := SetTaskState(taskDir, manifest, TaskValidatingAudio); err != nil {
 		return fmt.Errorf("creating manifest: %w", err)
+	}
+	fmt.Printf("ASR provider=%s model=%s\n", settings.ASRProvider, settings.MimoModel)
+	if outputMode == "transcript_and_generate" {
+		fmt.Printf("LLM provider=%s model=%s\n", settings.LLMProvider, settings.DeepSeekModel)
 	}
 
 	// 4. Split audio.
@@ -368,7 +408,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		filepath.Join(taskDir, "chunks"),
 		settings.DefaultChunkMin,
 		settings.MaxUploadBytes(),
-		MimoCapabilities(settings.MimoModel),
+		capabilities,
 	)
 	if err != nil {
 		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
@@ -490,7 +530,11 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 			templateID = selectedTemplate[0]
 		}
 		fmt.Println("Status: Generating content")
-		record, err := GenerateContent(taskDir, manifest, templateID, settings, deepSeekGenerator{})
+		generator, resolveErr := ResolveLLMContentGenerator(settings.LLMConfig())
+		if resolveErr != nil {
+			return resolveErr
+		}
+		record, err := GenerateContent(taskDir, manifest, templateID, settings, generator)
 		if err != nil {
 			// Transcript remains valid; failed generation metadata is durable.
 			manifest.State = TaskCompleted

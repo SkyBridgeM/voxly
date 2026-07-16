@@ -170,6 +170,17 @@ export interface Translations {
   generationFailed: string;
   latestVersion: string;
   legacyArtifact: string;
+  settingsProviders: string;
+  settingsProvidersDesc: string;
+  speechRecognition: string;
+  generatedContentProvider: string;
+  provider: string;
+  model: string;
+  speechRecognitionProvider: string;
+  generatedWithProvider: string;
+  providerUnknown: string;
+  providerNotReady: string;
+  openSettings: string;
 }
 
 export const translations: Record<Locale, Translations> = {
@@ -344,6 +355,17 @@ export const translations: Record<Locale, Translations> = {
     generationFailed: "生成失败；已有转写和历史版本保持不变。",
     latestVersion: "最新成功版本",
     legacyArtifact: "旧版输出",
+    settingsProviders: "服务商与模型",
+    settingsProvidersDesc: "选择语音识别和生成内容使用的内置服务商与模型。密钥仍单独安全保存。",
+    speechRecognition: "语音识别",
+    generatedContentProvider: "生成内容",
+    provider: "服务商",
+    model: "模型",
+    speechRecognitionProvider: "语音识别",
+    generatedWithProvider: "生成服务",
+    providerUnknown: "旧版 / 未知",
+    providerNotReady: "当前服务配置尚未就绪。",
+    openSettings: "打开设置",
   },
   en: {
     appTitle: "Meeting ASR Desktop",
@@ -516,6 +538,17 @@ export const translations: Record<Locale, Translations> = {
     generationFailed: "Generation failed. The transcript and earlier versions are unchanged.",
     latestVersion: "Latest successful version",
     legacyArtifact: "Legacy output",
+    settingsProviders: "Providers and models",
+    settingsProvidersDesc: "Choose the built-in providers and models used for speech recognition and generated content. Credentials remain stored separately.",
+    speechRecognition: "Speech recognition",
+    generatedContentProvider: "Generated content",
+    provider: "Provider",
+    model: "Model",
+    speechRecognitionProvider: "Speech recognition",
+    generatedWithProvider: "Generated with",
+    providerUnknown: "Legacy / unknown",
+    providerNotReady: "The current provider configuration is not ready.",
+    openSettings: "Open Settings",
   },
 };
 

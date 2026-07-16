@@ -18,6 +18,9 @@ import {
   openOutputRoot,
   parseBackendError,
   listPromptTemplates,
+  listProviders,
+  getProviderSettings,
+  setProviderSettings,
   type BackendKind,
   type RuntimeMode,
   type RuntimePreflight,
@@ -26,6 +29,8 @@ import {
   type OutputRootInfo,
   type ProgressEvent,
   type PromptTemplateSummary,
+  type ProviderCatalog,
+  type ProviderSettingsInfo,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
@@ -37,6 +42,10 @@ import "./App.css";
 type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
 const DEVELOPMENT_BACKEND_OPTIONS = ["go", "python"] as const satisfies readonly BackendKind[];
+const DEFAULT_PROVIDER_SETTINGS: ProviderSettingsInfo = {
+  asr: { provider_id: "mimo", model_id: "mimo-v2.5-asr" },
+  llm: { provider_id: "deepseek", model_id: "deepseek-v4-flash" },
+};
 
 function resolveInitialBackend(
   runtimeMode: RuntimeMode,
@@ -92,7 +101,10 @@ function App() {
 
   const [mimoApiKey, setMimoApiKey] = useState("");
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
-  const [deepseekModel, setDeepseekModel] = useState("deepseek-v4-flash");
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null);
+  const [providerSettings, setProviderSettingsState] = useState<ProviderSettingsInfo>(DEFAULT_PROVIDER_SETTINGS);
+  const [providerSavePending, setProviderSavePending] = useState(false);
+  const [providerSaveMessage, setProviderSaveMessage] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<RuntimePreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | null>(null);
@@ -165,6 +177,11 @@ function App() {
   }, [backend, mimoApiKey, deepseekApiKey, t.preflightUnavailable]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => { void refreshPreflight(); }, 150);
+    return () => window.clearTimeout(timer);
+  }, [refreshPreflight]);
+
+  useEffect(() => {
     const root = document.documentElement;
     if (theme === "system") {
       root.removeAttribute("data-theme");
@@ -204,6 +221,20 @@ function App() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([listProviders(), getProviderSettings()])
+      .then(([catalog, settings]) => {
+        if (!active) return;
+        setProviderCatalog(catalog);
+        setProviderSettingsState(settings);
+      })
+      .catch(() => {
+        if (active) setProviderCatalog(null);
+      });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -297,7 +328,14 @@ function App() {
       const result = await runMeetingAsr(
         audioPath,
         outputMode,
-        { mimoApiKey, deepseekApiKey, deepseekModel, backend, templateId },
+        {
+          mimoApiKey,
+          deepseekApiKey,
+          backend,
+          templateId,
+          asrConfig: providerSettings.asr,
+          llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
+        },
         {
           onLog: queueLog,
           onProgress: (event) => setProgress(event),
@@ -332,7 +370,7 @@ function App() {
     outputMode,
     mimoApiKey,
     deepseekApiKey,
-    deepseekModel,
+    providerSettings,
     backend,
     templateId,
     t,
@@ -375,6 +413,8 @@ function App() {
 
   const handleCloseSettings = () => {
     setShowSettings(false);
+    setProviderSaveMessage(null);
+    void getProviderSettings().then(setProviderSettingsState).catch(() => {});
   };
 
   const handleOpenSettings = () => {
@@ -511,6 +551,22 @@ function App() {
     }
   };
 
+  const handleSaveProviderSettings = useCallback(async () => {
+    if (isRunning || providerSavePending) return;
+    setProviderSavePending(true);
+    setProviderSaveMessage(null);
+    try {
+      const saved = await setProviderSettings(providerSettings.asr, providerSettings.llm);
+      setProviderSettingsState(saved);
+      setProviderSaveMessage(t.savedSuccessfully);
+      await refreshPreflight();
+    } catch (error) {
+      setProviderSaveMessage(`${t.saveFailed}: ${parseBackendError(String(error)).message}`);
+    } finally {
+      setProviderSavePending(false);
+    }
+  }, [isRunning, providerSavePending, providerSettings, refreshPreflight, t.saveFailed, t.savedSuccessfully]);
+
   const [saveStatus, setSaveStatus] = useState<Record<string, string>>({});
 
   const credentialStatusText = (credential: RuntimePreflight["mimo_api_key"]) => {
@@ -551,6 +607,13 @@ function App() {
 
   const preflightReadyForMode =
     outputMode === "transcript_and_generate" ? preflight?.ready_for_minutes : preflight?.ready;
+
+  const asrDescriptor = providerCatalog?.asr.find((provider) => provider.id === providerSettings.asr.provider_id);
+  const llmDescriptor = providerCatalog?.llm.find((provider) => provider.id === providerSettings.llm.provider_id);
+  const asrProviderLabel = asrDescriptor?.display_name[locale] ?? "Mimo";
+  const llmProviderLabel = llmDescriptor?.display_name[locale] ?? "DeepSeek";
+  const asrModelLabel = asrDescriptor?.models.find((model) => model.id === providerSettings.asr.model_id)?.display_name[locale] ?? providerSettings.asr.model_id;
+  const llmModelLabel = llmDescriptor?.models.find((model) => model.id === providerSettings.llm.model_id)?.display_name[locale] ?? providerSettings.llm.model_id;
 
   const hasActivity = isRunning || logs.length > 0 || taskFolder || status;
 
@@ -672,6 +735,10 @@ function App() {
                   onStartRun={startRun}
                   isRunning={isRunning}
                   audioPath={audioPath}
+                  ready={Boolean(preflightReadyForMode)}
+                  asrSummary={`${asrProviderLabel} · ${asrModelLabel}`}
+                  llmSummary={`${llmProviderLabel} · ${llmModelLabel}`}
+                  onOpenSettings={handleOpenSettings}
                   labels={{
                     modeTranscript: t.modeTranscript,
                     modeTranscriptDesc: t.modeTranscriptDesc,
@@ -682,6 +749,10 @@ function App() {
                     processing: t.processing,
                     llmWarning: t.llmWarning,
                     transcriptWarning: t.transcriptWarning,
+                    speechRecognitionProvider: t.speechRecognitionProvider,
+                    generatedWithProvider: t.generatedWithProvider,
+                    providerNotReady: t.providerNotReady,
+                    openSettings: t.openSettings,
                   }}
                 />
               </div>
@@ -783,9 +854,12 @@ function App() {
                 refreshToken={libraryRefreshToken}
                 onReturnToWorkflow={showWorkflow}
                 deepseekApiKey={deepseekApiKey}
-                deepseekModel={deepseekModel}
                 templates={templates}
                 llmReady={Boolean(preflight?.ready_for_minutes)}
+                llmProviderLabel={llmProviderLabel}
+                llmModelLabel={llmModelLabel}
+                llmConfig={providerSettings.llm}
+                onOpenSettings={handleOpenSettings}
               />
             </div>
           )}
@@ -1120,24 +1194,26 @@ function App() {
                   <div className="settings-section-title">
                     <span>05</span>
                     <div>
-                      <h3>{t.settingsMinutesModel}</h3>
-                      <p>{t.settingsMinutesModelDesc}</p>
+                      <h3>{t.settingsProviders}</h3>
+                      <p>{t.settingsProvidersDesc}</p>
                     </div>
                   </div>
                 </div>
-                <div className="form-group form-group-compact">
-                  <label htmlFor="settings-deepseek-model">
-                    {t.deepseekModel}
-                  </label>
-                  <select
-                    id="settings-deepseek-model"
-                    value={deepseekModel}
-                    onChange={(e) => setDeepseekModel(e.target.value)}
-                  >
-                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                  </select>
+                <div className="provider-settings-grid">
+                  <div className="provider-settings-card">
+                    <h4>{t.speechRecognition}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
+                    <p className={preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                  </div>
+                  <div className="provider-settings-card">
+                    <h4>{t.generatedContentProvider}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-provider">{t.provider}</label><select id="settings-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-model">{t.model}</label><select id="settings-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
+                    <p className={preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
+                  </div>
                 </div>
+                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
               </section>
 
               <section className="settings-section">

@@ -8,6 +8,7 @@ import {
   type DiscoveryResult,
   type TaskSummary,
   type PromptTemplateSummary,
+  type ProviderSelection,
 } from "../lib/meetingAsr";
 
 export interface TaskLibraryLabels {
@@ -65,6 +66,11 @@ export interface TaskLibraryLabels {
   templateLabel: string;
   latestVersion: string;
   legacyArtifact: string;
+  speechRecognitionProvider: string;
+  generatedWithProvider: string;
+  providerUnknown: string;
+  providerNotReady: string;
+  openSettings: string;
 }
 
 interface TaskLibraryProps {
@@ -73,9 +79,12 @@ interface TaskLibraryProps {
   refreshToken: number;
   onReturnToWorkflow: () => void;
   deepseekApiKey: string;
-  deepseekModel: string;
   templates: PromptTemplateSummary[];
   llmReady: boolean;
+  llmProviderLabel: string;
+  llmModelLabel: string;
+  llmConfig: ProviderSelection;
+  onOpenSettings: () => void;
 }
 
 function formatDate(value: string, locale: "zh" | "en", fallback: string) {
@@ -155,6 +164,11 @@ function ArtifactItem({
         {artifact.retryable !== null && (
           <span>{artifact.retryable ? labels.retryable : labels.notRetryable}</span>
         )}
+        <span>
+          {artifact.provider
+            ? `${artifact.provider === "mimo" ? labels.speechRecognitionProvider : labels.generatedWithProvider}: ${artifact.provider === "mimo" ? "Mimo" : artifact.provider === "deepseek" ? "DeepSeek" : labels.providerUnknown} · ${artifact.model || labels.providerUnknown}`
+            : labels.providerUnknown}
+        </span>
       </div>
       {available && artifact.reference && (
         <div className="library-artifact-actions">
@@ -186,7 +200,7 @@ function ArtifactItem({
 function GenerationGroupView({ group, task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction }: { group: TaskSummary["generated_content"][number]; task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void }) {
   const name = templates.find((template) => template.id === group.template_id)?.display_name[locale] ?? group.display_name;
   const visibleVersions = group.latest ? [group.latest] : group.versions;
-  return <section className="generation-group"><div className="generation-group-heading"><strong>{name}</strong>{group.latest && <span>{labels.latestVersion}</span>}</div><ul>{visibleVersions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable}} labels={labels} actionKey={`${task.task_folder}:generation:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul>{group.latest && group.versions.length > 1 && <details><summary>{labels.generationHistory} ({group.versions.length})</summary><ul>{group.versions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable}} labels={labels} actionKey={`${task.task_folder}:history:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul></details>}</section>;
+  return <section className="generation-group"><div className="generation-group-heading"><strong>{name}</strong>{group.latest && <span>{labels.latestVersion}</span>}</div><ul>{visibleVersions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable, provider: version.provider, model: version.model}} labels={labels} actionKey={`${task.task_folder}:generation:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul>{group.latest && group.versions.length > 1 && <details><summary>{labels.generationHistory} ({group.versions.length})</summary><ul>{group.versions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable, provider: version.provider, model: version.model}} labels={labels} actionKey={`${task.task_folder}:history:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul></details>}</section>;
 }
 
 function TaskCard({
@@ -287,9 +301,12 @@ export function TaskLibrary({
   refreshToken,
   onReturnToWorkflow,
   deepseekApiKey,
-  deepseekModel,
   templates,
   llmReady,
+  llmProviderLabel,
+  llmModelLabel,
+  llmConfig,
+  onOpenSettings,
 }: TaskLibraryProps) {
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -396,7 +413,7 @@ export function TaskLibrary({
     setGenerationPending((previous) => new Set(previous).add(task.task_folder));
     setGenerationErrors((previous) => { const next = new Map(previous); next.delete(task.task_folder); return next; });
     try {
-      await generateTaskContent({ taskFolder: task.task_folder, templateId, deepseekApiKey, deepseekModel });
+      await generateTaskContent({ taskFolder: task.task_folder, templateId, deepseekApiKey, llmConfig });
       await refresh();
     } catch {
       if (mountedRef.current) setGenerationErrors((previous) => new Map(previous).set(task.task_folder, labels.generationFailed));
@@ -404,7 +421,7 @@ export function TaskLibrary({
       generationPendingRef.current.delete(task.task_folder);
       if (mountedRef.current) setGenerationPending((previous) => { const next = new Set(previous); next.delete(task.task_folder); return next; });
     }
-  }, [deepseekApiKey, deepseekModel, labels.generationFailed, refresh]);
+  }, [deepseekApiKey, llmConfig, labels.generationFailed, refresh]);
 
   return (
     <section className="task-library" aria-labelledby="task-library-title">
@@ -464,6 +481,13 @@ export function TaskLibrary({
             <button className="btn-secondary" onClick={onReturnToWorkflow}>{labels.newTask}</button>
           </div>
         </div>
+      )}
+
+      {result && result.tasks.length > 0 && (
+        <p className="library-provider-summary">
+          {labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}
+          {!llmReady && <> · {labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></>}
+        </p>
       )}
 
       {result && result.tasks.length > 0 && (

@@ -19,6 +19,9 @@ type ProgressFunc func(action string, index, total int)
 
 // TranscribeChunks transcribes all chunks, skipping already-completed transcripts.
 func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings, progressFn ProgressFunc) ([]string, error) {
+	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
+		return nil, err
+	}
 	apiKey, err := settings.RequireMimoAPIKey()
 	if err != nil {
 		return nil, err
