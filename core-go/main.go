@@ -273,7 +273,13 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		return fmt.Errorf("updating task state: %w", err)
 	}
 	fmt.Println("Status: Splitting audio")
-	chunks, err := SplitAudio(sourceCopy, filepath.Join(taskDir, "chunks"), settings.DefaultChunkMin, settings.MaxUploadBytes())
+	chunks, err := SplitAudioWithCapabilities(
+		sourceCopy,
+		filepath.Join(taskDir, "chunks"),
+		settings.DefaultChunkMin,
+		settings.MaxUploadBytes(),
+		MimoCapabilities(settings.MimoModel),
+	)
 	if err != nil {
 		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
 		return fmt.Errorf("splitting audio: %w", err)

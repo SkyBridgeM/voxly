@@ -13,7 +13,8 @@ import (
 var partRE = regexp.MustCompile(`^part_(\d+)\.txt$`)
 
 // MergeTranscripts reads all part_*.txt files from transcriptsDir and writes
-// a merged transcript.md to outputPath in the same format as the Python implementation.
+// the provider-neutral canonical transcript. Chunking is visible to the
+// runtime, not to the reader, so part identities never enter transcript.md.
 func MergeTranscripts(transcriptsDir, outputPath string) error {
 	entries, err := os.ReadDir(transcriptsDir)
 	if err != nil {
@@ -51,9 +52,14 @@ func MergeTranscripts(transcriptsDir, outputPath string) error {
 			return fmt.Errorf("reading %s: %w", filepath.Base(p.path), err)
 		}
 		text := strings.TrimSpace(string(data))
-		sections = append(sections, fmt.Sprintf("[Part %03d]\n\n%s", p.number, text))
+		if text != "" {
+			sections = append(sections, text)
+		}
 	}
 
-	output := strings.Join(sections, "\n\n") + "\n"
+	output := strings.Join(sections, "\n\n")
+	if output != "" {
+		output += "\n"
+	}
 	return WriteFileAtomically(outputPath, []byte(output), 0600)
 }

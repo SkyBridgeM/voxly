@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -24,6 +25,20 @@ func TestCalculateRetryChunkSeconds(t *testing.T) {
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("CalculateRetryChunkSeconds(%d) = %v, want %v", tt.initial, got, tt.want)
 		}
+	}
+}
+
+func TestChunkMinutesToMillisecondsRejectsOverflow(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("overflow input requires a 64-bit int")
+	}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	overflowMinutes := int(maxInt64/(60*1000) + 1)
+	if _, err := chunkMinutesToMilliseconds(overflowMinutes); err == nil {
+		t.Fatal("expected chunk-duration overflow error")
+	}
+	if _, err := chunkMinutesToMilliseconds(-1); err == nil {
+		t.Fatal("expected negative chunk-duration error")
 	}
 }
 
