@@ -87,7 +87,7 @@ func TestInvalidManifestCases(t *testing.T) {
 			delete(artifact, "path")
 			artifact["error"] = map[string]any{"code": "failed", "message": "safe"}
 		}, wantErr: "must contain code, message, and retryable"},
-		{name: "unsupported schema version", mutate: func(value map[string]any) { value["schema_version"] = "2.0" }, wantErr: ErrUnsupportedSchemaVersion.Error()},
+		{name: "unsupported schema version", mutate: func(value map[string]any) { value["schema_version"] = "3.0" }, wantErr: ErrUnsupportedSchemaVersion.Error()},
 	}
 
 	for _, test := range tests {

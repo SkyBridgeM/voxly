@@ -3,6 +3,7 @@ interface ResultPanelProps {
   transcriptPath: string | null;
   notesInputPath: string | null;
   minutesPath: string | null;
+  generatedContentPath: string | null;
   onOpenFolder: () => void;
   labels: {
     resultsTitle: string;
@@ -14,6 +15,7 @@ interface ResultPanelProps {
     transcript: string;
     notesInput: string;
     meetingMinutes: string;
+    generatedContent: string;
     openTaskFolder: string;
   };
 }
@@ -23,6 +25,7 @@ export function ResultPanel({
   transcriptPath,
   notesInputPath,
   minutesPath,
+  generatedContentPath,
   onOpenFolder,
   labels,
 }: ResultPanelProps) {
@@ -44,10 +47,13 @@ export function ResultPanel({
       label: labels.meetingMinutes,
       path: minutesPath,
     },
+    generatedContentPath && { kind: "G", label: labels.generatedContent, path: generatedContentPath },
   ].filter((output): output is { kind: string; label: string; path: string } =>
     Boolean(output),
   );
-  const primaryOutput = minutesPath
+  const primaryOutput = generatedContentPath
+    ? outputs.find((output) => output.path === generatedContentPath)
+    : minutesPath
     ? outputs.find((output) => output.path === minutesPath)
     : notesInputPath
       ? outputs.find((output) => output.path === notesInputPath)

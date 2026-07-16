@@ -15,6 +15,7 @@ interface LogPanelProps {
     merging: string;
     preparingNotes: string;
     generatingMinutes: string;
+    generatingContent: string;
     done: string;
     showLogs: string;
     hideLogs: string;
@@ -66,6 +67,8 @@ export function LogPanel({
         return labels.preparingNotes;
       case "minutes":
         return labels.generatingMinutes;
+      case "generating":
+        return labels.generatingContent;
       case "done":
         return labels.done;
       default:

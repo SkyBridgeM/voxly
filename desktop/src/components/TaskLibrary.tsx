@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listTasks,
+  generateTaskContent,
   openTaskArtifact,
   revealTaskArtifact,
   type ArtifactSummary,
   type DiscoveryResult,
   type TaskSummary,
+  type PromptTemplateSummary,
 } from "../lib/meetingAsr";
 
 export interface TaskLibraryLabels {
@@ -53,6 +55,16 @@ export interface TaskLibraryLabels {
   revealingArtifact: string;
   artifactActionFailed: string;
   refreshLibraryHint: string;
+  canonicalTranscript: string;
+  generatedContent: string;
+  generationHistory: string;
+  generateContent: string;
+  generateAgain: string;
+  generatingContent: string;
+  generationFailed: string;
+  templateLabel: string;
+  latestVersion: string;
+  legacyArtifact: string;
 }
 
 interface TaskLibraryProps {
@@ -60,6 +72,10 @@ interface TaskLibraryProps {
   labels: TaskLibraryLabels;
   refreshToken: number;
   onReturnToWorkflow: () => void;
+  deepseekApiKey: string;
+  deepseekModel: string;
+  templates: PromptTemplateSummary[];
+  llmReady: boolean;
 }
 
 function formatDate(value: string, locale: "zh" | "en", fallback: string) {
@@ -102,7 +118,8 @@ function artifactKindLabel(kind: string, labels: TaskLibraryLabels) {
 }
 
 function outputModeLabel(mode: string, labels: TaskLibraryLabels) {
-  if (mode === "transcript") return labels.modeTranscript;
+  if (mode === "transcript" || mode === "transcript_only") return labels.modeTranscript;
+  if (mode === "transcript_and_generate") return labels.generatedContent;
   if (mode === "notes") return labels.modeNotes;
   if (mode === "minutes") return labels.modeMinutes;
   return mode || labels.statusUnknown;
@@ -166,6 +183,12 @@ function ArtifactItem({
   );
 }
 
+function GenerationGroupView({ group, task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction }: { group: TaskSummary["generated_content"][number]; task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void }) {
+  const name = templates.find((template) => template.id === group.template_id)?.display_name[locale] ?? group.display_name;
+  const visibleVersions = group.latest ? [group.latest] : group.versions;
+  return <section className="generation-group"><div className="generation-group-heading"><strong>{name}</strong>{group.latest && <span>{labels.latestVersion}</span>}</div><ul>{visibleVersions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable}} labels={labels} actionKey={`${task.task_folder}:generation:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul>{group.latest && group.versions.length > 1 && <details><summary>{labels.generationHistory} ({group.versions.length})</summary><ul>{group.versions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${name} · ${labels.legacyArtifact}` : name, status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable}} labels={labels} actionKey={`${task.task_folder}:history:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul></details>}</section>;
+}
+
 function TaskCard({
   task,
   locale,
@@ -173,6 +196,11 @@ function TaskCard({
   pendingActions,
   actionErrors,
   onArtifactAction,
+  templates,
+  generationPending,
+  generationError,
+  onGenerate,
+  llmReady,
 }: {
   task: TaskSummary;
   locale: "zh" | "en";
@@ -185,7 +213,14 @@ function TaskCard({
     action: "open" | "reveal",
     reference: string
   ) => void;
+  templates: PromptTemplateSummary[];
+  generationPending: boolean;
+  generationError: string | null;
+  onGenerate: (task: TaskSummary, templateId: string) => void;
+  llmReady: boolean;
 }) {
+  const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
+  const transcript = task.canonical_transcript ?? task.primary_artifacts.find((artifact) => artifact.kind === "transcript") ?? null;
   return (
     <article className="library-task-card" aria-labelledby={`task-${task.task_id}`}>
       <div className="library-task-header">
@@ -221,9 +256,9 @@ function TaskCard({
       )}
 
       <div className="library-artifacts">
-        <h4>{labels.outputs}</h4>
+        <h4>{labels.canonicalTranscript}</h4>
         <ul>
-          {task.primary_artifacts.map((artifact, index) => (
+          {transcript && [transcript].map((artifact, index) => (
             <ArtifactItem
               key={`${artifact.kind}-${index}`}
               artifact={artifact}
@@ -238,6 +273,10 @@ function TaskCard({
           ))}
         </ul>
       </div>
+
+      {task.generated_content.length > 0 && <div className="library-generated"><h4>{labels.generatedContent}</h4>{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div>}
+
+      {task.can_generate && <div className="task-generation-action"><label htmlFor={`template-${task.task_id}`}>{labels.templateLabel}</label><select id={`template-${task.task_id}`} value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}>{templates.map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</select><button className="btn-secondary" disabled={generationPending || templates.length === 0 || !llmReady} onClick={() => onGenerate(task, selectedTemplate)}>{generationPending ? labels.generatingContent : task.generated_content.some((group) => group.template_id === selectedTemplate) ? labels.generateAgain : labels.generateContent}</button>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}
     </article>
   );
 }
@@ -247,6 +286,10 @@ export function TaskLibrary({
   labels,
   refreshToken,
   onReturnToWorkflow,
+  deepseekApiKey,
+  deepseekModel,
+  templates,
+  llmReady,
 }: TaskLibraryProps) {
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -261,6 +304,9 @@ export function TaskLibrary({
   const [actionErrors, setActionErrors] = useState(
     () => new Map<string, string>()
   );
+  const generationPendingRef = useRef(new Set<string>());
+  const [generationPending, setGenerationPending] = useState(new Set<string>());
+  const [generationErrors, setGenerationErrors] = useState(new Map<string, string>());
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) {
@@ -344,6 +390,22 @@ export function TaskLibrary({
     [labels.artifactActionFailed]
   );
 
+  const handleGenerate = useCallback(async (task: TaskSummary, templateId: string) => {
+    if (generationPendingRef.current.has(task.task_folder)) return;
+    generationPendingRef.current.add(task.task_folder);
+    setGenerationPending((previous) => new Set(previous).add(task.task_folder));
+    setGenerationErrors((previous) => { const next = new Map(previous); next.delete(task.task_folder); return next; });
+    try {
+      await generateTaskContent({ taskFolder: task.task_folder, templateId, deepseekApiKey, deepseekModel });
+      await refresh();
+    } catch {
+      if (mountedRef.current) setGenerationErrors((previous) => new Map(previous).set(task.task_folder, labels.generationFailed));
+    } finally {
+      generationPendingRef.current.delete(task.task_folder);
+      if (mountedRef.current) setGenerationPending((previous) => { const next = new Set(previous); next.delete(task.task_folder); return next; });
+    }
+  }, [deepseekApiKey, deepseekModel, labels.generationFailed, refresh]);
+
   return (
     <section className="task-library" aria-labelledby="task-library-title">
       <div className="library-heading">
@@ -408,13 +470,18 @@ export function TaskLibrary({
         <div className="library-task-list" aria-busy={loading}>
           {result.tasks.map((task) => (
             <TaskCard
-              key={task.task_id}
+              key={`${task.task_id}:${task.task_folder}`}
               task={task}
               locale={locale}
               labels={labels}
               pendingActions={pendingActions}
               actionErrors={actionErrors}
               onArtifactAction={handleArtifactAction}
+              templates={templates}
+              generationPending={generationPending.has(task.task_folder)}
+              generationError={generationErrors.get(task.task_folder) ?? null}
+              onGenerate={handleGenerate}
+              llmReady={llmReady}
             />
           ))}
         </div>

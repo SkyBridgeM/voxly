@@ -56,6 +56,9 @@ fn normalize_status(cli_status: &str) -> &str {
     if t == "Generating meeting minutes" {
         return "minutes";
     }
+    if t == "Generating content" {
+        return "generating";
+    }
     if t == "Done" || t == "All outputs are valid — nothing to resume" {
         return "done";
     }
@@ -81,6 +84,7 @@ struct ParsedOutput {
     transcript_path: Option<String>,
     notes_input_path: Option<String>,
     minutes_path: Option<String>,
+    generated_content_path: Option<String>,
 }
 
 impl ParsedOutput {
@@ -109,6 +113,11 @@ impl ParsedOutput {
                 let v = v.trim();
                 if !v.is_empty() {
                     out.minutes_path = Some(v.to_string());
+                }
+            } else if let Some(v) = trimmed.strip_prefix("Generated content saved:") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    out.generated_content_path = Some(v.to_string());
                 }
             }
         }
@@ -167,6 +176,17 @@ impl ParsedOutput {
             let minutes = canonicalize_path_within(&tf, Path::new(mp), "Minutes path")?;
             if !is_complete_file(&minutes) {
                 return Err(format!("Minutes file is missing or empty: {}", mp));
+            }
+        }
+        if output_mode == "transcript_and_generate" {
+            let generated = self
+                .generated_content_path
+                .as_ref()
+                .ok_or_else(|| "Missing 'Generated content saved:' in CLI output".to_string())?;
+            let generated =
+                canonicalize_path_within(&tf, Path::new(generated), "Generated content path")?;
+            if !is_complete_file(&generated) {
+                return Err("Generated content file is missing or empty".to_string());
             }
         }
 
@@ -349,6 +369,7 @@ struct RunResult {
     transcript_path: String,
     notes_input_path: Option<String>,
     minutes_path: Option<String>,
+    generated_content_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -373,6 +394,42 @@ struct TaskSummary {
     primary_artifacts: Vec<ArtifactSummary>,
     has_partial_errors: bool,
     task_folder: String,
+    #[serde(default)]
+    canonical_transcript: Option<ArtifactSummary>,
+    #[serde(default)]
+    generated_content: Vec<GenerationGroup>,
+    #[serde(default)]
+    can_generate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct GenerationGroup {
+    template_id: String,
+    display_name: String,
+    latest: Option<GenerationSummary>,
+    versions: Vec<GenerationSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct GenerationSummary {
+    generation_id: String,
+    status: String,
+    created_at: String,
+    reference: Option<String>,
+    has_error: bool,
+    retryable: Option<bool>,
+    legacy: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PromptTemplateSummary {
+    id: String,
+    revision: u32,
+    display_name: std::collections::HashMap<String, String>,
+    description: std::collections::HashMap<String, String>,
+    content_type: String,
+    extension: String,
+    built_in: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1209,12 +1266,13 @@ fn resolve_run_credentials<S: CredentialStore>(
     let mimo = resolve_credential(store, mimo_key, mimo_session, runtime_mode, environment)?
         .ok_or_else(|| missing_api_key(mimo_key))?;
 
-    let should_resolve_deepseek =
-        output_mode == "minutes" || deepseek_session.is_some_and(|value| !value.trim().is_empty());
+    let should_resolve_deepseek = output_mode == "minutes"
+        || output_mode == "transcript_and_generate"
+        || deepseek_session.is_some_and(|value| !value.trim().is_empty());
     let deepseek = if should_resolve_deepseek {
         let key = CredentialKey::DeepseekApiKey;
         let resolved = resolve_credential(store, key, deepseek_session, runtime_mode, environment)?;
-        if output_mode == "minutes" {
+        if output_mode == "minutes" || output_mode == "transcript_and_generate" {
             Some(resolved.ok_or_else(|| missing_api_key(key))?.value)
         } else {
             resolved.map(|credential| credential.value)
@@ -1793,6 +1851,7 @@ fn build_go_command(
     env_file: Option<&PathBuf>,
     runtime_mode: RuntimeMode,
     packaged_executable_dir: Option<&Path>,
+    template_id: Option<&str>,
 ) -> Result<Command, BackendError> {
     let binary = discover_go_binary(runtime_mode, packaged_executable_dir)?;
     validate_go_binary(&binary)?;
@@ -1804,6 +1863,9 @@ fn build_go_command(
         .arg(output_mode)
         .arg("--output-dir")
         .arg(output_dir);
+    if let Some(template_id) = template_id {
+        cmd.arg("--template-id").arg(template_id);
+    }
 
     if runtime_mode == RuntimeMode::Development {
         if let Some(env) = env_file {
@@ -1882,6 +1944,7 @@ fn run_and_check(
                 transcript_path: output.transcript_path.unwrap(),
                 notes_input_path: output.notes_input_path,
                 minutes_path: output.minutes_path,
+                generated_content_path: output.generated_content_path,
             })
         }
         Some(c) => {
@@ -1905,14 +1968,15 @@ fn run_meeting_asr_blocking(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     deepseek_model: Option<String>,
+    template_id: Option<String>,
 ) -> Result<RunResult, String> {
     let runtime_mode = RuntimeMode::current();
 
     // Validate output mode.
-    if output_mode != "transcript" && output_mode != "notes" && output_mode != "minutes" {
+    if output_mode != "transcript_only" && output_mode != "transcript_and_generate" {
         return Err(BackendError::InvalidInput {
             message: format!(
-                "Invalid output_mode: {}. Must be 'transcript', 'notes', or 'minutes'.",
+                "Invalid output_mode: {}. Must be 'transcript_only' or 'transcript_and_generate'.",
                 output_mode
             ),
         }
@@ -1937,6 +2001,14 @@ fn run_meeting_asr_blocking(
     // Resolve backend.
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+    if backend_kind == BackendKind::Python && output_mode == "transcript_and_generate" {
+        return Err(BackendError::InvalidInput { message: "Processing Model V2 generation is unavailable in the deprecated Python development fallback.".to_string() }.into());
+    }
+    let backend_output_mode = if backend_kind == BackendKind::Python {
+        "transcript"
+    } else {
+        output_mode.as_str()
+    };
 
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
@@ -1956,7 +2028,7 @@ fn run_meeting_asr_blocking(
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
-        &output_mode,
+        backend_output_mode,
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -1969,7 +2041,7 @@ fn run_meeting_asr_blocking(
     let cmd = match backend_kind {
         BackendKind::Python => build_python_command(
             &abs_audio_str,
-            &output_mode,
+            backend_output_mode,
             &out_dir,
             Some(&credentials.mimo),
             credentials.deepseek.as_deref(),
@@ -1986,6 +2058,7 @@ fn run_meeting_asr_blocking(
             env_file.as_ref(),
             runtime_mode,
             packaged_executable_dir.as_deref(),
+            template_id.as_deref(),
         )
         .map_err(String::from)?,
     };
@@ -2007,6 +2080,7 @@ async fn run_meeting_asr(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     deepseek_model: Option<String>,
+    template_id: Option<String>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2019,6 +2093,7 @@ async fn run_meeting_asr(
             mimo_api_key,
             deepseek_api_key,
             deepseek_model,
+            template_id,
         )
     })
     .await
@@ -2055,7 +2130,9 @@ fn read_manifest_output_mode(manifest_path: &Path) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
     let mode = v.get("output_mode").and_then(|m| m.as_str())?;
     match mode {
-        "transcript" | "notes" | "minutes" => Some(mode.to_string()),
+        "transcript" | "notes" | "minutes" | "transcript_only" | "transcript_and_generate" => {
+            Some(mode.to_string())
+        }
         _ => None,
     }
 }
@@ -2063,7 +2140,9 @@ fn read_manifest_output_mode(manifest_path: &Path) -> Option<String> {
 /// Validates an output_mode string and returns it.
 fn validate_output_mode(mode: &str) -> Result<String, BackendError> {
     match mode {
-        "transcript" | "notes" | "minutes" => Ok(mode.to_string()),
+        "transcript" | "notes" | "minutes" | "transcript_only" | "transcript_and_generate" => {
+            Ok(mode.to_string())
+        }
         other => Err(BackendError::InvalidInput {
             message: format!(
                 "Invalid output_mode: {}. Must be 'transcript', 'notes', or 'minutes'.",
@@ -2364,6 +2443,237 @@ async fn list_tasks(app: AppHandle) -> Result<DiscoveryResult, String> {
         })?
 }
 
+fn go_sidecar_binary() -> Result<PathBuf, BackendError> {
+    let runtime_mode = RuntimeMode::current();
+    let packaged = if runtime_mode == RuntimeMode::Production {
+        Some(
+            packaged_go_executable_dir().map_err(|_| BackendError::BackendNotFound {
+                message: "Go sidecar is unavailable.".to_string(),
+            })?,
+        )
+    } else {
+        None
+    };
+    let binary = discover_go_binary(runtime_mode, packaged.as_deref()).map_err(|_| {
+        BackendError::BackendNotFound {
+            message: "Go sidecar is unavailable.".to_string(),
+        }
+    })?;
+    validate_go_binary(&binary).map_err(|_| BackendError::BackendNotFound {
+        message: "Go sidecar is unavailable.".to_string(),
+    })?;
+    Ok(binary)
+}
+
+fn list_prompt_templates_blocking() -> Result<Vec<PromptTemplateSummary>, String> {
+    let output = Command::new(go_sidecar_binary().map_err(String::from)?)
+        .arg("list-templates")
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .output()
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Could not start the template sidecar.".to_string(),
+                code: None,
+            })
+        })?;
+    if !output.status.success() {
+        return Err(BackendError::ProcessFailed {
+            message: "Template sidecar failed.".to_string(),
+            code: output.status.code(),
+        }
+        .into());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| {
+        BackendError::ProcessFailed {
+            message: "Template sidecar returned invalid JSON.".to_string(),
+            code: output.status.code(),
+        }
+        .into()
+    })
+}
+
+#[tauri::command]
+async fn list_prompt_templates() -> Result<Vec<PromptTemplateSummary>, String> {
+    tauri::async_runtime::spawn_blocking(list_prompt_templates_blocking)
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Template worker failed.".to_string(),
+                code: None,
+            })
+        })?
+}
+
+#[derive(Clone, serde::Serialize)]
+struct GenerateContentResult {
+    generation_id: String,
+}
+
+fn resolve_generation_task(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+) -> Result<PathBuf, BackendError> {
+    let hint = validated_relative_hint(task_folder, "Task folder", false)?;
+    let summary = discovery
+        .tasks
+        .iter()
+        .find(|task| task.task_folder == task_folder && task.can_generate)
+        .ok_or_else(|| BackendError::ArtifactUnavailable {
+            message: "Task is not eligible for generation. Refresh the Task Library.".to_string(),
+        })?;
+    let root = output_root
+        .canonicalize()
+        .map_err(|_| BackendError::ArtifactValidationFailed {
+            message: "Task Library output root is unavailable.".to_string(),
+        })?;
+    let task = root
+        .join(hint)
+        .canonicalize()
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Task is no longer available.".to_string(),
+        })?;
+    if !task.is_dir() || !task.starts_with(&root) {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Task folder failed containment validation.".to_string(),
+        });
+    }
+    let transcript_reference = summary
+        .canonical_transcript
+        .as_ref()
+        .and_then(|artifact| {
+            (artifact.status == "completed")
+                .then_some(artifact.reference.as_deref())
+                .flatten()
+        })
+        .ok_or_else(|| BackendError::ArtifactUnavailable {
+            message: "Canonical transcript is no longer available.".to_string(),
+        })?;
+    let transcript_hint =
+        validated_relative_hint(transcript_reference, "Canonical transcript", true)?;
+    let transcript = task.join(transcript_hint).canonicalize().map_err(|_| {
+        BackendError::ArtifactUnavailable {
+            message: "Canonical transcript is no longer available.".to_string(),
+        }
+    })?;
+    if !transcript.is_file() || !transcript.starts_with(&task) || !transcript.starts_with(&root) {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Canonical transcript failed containment validation.".to_string(),
+        });
+    }
+    Ok(task)
+}
+
+fn generate_task_content_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    task_folder: String,
+    template_id: String,
+    deepseek_api_key: Option<String>,
+    deepseek_model: Option<String>,
+) -> Result<GenerateContentResult, String> {
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(|_| {
+            String::from(BackendError::ArtifactValidationFailed {
+                message: "Task Library output root is unavailable.".to_string(),
+            })
+        })?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    let task_dir =
+        resolve_generation_task(&output_root, &discovery, &task_folder).map_err(String::from)?;
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    let credential = resolve_credential(
+        &KeyringCredentialStore,
+        CredentialKey::DeepseekApiKey,
+        deepseek_api_key.as_deref(),
+        runtime_mode,
+        &environment,
+    )
+    .map_err(BackendError::from)
+    .map_err(String::from)?
+    .ok_or_else(|| String::from(missing_api_key(CredentialKey::DeepseekApiKey)))?;
+    let mut cmd = Command::new(go_sidecar_binary().map_err(String::from)?);
+    cmd.arg("generate-content")
+        .arg("--task-dir")
+        .arg(&task_dir)
+        .arg("--template-id")
+        .arg(&template_id);
+    let isolated = isolated_go_project_root().map_err(String::from)?;
+    cmd.arg("--project-root")
+        .arg(&isolated)
+        .current_dir(&isolated)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .env("DEEPSEEK_API_KEY", &credential.value);
+    if let Some(model) = deepseek_model.filter(|value| !value.trim().is_empty()) {
+        cmd.env("DEEPSEEK_MODEL", model);
+    }
+    let secrets = vec![credential.value];
+    let runner = spawn_and_watch(&app, &active, cmd, &secrets).map_err(String::from)?;
+    let (code, stdout, stderr) = runner.wait()?;
+    let _ = app.emit("process-done", DoneEvent { code });
+    if code != Some(0) {
+        return Err(String::from(classify_stderr(&stderr, code, &secrets)));
+    }
+    let generation_id = stdout
+        .iter()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Generation ID:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            String::from(BackendError::ProcessFailed {
+                message: "Generation sidecar returned an incomplete result.".to_string(),
+                code,
+            })
+        })?;
+    Ok(GenerateContentResult { generation_id })
+}
+
+#[tauri::command]
+async fn generate_task_content(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_folder: String,
+    template_id: String,
+    deepseek_api_key: Option<String>,
+    deepseek_model: Option<String>,
+) -> Result<GenerateContentResult, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_task_content_blocking(
+            app,
+            active,
+            task_folder,
+            template_id,
+            deepseek_api_key,
+            deepseek_model,
+        )
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Generation worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
 // ---------------------------------------------------------------------------
 // Secure Task Library artifact actions
 // ---------------------------------------------------------------------------
@@ -2420,10 +2730,21 @@ fn resolve_validated_task_artifact(
         .ok_or_else(|| BackendError::ArtifactUnavailable {
             message: "Task is no longer available. Refresh the Task Library.".to_string(),
         })?;
-    let listed = task.primary_artifacts.iter().any(|artifact| {
+    let listed_primary = task.primary_artifacts.iter().any(|artifact| {
         artifact.status == "completed" && artifact.reference.as_deref() == Some(artifact_reference)
     });
-    if !listed {
+    let listed_canonical = task.canonical_transcript.as_ref().is_some_and(|artifact| {
+        artifact.status == "completed" && artifact.reference.as_deref() == Some(artifact_reference)
+    });
+    let listed_generation = task
+        .generated_content
+        .iter()
+        .flat_map(|group| group.versions.iter())
+        .any(|version| {
+            version.status == "completed"
+                && version.reference.as_deref() == Some(artifact_reference)
+        });
+    if !listed_primary && !listed_canonical && !listed_generation {
         return Err(BackendError::ArtifactUnavailable {
             message: "Artifact is no longer listed for this task. Refresh the Task Library."
                 .to_string(),
@@ -2786,6 +3107,8 @@ pub fn run() {
             run_meeting_asr,
             resume_meeting_asr,
             list_tasks,
+            list_prompt_templates,
+            generate_task_content,
             open_task_artifact,
             reveal_task_artifact,
             get_credential_status,
@@ -2960,6 +3283,11 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_status_generated_content() {
+        assert_eq!(normalize_status("Generating content"), "generating");
+    }
+
+    #[test]
     fn test_normalize_status_done() {
         assert_eq!(normalize_status("Done"), "done");
     }
@@ -3131,6 +3459,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(credentials.deepseek.as_deref(), Some("deepseek-secret"));
+    }
+
+    #[test]
+    fn test_run_credentials_v2_generation_requires_deepseek() {
+        let store = TestCredentialStore::default();
+        store
+            .values
+            .lock()
+            .unwrap()
+            .insert(CredentialKey::MimoApiKey, "mimo".to_string());
+        store
+            .values
+            .lock()
+            .unwrap()
+            .insert(CredentialKey::DeepseekApiKey, "deepseek".to_string());
+        let environment = EnvironmentValues::default();
+        let credentials = resolve_run_credentials(
+            &store,
+            "transcript_and_generate",
+            RuntimeMode::Development,
+            None,
+            None,
+            &environment,
+        )
+        .unwrap();
+        assert_eq!(credentials.mimo, "mimo");
+        assert_eq!(credentials.deepseek.as_deref(), Some("deepseek"));
     }
 
     #[test]
@@ -4142,9 +4497,37 @@ mod tests {
                 }],
                 has_partial_errors: false,
                 task_folder: task_folder.to_string(),
+                canonical_transcript: None,
+                generated_content: Vec::new(),
+                can_generate: false,
             }],
             issues: Vec::new(),
         }
+    }
+
+    #[test]
+    fn test_generation_task_rechecks_membership_and_containment() {
+        let base = test_dir("meeting-asr-generation-membership");
+        let root = base.join("root");
+        let task_dir = root.join("task");
+        fs::create_dir_all(&task_dir).unwrap();
+        fs::write(task_dir.join("transcript.md"), "text").unwrap();
+        let mut discovery = artifact_discovery("task", "transcript.md");
+        assert!(resolve_generation_task(&root, &discovery, "task").is_err());
+        discovery.tasks[0].can_generate = true;
+        discovery.tasks[0].canonical_transcript = Some(ArtifactSummary {
+            kind: "transcript".to_string(),
+            status: "completed".to_string(),
+            reference: Some("transcript.md".to_string()),
+            has_error: false,
+            retryable: None,
+        });
+        assert_eq!(
+            resolve_generation_task(&root, &discovery, "task").unwrap(),
+            task_dir.canonicalize().unwrap()
+        );
+        assert!(resolve_generation_task(&root, &discovery, "../task").is_err());
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]

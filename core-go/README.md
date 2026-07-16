@@ -2,17 +2,16 @@
 
 **Status:** Experimental — not for production use.
 
-This is a proof-of-concept Go reimplementation of the meeting-asr Python core.
-The goal is to validate whether the Python core can be replaced by a small Go CLI binary for easier desktop packaging.
+This is the actively developed processing runtime used by the desktop app.
 
 ## What it does
 
 - Transcribes audio files (`.mp3`, `.wav`, `.m4a`) using MiMo ASR.
 - Splits large audio into chunks via external `ffmpeg`.
-- Supports three output modes:
-  - `transcript` — generates `transcript.md` only.
-  - `notes` — generates `transcript.md` + `notes_input.md`.
-  - `minutes` — generates `transcript.md` + `notes_input.md` + `meeting_minutes.md` (via DeepSeek).
+- Supports Processing Model V2:
+  - `transcript_only` — generates the canonical `transcript.md` only.
+  - `transcript_and_generate` — generates the canonical transcript and one versioned built-in-template artifact under `generated/<template-id>/<generation-id>.md`.
+- `transcript`, `notes`, and `minutes` remain deprecated CLI aliases for compatibility; new tasks do not create `notes_input.md` or `meeting_minutes.md`.
 - **Resume** — `resume <task_dir>` continues a partially-completed task, skipping already-transcribed chunks. It inherits the manifest's original output mode unless `--output-mode` is explicitly provided.
 - Applies Obsidian templates if configured.
 - Stable stdout lines for future Tauri integration.
@@ -20,12 +19,9 @@ The goal is to validate whether the Python core can be replaced by a small Go CL
 ## What it does NOT do
 
 - **No recording** — cannot record from microphone.
-- **No Tauri integration** — not wired to the desktop app.
-- **No packaging** — no installers, bundles, or auto-update.
 - **No ffmpeg bundling** — requires external `ffmpeg` on PATH.
 
-**Python remains the stable baseline.** This spike is for validation only.
-The Python CLI (`meeting-asr`), Streamlit WebUI, and Tauri desktop app are unaffected.
+The Python runtime is a deprecated development-only fallback and does not implement Processing Model V2.
 
 ## Prerequisites
 
@@ -43,14 +39,14 @@ go build -o meeting-asr-go .
 ## Usage
 
 ```bash
-# Transcript only (default)
-./meeting-asr-go transcribe ../input/test.mp3
+# Transcript only
+./meeting-asr-go transcribe ../input/test.mp3 --output-mode transcript_only
 
-# Notes mode: transcript + notes_input.md
-./meeting-asr-go transcribe ../input/test.mp3 --output-mode notes
+# Transcript plus generated structured notes
+./meeting-asr-go transcribe ../input/test.mp3 --output-mode transcript_and_generate --template-id structured-notes
 
-# Minutes mode: transcript + notes_input.md + meeting_minutes.md (requires DEEPSEEK_API_KEY)
-./meeting-asr-go transcribe ../input/test.mp3 --output-mode minutes
+# Generate another version from an existing completed transcript, without ASR
+./meeting-asr-go generate-content --task-dir /absolute/path/to/task --template-id action-items
 
 # Resume a partially-completed task (skips already-transcribed chunks)
 ./meeting-asr-go resume ../output/20260709_123456_meeting
@@ -63,7 +59,8 @@ go build -o meeting-asr-go .
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--output-mode` | `transcript` | Output mode: `transcript`, `notes`, or `minutes` |
+| `--output-mode` | `transcript` alias | Output mode: `transcript_only` or `transcript_and_generate` |
+| `--template-id` | `structured-notes` | Built-in template ID for generated content |
 | `--output-dir` | `output` | Base output directory |
 | `--chunk-minutes` | 0 (use .env or 5) | Chunk length in minutes |
 | `--max-upload-mb` | 0 (use .env or 10) | Max upload size in MB |
@@ -83,8 +80,8 @@ go build -o meeting-asr-go .
 | `DEFAULT_CHUNK_MINUTES` | `5` | Default chunk length |
 | `MIMO_RETRY_COUNT` | `3` | MiMo API retry count |
 | `MIMO_TIMEOUT_SECONDS` | `120` | MiMo API timeout |
-| `MINUTES_PROVIDER` | `deepseek` | LLM provider for minutes mode |
-| `DEEPSEEK_API_KEY` | (required for minutes) | DeepSeek API key |
+| `MINUTES_PROVIDER` | `deepseek` | Deprecated configuration name for the active content-generation provider |
+| `DEEPSEEK_API_KEY` | (required for generation) | DeepSeek API key |
 | `DEEPSEEK_ENDPOINT` | `https://api.deepseek.com/chat/completions` | DeepSeek endpoint |
 | `DEEPSEEK_MODEL` | `deepseek-v4-flash` | DeepSeek model |
 | `LLM_TIMEOUT_SECONDS` | `120` | LLM API timeout |

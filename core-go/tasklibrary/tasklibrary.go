@@ -25,17 +25,20 @@ const (
 
 // TaskSummary is the presentation-safe read model for one processed Task.
 type TaskSummary struct {
-	TaskID           string            `json:"task_id"`
-	Title            string            `json:"title"`
-	TitleSource      string            `json:"title_source"`
-	Status           string            `json:"status"`
-	CreatedAt        string            `json:"created_at"`
-	UpdatedAt        string            `json:"updated_at"`
-	Tags             []string          `json:"tags"`
-	OutputMode       string            `json:"output_mode"`
-	PrimaryArtifacts []ArtifactSummary `json:"primary_artifacts"`
-	HasPartialErrors bool              `json:"has_partial_errors"`
-	TaskFolder       string            `json:"task_folder"`
+	TaskID              string            `json:"task_id"`
+	Title               string            `json:"title"`
+	TitleSource         string            `json:"title_source"`
+	Status              string            `json:"status"`
+	CreatedAt           string            `json:"created_at"`
+	UpdatedAt           string            `json:"updated_at"`
+	Tags                []string          `json:"tags"`
+	OutputMode          string            `json:"output_mode"`
+	PrimaryArtifacts    []ArtifactSummary `json:"primary_artifacts"`
+	HasPartialErrors    bool              `json:"has_partial_errors"`
+	TaskFolder          string            `json:"task_folder"`
+	CanonicalTranscript *ArtifactSummary  `json:"canonical_transcript,omitempty"`
+	GeneratedContent    []GenerationGroup `json:"generated_content"`
+	CanGenerate         bool              `json:"can_generate"`
 }
 
 // ArtifactSummary contains only information useful for output presentation.
@@ -45,6 +48,23 @@ type ArtifactSummary struct {
 	Reference string `json:"reference,omitempty"`
 	HasError  bool   `json:"has_error"`
 	Retryable *bool  `json:"retryable,omitempty"`
+}
+
+type GenerationGroup struct {
+	TemplateID  string              `json:"template_id"`
+	DisplayName string              `json:"display_name"`
+	Latest      *GenerationSummary  `json:"latest,omitempty"`
+	Versions    []GenerationSummary `json:"versions"`
+}
+
+type GenerationSummary struct {
+	GenerationID string `json:"generation_id"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	Reference    string `json:"reference,omitempty"`
+	HasError     bool   `json:"has_error"`
+	Retryable    *bool  `json:"retryable,omitempty"`
+	Legacy       bool   `json:"legacy"`
 }
 
 // DiscoveryIssue reports one task folder that could not be represented safely.
@@ -127,19 +147,112 @@ func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) 
 	if manifest.UserMetadata != nil {
 		tags = append(tags, manifest.UserMetadata.Tags...)
 	}
+	primary := primaryArtifacts(taskDir, manifest)
+	canonical := canonicalTranscriptSummary(taskDir, manifest)
+	groups := generationGroups(taskDir, manifest)
 	return TaskSummary{
-		TaskID:           manifest.TaskID,
-		Title:            title,
-		TitleSource:      titleSource,
-		Status:           manifest.Status,
-		CreatedAt:        manifest.CreatedAt,
-		UpdatedAt:        manifest.UpdatedAt,
-		Tags:             tags,
-		OutputMode:       manifest.OutputMode,
-		PrimaryArtifacts: primaryArtifacts(taskDir, manifest),
-		HasPartialErrors: manifest.Status == "completed_with_errors",
-		TaskFolder:       taskFolder,
+		TaskID:              manifest.TaskID,
+		Title:               title,
+		TitleSource:         titleSource,
+		Status:              manifest.Status,
+		CreatedAt:           manifest.CreatedAt,
+		UpdatedAt:           manifest.UpdatedAt,
+		Tags:                tags,
+		OutputMode:          manifest.OutputMode,
+		PrimaryArtifacts:    primary,
+		HasPartialErrors:    manifest.Status == "completed_with_errors",
+		TaskFolder:          taskFolder,
+		CanonicalTranscript: canonical,
+		GeneratedContent:    groups,
+		CanGenerate:         canonical != nil && canonical.Status == "completed" && canonical.Reference != "",
 	}
+}
+
+func canonicalTranscriptSummary(taskDir string, manifest *taskmanifest.TaskManifest) *ArtifactSummary {
+	artifact := summarizeArtifact(taskDir, "transcript", manifest.Artifacts.Transcript)
+	if manifest.CanonicalTranscript != nil {
+		artifact.Status = manifest.CanonicalTranscript.Status
+		artifact.Reference = safeRelativeReference(taskDir, manifest.CanonicalTranscript.ArtifactReference)
+	}
+	if artifact.Status == "completed" && (artifact.Reference == "" || !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(artifact.Reference)))) {
+		artifact.Status = "unavailable"
+		artifact.Reference = ""
+	}
+	return &artifact
+}
+
+func generationGroups(taskDir string, manifest *taskmanifest.TaskManifest) []GenerationGroup {
+	groups := make(map[string]*GenerationGroup)
+	for _, record := range manifest.Generations {
+		group := groups[record.TemplateID]
+		if group == nil {
+			name := strings.TrimSpace(record.TemplateDisplayName)
+			if name == "" {
+				name = record.TemplateID
+			}
+			group = &GenerationGroup{TemplateID: record.TemplateID, DisplayName: name, Versions: make([]GenerationSummary, 0)}
+			groups[record.TemplateID] = group
+		}
+		var retryable *bool
+		if record.Error != nil && record.Error.Retryable != nil {
+			value := *record.Error.Retryable
+			retryable = &value
+		}
+		status := record.Status
+		reference := safeRelativeReference(taskDir, record.ArtifactReference)
+		if status == "completed" && (reference == "" || !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(reference)))) {
+			status = "unavailable"
+			reference = ""
+		}
+		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable})
+	}
+	appendLegacy := func(id, name string, artifact taskmanifest.Artifact) {
+		if artifact.State == "unavailable" && artifact.Path == "" {
+			return
+		}
+		group := groups[id]
+		if group == nil {
+			group = &GenerationGroup{TemplateID: id, DisplayName: name, Versions: make([]GenerationSummary, 0)}
+			groups[id] = group
+		}
+		summary := summarizeArtifact(taskDir, id, artifact)
+		group.Versions = append(group.Versions, GenerationSummary{GenerationID: "legacy-" + id, Status: summary.Status, Reference: summary.Reference, HasError: summary.HasError, Retryable: summary.Retryable, Legacy: true})
+	}
+	if manifest.OutputMode == "notes" || manifest.OutputMode == "minutes" {
+		appendLegacy("legacy-structured-notes", "Legacy notes", manifest.Artifacts.NotesInput)
+		if manifest.OutputMode == "minutes" {
+			appendLegacy("legacy-meeting-minutes", "Legacy meeting minutes", manifest.Artifacts.Minutes)
+		}
+	}
+	ids := make([]string, 0, len(groups))
+	for id := range groups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]GenerationGroup, 0, len(ids))
+	for _, id := range ids {
+		group := groups[id]
+		sort.SliceStable(group.Versions, func(i, j int) bool {
+			if group.Versions[i].CreatedAt != group.Versions[j].CreatedAt {
+				return group.Versions[i].CreatedAt > group.Versions[j].CreatedAt
+			}
+			return group.Versions[i].GenerationID > group.Versions[j].GenerationID
+		})
+		for i := range group.Versions {
+			if group.Versions[i].Status == "completed" {
+				latest := group.Versions[i]
+				group.Latest = &latest
+				break
+			}
+		}
+		out = append(out, *group)
+	}
+	return out
+}
+
+func isRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func taskTitle(manifest *taskmanifest.TaskManifest) (string, string) {
@@ -164,6 +277,9 @@ func sanitizedFilenameTitle(name string) string {
 }
 
 func primaryArtifacts(taskDir string, manifest *taskmanifest.TaskManifest) []ArtifactSummary {
+	if manifest.SchemaVersion == taskmanifest.LatestSchemaVersion {
+		return []ArtifactSummary{*canonicalTranscriptSummary(taskDir, manifest)}
+	}
 	artifacts := make([]ArtifactSummary, 0, 3)
 	if manifest.OutputMode == "minutes" {
 		artifacts = append(artifacts, summarizeArtifact(taskDir, "minutes", manifest.Artifacts.Minutes))

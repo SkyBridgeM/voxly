@@ -17,6 +17,7 @@ var chunkNameRE = regexp.MustCompile(`^part_(\d{3})\.(mp3|wav)$`)
 func RunResume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	outputMode := fs.String("output-mode", "", "Output mode (transcript, notes, minutes)")
+	templateID := fs.String("template-id", "structured-notes", "Built-in generation template")
 	envFile := fs.String("env-file", "", "Explicit path to .env file")
 	projectRoot := fs.String("project-root", "", "Explicit project root for .env lookup")
 	promptPath := fs.String("prompt-path", "", "Path to prompt template")
@@ -82,10 +83,11 @@ func RunResume(args []string) error {
 
 	// Inherit output mode from manifest unless explicitly overridden.
 	if outputModeExplicit && *outputMode != "" {
-		if err := validateOutputMode(*outputMode); err != nil {
+		mode, template, err := normalizeProcessingSelection(*outputMode, *templateID)
+		if err != nil {
 			return err
 		}
-		m.OutputMode = *outputMode
+		m.OutputMode, m.RequestedTemplateID = mode, template
 	} else if m.OutputMode == "" {
 		m.OutputMode = "transcript"
 	}
@@ -136,13 +138,6 @@ func RunResume(args []string) error {
 	return executeResume(absTaskDir, m, settings, *outputMode, stage)
 }
 
-func validateOutputMode(outputMode string) error {
-	if outputMode != "transcript" && outputMode != "notes" && outputMode != "minutes" {
-		return fmt.Errorf("invalid --output-mode %q. Supported: transcript, notes, minutes", outputMode)
-	}
-	return nil
-}
-
 // executeResume runs the resume pipeline starting from the given stage.
 func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode string, startStage TaskState) error {
 	stage := startStage
@@ -159,6 +154,8 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 			err = executeNotesGenerating(taskDir, m, settings)
 		case TaskMinutesGenerating:
 			err = executeMinutesGenerating(taskDir, m, settings)
+		case TaskContentGenerating:
+			err = executeContentGenerating(taskDir, m, settings)
 		case TaskValidatingOutputs:
 			err = executeValidatingOutputs(taskDir, m)
 		default:
@@ -166,6 +163,11 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 		}
 
 		if err != nil {
+			if stage == TaskContentGenerating {
+				m.State = TaskCompleted
+				_ = SaveManifest(taskDir, m)
+				return fmt.Errorf("%s failed: %w", stage, err)
+			}
 			_ = RecordTaskError(taskDir, m, stage, err, IsRetryableError(err))
 			return fmt.Errorf("%s failed: %w", stage, err)
 		}
@@ -185,6 +187,20 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 		}
 		stage = next
 	}
+}
+
+func executeContentGenerating(taskDir string, m *Manifest, settings *Settings) error {
+	if err := ValidateMinutesProvider(settings); err != nil {
+		return err
+	}
+	if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
+		return err
+	}
+	if err := SetTaskState(taskDir, m, TaskContentGenerating); err != nil {
+		return err
+	}
+	fmt.Println("Status: Generating content")
+	return ResumeOrGenerateContent(taskDir, m, settings, deepSeekGenerator{})
 }
 
 // executeSplitting re-runs splitting if chunks are missing or invalid.

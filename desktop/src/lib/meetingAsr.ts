@@ -3,7 +3,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type BackendKind = "python" | "go";
 export type RuntimeMode = "development" | "production";
-export type OutputMode = "transcript" | "notes" | "minutes";
+export type OutputMode = "transcript_only" | "transcript_and_generate";
 export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
 export type CredentialSource = "session" | "secure_store" | "env" | "missing";
 
@@ -18,6 +18,7 @@ export interface RunResult {
   transcript_path: string;
   notes_input_path: string | null;
   minutes_path: string | null;
+  generated_content_path: string | null;
 }
 
 export interface RuntimeInfo {
@@ -68,6 +69,23 @@ export interface ArtifactSummary {
   retryable: boolean | null;
 }
 
+export interface GenerationSummary {
+  generation_id: string;
+  status: string;
+  created_at: string;
+  reference: string | null;
+  has_error: boolean;
+  retryable: boolean | null;
+  legacy: boolean;
+}
+
+export interface GenerationGroup {
+  template_id: string;
+  display_name: string;
+  latest: GenerationSummary | null;
+  versions: GenerationSummary[];
+}
+
 export interface TaskSummary {
   task_id: string;
   title: string;
@@ -80,6 +98,19 @@ export interface TaskSummary {
   primary_artifacts: ArtifactSummary[];
   has_partial_errors: boolean;
   task_folder: string;
+  canonical_transcript: ArtifactSummary | null;
+  generated_content: GenerationGroup[];
+  can_generate: boolean;
+}
+
+export interface PromptTemplateSummary {
+  id: string;
+  revision: number;
+  display_name: Record<"zh" | "en", string>;
+  description: Record<"zh" | "en", string>;
+  content_type: string;
+  extension: string;
+  built_in: boolean;
 }
 
 export interface DiscoveryIssue {
@@ -124,6 +155,14 @@ export async function getRuntimeInfo(): Promise<RuntimeInfo> {
 /** Returns presentation-safe Task Library data from the configured output root. */
 export async function listTasks(): Promise<DiscoveryResult> {
   return invoke<DiscoveryResult>("list_tasks");
+}
+
+export async function listPromptTemplates(): Promise<PromptTemplateSummary[]> {
+  return invoke<PromptTemplateSummary[]>("list_prompt_templates");
+}
+
+export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; deepseekModel?: string }): Promise<{ generation_id: string }> {
+  return invoke("generate_task_content", { taskFolder: options.taskFolder, templateId: options.templateId, deepseekApiKey: options.deepseekApiKey || undefined, deepseekModel: options.deepseekModel || undefined });
 }
 
 export async function getOutputRoot(): Promise<OutputRootInfo> {
@@ -177,6 +216,7 @@ export interface RunOptions {
   deepseekApiKey?: string;
   deepseekModel?: string;
   backend?: BackendKind;
+  templateId?: string;
 }
 
 export function parseBackendError(raw: string): BackendErrorInfo {
@@ -228,10 +268,11 @@ export async function runMeetingAsr(
     const result = await invoke<RunResult>("run_meeting_asr", {
       audioPath,
       outputMode,
-      backend: options.backend || "python",
+      backend: options.backend || "go",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
       deepseekModel: options.deepseekModel || undefined,
+      templateId: options.templateId || undefined,
     });
     return result;
   } finally {
