@@ -48,6 +48,9 @@ go build -o meeting-asr-go .
 # Generate another version from an existing completed transcript, without ASR
 ./meeting-asr-go generate-content --task-dir /absolute/path/to/task --template-id action-items
 
+# Inspect the non-secret built-in provider catalog
+./meeting-asr-go list-providers
+
 # Resume a partially-completed task (skips already-transcribed chunks)
 ./meeting-asr-go resume ../output/20260709_123456_meeting
 
@@ -61,6 +64,10 @@ go build -o meeting-asr-go .
 |------|---------|-------------|
 | `--output-mode` | `transcript` alias | Output mode: `transcript_only` or `transcript_and_generate` |
 | `--template-id` | `structured-notes` | Built-in template ID for generated content |
+| `--asr-provider` | `mimo` | Speech-recognition provider ID |
+| `--asr-model` | `mimo-v2.5-asr` | Speech-recognition model ID |
+| `--llm-provider` | `deepseek` | Generated-content provider ID |
+| `--llm-model` | `deepseek-v4-flash` | Generated-content model ID |
 | `--output-dir` | `output` | Base output directory |
 | `--chunk-minutes` | 0 (use .env or 5) | Chunk length in minutes |
 | `--max-upload-mb` | 0 (use .env or 10) | Max upload size in MB |
@@ -96,6 +103,8 @@ go test ./...
 ```
 
 ## Design decisions
+
+- The explicit built-in registry currently contains only Mimo / `mimo-v2.5-asr` for ASR and DeepSeek / `deepseek-v4-flash` for generated content. Provider/model selection is non-secret; credentials remain in `MIMO_API_KEY` and `DEEPSEEK_API_KEY` and never enter descriptors, desktop settings, or TaskManifest.
 
 - Flat package structure (single `main` package) — appropriate for a spike.
 - One platform dependency: `golang.org/x/sys` for native Windows locking and durable file replacement.

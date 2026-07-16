@@ -22,6 +22,10 @@ func RunResume(args []string) error {
 	projectRoot := fs.String("project-root", "", "Explicit project root for .env lookup")
 	promptPath := fs.String("prompt-path", "", "Path to prompt template")
 	obsidianTemplatePath := fs.String("obsidian-template-path", "", "Path to Obsidian template")
+	asrProvider := fs.String("asr-provider", string(ASRProviderMimo), "Speech-recognition provider")
+	asrModel := fs.String("asr-model", string(ASRModelMimoV25), "Speech-recognition model")
+	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
+	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
@@ -103,6 +107,16 @@ func RunResume(args []string) error {
 	}
 	if *obsidianTemplatePath != "" {
 		settings.ObsidianTemplatePath = resolveCLIPath(*obsidianTemplatePath)
+	}
+	settings.ASRProvider, settings.MimoModel = *asrProvider, *asrModel
+	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
+	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
+		return err
+	}
+	if m.OutputMode == "transcript_and_generate" {
+		if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
+			return err
+		}
 	}
 
 	// API key validation is deferred to the stages that need it:
@@ -190,7 +204,7 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 }
 
 func executeContentGenerating(taskDir string, m *Manifest, settings *Settings) error {
-	if err := ValidateMinutesProvider(settings); err != nil {
+	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
 		return err
 	}
 	if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
@@ -199,8 +213,13 @@ func executeContentGenerating(taskDir string, m *Manifest, settings *Settings) e
 	if err := SetTaskState(taskDir, m, TaskContentGenerating); err != nil {
 		return err
 	}
+	fmt.Printf("LLM provider=%s model=%s\n", settings.LLMProvider, settings.DeepSeekModel)
 	fmt.Println("Status: Generating content")
-	return ResumeOrGenerateContent(taskDir, m, settings, deepSeekGenerator{})
+	generator, err := ResolveLLMContentGenerator(settings.LLMConfig())
+	if err != nil {
+		return err
+	}
+	return ResumeOrGenerateContent(taskDir, m, settings, generator)
 }
 
 // executeSplitting re-runs splitting if chunks are missing or invalid.
@@ -235,12 +254,16 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 	}
 
 	chunksDir := filepath.Join(taskDir, "chunks")
+	capabilities, err := ResolveASRCapabilities(settings.ASRConfig())
+	if err != nil {
+		return err
+	}
 	chunks, err := SplitAudioWithCapabilities(
 		sourceAudio,
 		chunksDir,
 		m.Chunks.ChunkMinutes,
 		int64(m.Chunks.MaxUploadMB*1024*1024),
-		MimoCapabilities(settings.MimoModel),
+		capabilities,
 	)
 	if err != nil {
 		return err

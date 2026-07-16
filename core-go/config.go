@@ -32,6 +32,7 @@ var supportedAudioSuffixes = map[string]bool{
 }
 
 type Settings struct {
+	ASRProvider          string
 	MimoAPIKey           string
 	MimoEndpoint         string
 	MimoModel            string
@@ -40,6 +41,7 @@ type Settings struct {
 	RetryCount           int
 	TimeoutSeconds       int
 	MinutesProvider      string
+	LLMProvider          string
 	DeepSeekAPIKey       string
 	DeepSeekEndpoint     string
 	DeepSeekModel        string
@@ -52,6 +54,7 @@ type Settings struct {
 
 func DefaultSettings() *Settings {
 	return &Settings{
+		ASRProvider:          string(ASRProviderMimo),
 		MimoEndpoint:         defaultMimoEndpoint,
 		MimoModel:            defaultMimoModel,
 		MaxUploadMB:          defaultMaxUploadMB,
@@ -59,6 +62,7 @@ func DefaultSettings() *Settings {
 		RetryCount:           defaultRetryCount,
 		TimeoutSeconds:       defaultTimeoutSeconds,
 		MinutesProvider:      defaultMinutesProvider,
+		LLMProvider:          string(LLMProviderDeepSeek),
 		DeepSeekEndpoint:     defaultDeepSeekEndpoint,
 		DeepSeekModel:        defaultDeepSeekModel,
 		LLMTimeoutSeconds:    defaultLLMTimeoutSeconds,

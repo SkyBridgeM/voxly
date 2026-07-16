@@ -1576,6 +1576,35 @@ button:disabled {
   font-size: 0.68rem;
 }
 
+.provider-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.provider-settings-card,
+.provider-run-summary,
+.library-provider-summary {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.provider-settings-card { padding: 14px; }
+.provider-settings-card h4 { margin: 0 0 12px; }
+.provider-settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.provider-readiness { margin: 8px 0 0; font-size: 0.82rem; }
+.provider-readiness.ready { color: var(--success); }
+.provider-readiness.not-ready,
+.provider-not-ready { color: var(--warning); }
+.provider-run-summary { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 14px; margin-top: 14px; font-size: 0.86rem; }
+.library-provider-summary { padding: 10px 12px; margin: 0 0 14px; font-size: 0.86rem; }
+.link-button { border: 0; padding: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
+
+@media (max-width: 680px) {
+  .provider-settings-grid { grid-template-columns: 1fr; }
+}
+
 .preflight-panel {
   padding: 12px;
   border: 1px solid var(--border);

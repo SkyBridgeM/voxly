@@ -102,7 +102,7 @@ func completedV2Manifest(t *testing.T) (string, *Manifest) {
 func TestGenerateContentAppendsVersionsWithoutOverwrite(t *testing.T) {
 	taskDir, m := completedV2Manifest(t)
 	settings := DefaultSettings()
-	settings.DeepSeekModel = "test-model"
+	settings.DeepSeekModel = defaultDeepSeekModel
 	first, err := GenerateContent(taskDir, m, "structured-notes", settings, fakeContentGenerator{text: "first"})
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +118,22 @@ func TestGenerateContentAppendsVersionsWithoutOverwrite(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(taskDir, filepath.FromSlash(first.ArtifactReference)))
 	if string(firstBytes) != string(after) || len(m.Generations) != 2 {
 		t.Fatal("prior generation changed")
+	}
+}
+
+func TestGenerationSnapshotsEffectiveProviderConfiguration(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	settings := DefaultSettings()
+	record, err := GenerateContent(taskDir, m, "content-summary", settings, fakeContentGenerator{text: "summary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.LLMProvider != string(LLMProviderDeepSeek) || record.LLMModel != string(LLMModelDeepSeekV4) {
+		t.Fatalf("provider snapshot = %s/%s", record.LLMProvider, record.LLMModel)
+	}
+	settings.LLMProvider = "other"
+	if record.LLMProvider != string(LLMProviderDeepSeek) || record.LLMModel != string(LLMModelDeepSeekV4) {
+		t.Fatal("settings mutation rewrote historical generation")
 	}
 }
 

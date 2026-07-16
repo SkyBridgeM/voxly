@@ -127,6 +127,9 @@ func ensureCanonicalTranscript(taskDir string, m *Manifest) error {
 // GenerateContent appends one user-requested generation. Callers operating on
 // an existing Task must hold that Task's filesystem lock.
 func GenerateContent(taskDir string, m *Manifest, templateID string, settings *Settings, generator ContentGenerator) (*taskmanifest.GenerationRecord, error) {
+	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
+		return nil, err
+	}
 	template, err := LookupPromptTemplate(templateID)
 	if err != nil {
 		return nil, err
@@ -152,7 +155,7 @@ func GenerateContent(taskDir string, m *Manifest, templateID string, settings *S
 	}
 	now := nowFunc().UTC().Format(time.RFC3339)
 	composed := ComposePrompt(template, string(data))
-	record := taskmanifest.GenerationRecord{GenerationID: generationID, TemplateID: template.ID, TemplateRevision: template.Revision, TemplateDisplayName: template.DisplayName["en"], TemplateInstructions: strings.TrimSpace(template.Instructions), CreatedAt: now, UpdatedAt: now, SourceTranscriptRevisionID: m.CanonicalTranscript.RevisionID, SourceTranscriptSHA256: m.CanonicalTranscript.ContentSHA256, LLMProvider: "deepseek", LLMModel: settings.DeepSeekModel, PromptCompositionVersion: promptCompositionVersion, PromptHash: composed.Hash, Status: "processing", Attempts: []taskmanifest.GenerationAttempt{{Attempt: 1, CreatedAt: now, Status: "processing"}}}
+	record := taskmanifest.GenerationRecord{GenerationID: generationID, TemplateID: template.ID, TemplateRevision: template.Revision, TemplateDisplayName: template.DisplayName["en"], TemplateInstructions: strings.TrimSpace(template.Instructions), CreatedAt: now, UpdatedAt: now, SourceTranscriptRevisionID: m.CanonicalTranscript.RevisionID, SourceTranscriptSHA256: m.CanonicalTranscript.ContentSHA256, LLMProvider: settings.LLMProvider, LLMModel: settings.DeepSeekModel, PromptCompositionVersion: promptCompositionVersion, PromptHash: composed.Hash, Status: "processing", Attempts: []taskmanifest.GenerationAttempt{{Attempt: 1, CreatedAt: now, Status: "processing"}}}
 	m.Generations = append(m.Generations, record)
 	index := len(m.Generations) - 1
 	if err := SaveManifest(taskDir, m); err != nil {

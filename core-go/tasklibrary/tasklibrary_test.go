@@ -321,6 +321,12 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	if group.Latest == nil || group.Latest.GenerationID != "gen_1" || len(group.Versions) != 2 || group.Versions[0].Status != "failed" {
 		t.Fatalf("group = %#v", group)
 	}
+	if result.Tasks[0].CanonicalTranscript.Provider != "mimo" || result.Tasks[0].CanonicalTranscript.Model != "model" {
+		t.Fatalf("transcript provenance = %#v", result.Tasks[0].CanonicalTranscript)
+	}
+	if group.Latest.Provider != "deepseek" || group.Latest.Model != "model" {
+		t.Fatalf("generation provenance = %#v", group.Latest)
+	}
 }
 
 func manifestFor(taskID, status, updatedAt, outputMode string) *taskmanifest.TaskManifest {

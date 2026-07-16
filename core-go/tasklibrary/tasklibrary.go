@@ -48,6 +48,8 @@ type ArtifactSummary struct {
 	Reference string `json:"reference,omitempty"`
 	HasError  bool   `json:"has_error"`
 	Retryable *bool  `json:"retryable,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 type GenerationGroup struct {
@@ -65,6 +67,8 @@ type GenerationSummary struct {
 	HasError     bool   `json:"has_error"`
 	Retryable    *bool  `json:"retryable,omitempty"`
 	Legacy       bool   `json:"legacy"`
+	Provider     string `json:"provider,omitempty"`
+	Model        string `json:"model,omitempty"`
 }
 
 // DiscoveryIssue reports one task folder that could not be represented safely.
@@ -173,6 +177,8 @@ func canonicalTranscriptSummary(taskDir string, manifest *taskmanifest.TaskManif
 	if manifest.CanonicalTranscript != nil {
 		artifact.Status = manifest.CanonicalTranscript.Status
 		artifact.Reference = safeRelativeReference(taskDir, manifest.CanonicalTranscript.ArtifactReference)
+		artifact.Provider = manifest.CanonicalTranscript.ASRProvider
+		artifact.Model = manifest.CanonicalTranscript.ASRModel
 	}
 	if artifact.Status == "completed" && (artifact.Reference == "" || !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(artifact.Reference)))) {
 		artifact.Status = "unavailable"
@@ -204,7 +210,7 @@ func generationGroups(taskDir string, manifest *taskmanifest.TaskManifest) []Gen
 			status = "unavailable"
 			reference = ""
 		}
-		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable})
+		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable, Provider: record.LLMProvider, Model: record.LLMModel})
 	}
 	appendLegacy := func(id, name string, artifact taskmanifest.Artifact) {
 		if artifact.State == "unavailable" && artifact.Path == "" {

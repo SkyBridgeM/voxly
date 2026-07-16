@@ -10,6 +10,10 @@ interface RunControlsProps {
   onStartRun: () => void;
   isRunning: boolean;
   audioPath: string | null;
+  ready: boolean;
+  asrSummary: string;
+  llmSummary: string;
+  onOpenSettings: () => void;
   labels: {
     modeTranscript: string;
     modeTranscriptDesc: string;
@@ -20,10 +24,14 @@ interface RunControlsProps {
     processing: string;
     llmWarning: string;
     transcriptWarning: string;
+    speechRecognitionProvider: string;
+    generatedWithProvider: string;
+    providerNotReady: string;
+    openSettings: string;
   };
 }
 
-export function RunControls({ outputMode, onModeChange, templates, templateId, onTemplateChange, locale, onStartRun, isRunning, audioPath, labels }: RunControlsProps) {
+export function RunControls({ outputMode, onModeChange, templates, templateId, onTemplateChange, locale, onStartRun, isRunning, audioPath, ready, asrSummary, llmSummary, onOpenSettings, labels }: RunControlsProps) {
   return (
     <>
       <div className="mode-options">
@@ -45,8 +53,9 @@ export function RunControls({ outputMode, onModeChange, templates, templateId, o
           {templates.find((template) => template.id === templateId) && <p>{templates.find((template) => template.id === templateId)!.description[locale]}</p>}
         </div>
       )}
+      <div className="provider-run-summary"><span>{labels.speechRecognitionProvider}: <strong>{asrSummary}</strong></span>{outputMode === "transcript_and_generate" && <span>{labels.generatedWithProvider}: <strong>{llmSummary}</strong></span>}{!ready && <span className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></span>}</div>
       <div className="warning-banner"><span className="warning-icon" aria-hidden="true">i</span><span>{outputMode === "transcript_and_generate" ? labels.llmWarning : labels.transcriptWarning}</span></div>
-      <div className="section run-section"><button className="btn-primary" onClick={onStartRun} disabled={!audioPath || isRunning || (outputMode === "transcript_and_generate" && !templateId)}>{isRunning ? <><span className="spinner"></span>{labels.processing}</> : <>{labels.start}<span className="button-arrow" aria-hidden="true">→</span></>}</button></div>
+      <div className="section run-section"><button className="btn-primary" onClick={onStartRun} disabled={!audioPath || isRunning || !ready || (outputMode === "transcript_and_generate" && !templateId)}>{isRunning ? <><span className="spinner"></span>{labels.processing}</> : <>{labels.start}<span className="button-arrow" aria-hidden="true">→</span></>}</button></div>
     </>
   );
 }

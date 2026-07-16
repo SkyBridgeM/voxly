@@ -59,6 +59,47 @@ export interface RuntimePreflight {
   output_root: OutputRootPreflight;
   mimo_api_key: CredentialPreflight;
   deepseek_api_key: CredentialPreflight;
+  asr_provider: ProviderReadiness;
+  llm_provider: ProviderReadiness;
+}
+
+export interface ProviderSelection {
+  provider_id: string;
+  model_id: string;
+}
+
+export interface ProviderSettingsInfo {
+  asr: ProviderSelection;
+  llm: ProviderSelection;
+}
+
+export interface ProviderReadiness {
+  provider_id: string;
+  model_id: string;
+  ready: boolean;
+  blocking_reasons: string[];
+  warnings: string[];
+}
+
+export interface ProviderModelDescriptor {
+  id: string;
+  display_name: Record<"zh" | "en", string>;
+}
+
+export interface ProviderDescriptor {
+  kind: "asr" | "llm";
+  id: string;
+  display_name: Record<"zh" | "en", string>;
+  models: ProviderModelDescriptor[];
+  default_model: string;
+  credential_key: CredentialKey;
+  allow_custom_model: boolean;
+  built_in: boolean;
+}
+
+export interface ProviderCatalog {
+  asr: ProviderDescriptor[];
+  llm: ProviderDescriptor[];
 }
 
 export interface ArtifactSummary {
@@ -67,6 +108,8 @@ export interface ArtifactSummary {
   reference: string | null;
   has_error: boolean;
   retryable: boolean | null;
+  provider: string;
+  model: string;
 }
 
 export interface GenerationSummary {
@@ -77,6 +120,8 @@ export interface GenerationSummary {
   has_error: boolean;
   retryable: boolean | null;
   legacy: boolean;
+  provider: string;
+  model: string;
 }
 
 export interface GenerationGroup {
@@ -161,8 +206,20 @@ export async function listPromptTemplates(): Promise<PromptTemplateSummary[]> {
   return invoke<PromptTemplateSummary[]>("list_prompt_templates");
 }
 
-export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; deepseekModel?: string }): Promise<{ generation_id: string }> {
-  return invoke("generate_task_content", { taskFolder: options.taskFolder, templateId: options.templateId, deepseekApiKey: options.deepseekApiKey || undefined, deepseekModel: options.deepseekModel || undefined });
+export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
+  return invoke("generate_task_content", { taskFolder: options.taskFolder, templateId: options.templateId, deepseekApiKey: options.deepseekApiKey || undefined, llmConfig: options.llmConfig });
+}
+
+export async function listProviders(): Promise<ProviderCatalog> {
+  return invoke<ProviderCatalog>("list_providers");
+}
+
+export async function getProviderSettings(): Promise<ProviderSettingsInfo> {
+  return invoke<ProviderSettingsInfo>("get_provider_settings");
+}
+
+export async function setProviderSettings(asr: ProviderSelection, llm: ProviderSelection): Promise<ProviderSettingsInfo> {
+  return invoke<ProviderSettingsInfo>("set_provider_settings", { asr, llm });
 }
 
 export async function getOutputRoot(): Promise<OutputRootInfo> {
@@ -214,9 +271,10 @@ export async function getRuntimePreflight(options: {
 export interface RunOptions {
   mimoApiKey?: string;
   deepseekApiKey?: string;
-  deepseekModel?: string;
   backend?: BackendKind;
   templateId?: string;
+  asrConfig: ProviderSelection;
+  llmConfig?: ProviderSelection;
 }
 
 export function parseBackendError(raw: string): BackendErrorInfo {
@@ -271,8 +329,9 @@ export async function runMeetingAsr(
       backend: options.backend || "go",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
-      deepseekModel: options.deepseekModel || undefined,
       templateId: options.templateId || undefined,
+      asrConfig: options.asrConfig,
+      llmConfig: options.llmConfig,
     });
     return result;
   } finally {
@@ -289,7 +348,6 @@ export async function resumeMeetingAsr(
     backend?: BackendKind;
     mimoApiKey?: string;
     deepseekApiKey?: string;
-    deepseekModel?: string;
   },
   callbacks: RunCallbacks
 ): Promise<RunResult> {
@@ -320,7 +378,6 @@ export async function resumeMeetingAsr(
       backend: options.backend || "python",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
-      deepseekModel: options.deepseekModel || undefined,
     });
     return result;
   } finally {

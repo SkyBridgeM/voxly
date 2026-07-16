@@ -379,6 +379,10 @@ struct ArtifactSummary {
     reference: Option<String>,
     has_error: bool,
     retryable: Option<bool>,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -419,6 +423,10 @@ struct GenerationSummary {
     has_error: bool,
     retryable: Option<bool>,
     legacy: bool,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -430,6 +438,30 @@ struct PromptTemplateSummary {
     content_type: String,
     extension: String,
     built_in: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ProviderModelDescriptor {
+    id: String,
+    display_name: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ProviderDescriptor {
+    kind: String,
+    id: String,
+    display_name: std::collections::HashMap<String, String>,
+    models: Vec<ProviderModelDescriptor>,
+    default_model: String,
+    credential_key: String,
+    allow_custom_model: bool,
+    built_in: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ProviderCatalog {
+    asr: Vec<ProviderDescriptor>,
+    llm: Vec<ProviderDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -563,6 +595,116 @@ struct RuntimePreflight {
     output_root: OutputRootPreflight,
     mimo_api_key: CredentialPreflight,
     deepseek_api_key: CredentialPreflight,
+    asr_provider: ProviderReadiness,
+    llm_provider: ProviderReadiness,
+}
+
+const DEFAULT_ASR_PROVIDER: &str = "mimo";
+const DEFAULT_ASR_MODEL: &str = "mimo-v2.5-asr";
+const DEFAULT_LLM_PROVIDER: &str = "deepseek";
+const DEFAULT_LLM_MODEL: &str = "deepseek-v4-flash";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderSelection {
+    provider_id: String,
+    model_id: String,
+}
+
+impl ProviderSelection {
+    fn default_asr() -> Self {
+        Self {
+            provider_id: DEFAULT_ASR_PROVIDER.to_string(),
+            model_id: DEFAULT_ASR_MODEL.to_string(),
+        }
+    }
+
+    fn default_llm() -> Self {
+        Self {
+            provider_id: DEFAULT_LLM_PROVIDER.to_string(),
+            model_id: DEFAULT_LLM_MODEL.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct ProviderSettingsInfo {
+    asr: ProviderSelection,
+    llm: ProviderSelection,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProviderReadiness {
+    provider_id: String,
+    model_id: String,
+    ready: bool,
+    blocking_reasons: Vec<String>,
+    warnings: Vec<String>,
+}
+
+fn validate_asr_selection(selection: &ProviderSelection) -> Result<(), BackendError> {
+    if selection.provider_id != DEFAULT_ASR_PROVIDER {
+        return Err(BackendError::InvalidInput {
+            message: "Unknown speech-recognition provider.".to_string(),
+        });
+    }
+    if selection.model_id != DEFAULT_ASR_MODEL {
+        return Err(BackendError::InvalidInput {
+            message: "The selected speech-recognition model is not supported by Mimo.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_llm_selection(selection: &ProviderSelection) -> Result<(), BackendError> {
+    if selection.provider_id != DEFAULT_LLM_PROVIDER {
+        return Err(BackendError::InvalidInput {
+            message: "Unknown generated-content provider.".to_string(),
+        });
+    }
+    if selection.model_id != DEFAULT_LLM_MODEL {
+        return Err(BackendError::InvalidInput {
+            message: "The selected generated-content model is not supported by DeepSeek."
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn provider_readiness(
+    selection: &ProviderSelection,
+    credential_ready: bool,
+    asr: bool,
+) -> ProviderReadiness {
+    let validation = if asr {
+        validate_asr_selection(selection)
+    } else {
+        validate_llm_selection(selection)
+    };
+    let mut blocking_reasons = Vec::new();
+    if let Err(error) = validation {
+        blocking_reasons.push(match error {
+            BackendError::InvalidInput { message } => message,
+            _ => "Provider configuration is invalid.".to_string(),
+        });
+    }
+    if !credential_ready {
+        blocking_reasons.push(
+            if asr {
+                "Speech-recognition credential is not configured."
+            } else {
+                "Generated-content credential is not configured."
+            }
+            .to_string(),
+        );
+    }
+    ProviderReadiness {
+        provider_id: selection.provider_id.clone(),
+        model_id: selection.model_id.clone(),
+        ready: blocking_reasons.is_empty(),
+        blocking_reasons,
+        warnings: Vec::new(),
+    }
 }
 
 fn preflight_check(ready: bool, message: impl Into<String>) -> PreflightCheck {
@@ -799,6 +941,7 @@ fn preflight_credential_status<S: CredentialStore>(
     }
 }
 
+#[cfg(test)]
 fn runtime_preflight_for(
     runtime_mode: RuntimeMode,
     backend: BackendKind,
@@ -808,18 +951,48 @@ fn runtime_preflight_for(
     mimo_api_key: CredentialPreflight,
     deepseek_api_key: CredentialPreflight,
 ) -> RuntimePreflight {
-    let ready =
-        sidecar.ready && ffmpeg.ready && output_root.ready && mimo_api_key.status.configured;
-    RuntimePreflight {
+    let settings = ProviderSettingsInfo {
+        asr: ProviderSelection::default_asr(),
+        llm: ProviderSelection::default_llm(),
+    };
+    runtime_preflight_for_configs(
         runtime_mode,
         backend,
-        ready,
-        ready_for_minutes: ready && deepseek_api_key.status.configured,
         sidecar,
         ffmpeg,
         output_root,
         mimo_api_key,
         deepseek_api_key,
+        settings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn runtime_preflight_for_configs(
+    runtime_mode: RuntimeMode,
+    backend: BackendKind,
+    sidecar: PreflightCheck,
+    ffmpeg: PreflightCheck,
+    output_root: OutputRootPreflight,
+    mimo_api_key: CredentialPreflight,
+    deepseek_api_key: CredentialPreflight,
+    settings: ProviderSettingsInfo,
+) -> RuntimePreflight {
+    let asr_provider = provider_readiness(&settings.asr, mimo_api_key.status.configured, true);
+    let llm_provider = provider_readiness(&settings.llm, deepseek_api_key.status.configured, false);
+    let ready = sidecar.ready && ffmpeg.ready && output_root.ready && asr_provider.ready;
+    RuntimePreflight {
+        runtime_mode,
+        backend,
+        ready,
+        ready_for_minutes: ready && llm_provider.ready,
+        sidecar,
+        ffmpeg,
+        output_root,
+        mimo_api_key,
+        deepseek_api_key,
+        asr_provider,
+        llm_provider,
     }
 }
 
@@ -852,7 +1025,9 @@ fn get_runtime_preflight(
         &environment,
     );
 
-    Ok(runtime_preflight_for(
+    let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+        .map_err(String::from)?;
+    Ok(runtime_preflight_for_configs(
         runtime_mode,
         backend,
         sidecar,
@@ -860,6 +1035,10 @@ fn get_runtime_preflight(
         output_root,
         mimo_api_key,
         deepseek_api_key,
+        ProviderSettingsInfo {
+            asr: settings.asr,
+            llm: settings.llm,
+        },
     ))
 }
 
@@ -867,15 +1046,41 @@ const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
 
 /// Deliberately non-sensitive settings. API keys, input history, transcripts,
 /// and task content must never be added to this structure.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 // Reject unknown fields so unsupported or potentially sensitive values are
 // never silently accepted and later persisted. Future schema changes require
 // an explicit, reviewed migration rather than implicit forward compatibility.
-#[serde(default, deny_unknown_fields)]
 struct DesktopSettings {
     output_root: Option<String>,
     language: Option<String>,
     theme: Option<String>,
+    asr: ProviderSelection,
+    llm: ProviderSelection,
+    development_backend: Option<BackendKind>,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self {
+            output_root: None,
+            language: None,
+            theme: None,
+            asr: ProviderSelection::default_asr(),
+            llm: ProviderSelection::default_llm(),
+            development_backend: None,
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct DesktopSettingsWire {
+    output_root: Option<String>,
+    language: Option<String>,
+    theme: Option<String>,
+    asr: Option<ProviderSelection>,
+    llm: Option<ProviderSelection>,
+    // One-release read migration for settings written before provider ownership.
     deepseek_model: Option<String>,
     development_backend: Option<BackendKind>,
 }
@@ -924,8 +1129,26 @@ fn load_desktop_settings(path: &Path) -> Result<DesktopSettings, BackendError> {
     let content = fs::read_to_string(path).map_err(|e| BackendError::InvalidInput {
         message: format!("Could not read desktop settings: {e}"),
     })?;
-    serde_json::from_str(&content).map_err(|e| BackendError::InvalidInput {
-        message: format!("Desktop settings are invalid: {e}"),
+    let wire: DesktopSettingsWire =
+        serde_json::from_str(&content).map_err(|e| BackendError::InvalidInput {
+            message: format!("Desktop settings are invalid: {e}"),
+        })?;
+    let asr = wire.asr.unwrap_or_else(ProviderSelection::default_asr);
+    let llm = wire.llm.unwrap_or_else(|| ProviderSelection {
+        provider_id: DEFAULT_LLM_PROVIDER.to_string(),
+        model_id: wire
+            .deepseek_model
+            .unwrap_or_else(|| DEFAULT_LLM_MODEL.to_string()),
+    });
+    validate_asr_selection(&asr)?;
+    validate_llm_selection(&llm)?;
+    Ok(DesktopSettings {
+        output_root: wire.output_root,
+        language: wire.language,
+        theme: wire.theme,
+        asr,
+        llm,
+        development_backend: wire.development_backend,
     })
 }
 
@@ -939,9 +1162,60 @@ fn save_desktop_settings(path: &Path, settings: &DesktopSettings) -> Result<(), 
     let json = serde_json::to_string_pretty(settings).map_err(|e| BackendError::InvalidInput {
         message: format!("Could not serialize desktop settings: {e}"),
     })?;
-    fs::write(path, format!("{json}\n")).map_err(|e| BackendError::InvalidInput {
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, format!("{json}\n")).map_err(|e| BackendError::InvalidInput {
         message: format!("Could not save desktop settings: {e}"),
+    })?;
+    fs::rename(&temporary, path).map_err(|e| BackendError::InvalidInput {
+        message: format!("Could not commit desktop settings: {e}"),
     })
+}
+
+#[tauri::command]
+fn get_provider_settings(app: AppHandle) -> Result<ProviderSettingsInfo, String> {
+    let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+        .map_err(String::from)?;
+    Ok(ProviderSettingsInfo {
+        asr: settings.asr,
+        llm: settings.llm,
+    })
+}
+
+fn set_provider_settings_at(
+    path: &Path,
+    active: &ActiveProcess,
+    asr: ProviderSelection,
+    llm: ProviderSelection,
+) -> Result<ProviderSettingsInfo, BackendError> {
+    ensure_output_root_mutation_allowed(active)?;
+    validate_asr_selection(&asr)?;
+    validate_llm_selection(&llm)?;
+    let mut settings = load_desktop_settings(path)?;
+    settings.asr = asr.clone();
+    settings.llm = llm.clone();
+    save_desktop_settings(path, &settings)?;
+    Ok(ProviderSettingsInfo { asr, llm })
+}
+
+#[tauri::command]
+async fn set_provider_settings(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    asr: ProviderSelection,
+    llm: ProviderSelection,
+) -> Result<ProviderSettingsInfo, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = desktop_settings_path(&app).map_err(String::from)?;
+        set_provider_settings_at(&path, &active, asr, llm).map_err(String::from)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Provider settings worker failed.".to_string(),
+            code: None,
+        })
+    })?
 }
 
 fn validate_output_root(path: &Path) -> Result<PathBuf, BackendError> {
@@ -1847,7 +2121,7 @@ fn build_go_command(
     output_dir: &str,
     mimo_key: Option<&str>,
     deepseek_key: Option<&str>,
-    deepseek_model: Option<&str>,
+    providers: &ProviderSettingsInfo,
     env_file: Option<&PathBuf>,
     runtime_mode: RuntimeMode,
     packaged_executable_dir: Option<&Path>,
@@ -1866,6 +2140,14 @@ fn build_go_command(
     if let Some(template_id) = template_id {
         cmd.arg("--template-id").arg(template_id);
     }
+    cmd.arg("--asr-provider")
+        .arg(&providers.asr.provider_id)
+        .arg("--asr-model")
+        .arg(&providers.asr.model_id)
+        .arg("--llm-provider")
+        .arg(&providers.llm.provider_id)
+        .arg("--llm-model")
+        .arg(&providers.llm.model_id);
 
     if runtime_mode == RuntimeMode::Development {
         if let Some(env) = env_file {
@@ -1896,12 +2178,6 @@ fn build_go_command(
             cmd.env("DEEPSEEK_API_KEY", key);
         }
     }
-    if let Some(model) = deepseek_model {
-        if !model.is_empty() {
-            cmd.env("DEEPSEEK_MODEL", model);
-        }
-    }
-
     Ok(cmd)
 }
 
@@ -1967,8 +2243,9 @@ fn run_meeting_asr_blocking(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
     template_id: Option<String>,
+    asr_config: ProviderSelection,
+    llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
     let runtime_mode = RuntimeMode::current();
 
@@ -2024,6 +2301,28 @@ fn run_meeting_asr_blocking(
     // Resolve the runtime-aware output root, creating it when needed.
     let (abs_out, _) = resolve_output_root(&app).map_err(String::from)?;
     let out_dir = abs_out.to_string_lossy().to_string();
+    let desktop_settings =
+        load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+            .map_err(String::from)?;
+    validate_asr_selection(&asr_config).map_err(String::from)?;
+    if asr_config != desktop_settings.asr {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Speech-recognition settings changed. Refresh and try again.".to_string(),
+        }));
+    }
+    let effective_llm = llm_config.unwrap_or_else(|| desktop_settings.llm.clone());
+    if output_mode == "transcript_and_generate" {
+        validate_llm_selection(&effective_llm).map_err(String::from)?;
+        if effective_llm != desktop_settings.llm {
+            return Err(String::from(BackendError::InvalidInput {
+                message: "Generated-content settings changed. Refresh and try again.".to_string(),
+            }));
+        }
+    }
+    let providers = ProviderSettingsInfo {
+        asr: asr_config,
+        llm: effective_llm,
+    };
 
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
@@ -2045,7 +2344,7 @@ fn run_meeting_asr_blocking(
             &out_dir,
             Some(&credentials.mimo),
             credentials.deepseek.as_deref(),
-            deepseek_model.as_deref(),
+            Some(&providers.llm.model_id),
             runtime_mode,
         ),
         BackendKind::Go => build_go_command(
@@ -2054,7 +2353,7 @@ fn run_meeting_asr_blocking(
             &out_dir,
             Some(&credentials.mimo),
             credentials.deepseek.as_deref(),
-            deepseek_model.as_deref(),
+            &providers,
             env_file.as_ref(),
             runtime_mode,
             packaged_executable_dir.as_deref(),
@@ -2079,8 +2378,9 @@ async fn run_meeting_asr(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
     template_id: Option<String>,
+    asr_config: ProviderSelection,
+    llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2092,8 +2392,9 @@ async fn run_meeting_asr(
             backend,
             mimo_api_key,
             deepseek_api_key,
-            deepseek_model,
             template_id,
+            asr_config,
+            llm_config,
         )
     })
     .await
@@ -2161,7 +2462,6 @@ fn resume_meeting_asr_blocking(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
 ) -> Result<RunResult, String> {
     let runtime_mode = RuntimeMode::current();
     let backend_kind =
@@ -2220,6 +2520,16 @@ fn resume_meeting_asr_blocking(
 
     let effective_mode = effective_mode.map_err(String::from)?;
     validate_output_mode(&effective_mode).map_err(String::from)?;
+    let desktop_settings =
+        load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+            .map_err(String::from)?;
+    validate_asr_selection(&desktop_settings.asr).map_err(String::from)?;
+    if effective_mode == "transcript_and_generate"
+        || effective_mode == "minutes"
+        || effective_mode == "notes"
+    {
+        validate_llm_selection(&desktop_settings.llm).map_err(String::from)?;
+    }
 
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
@@ -2265,6 +2575,14 @@ fn resume_meeting_asr_blocking(
 
             let mut c = Command::new(binary);
             c.arg("resume").arg(abs_task_dir.as_os_str());
+            c.arg("--asr-provider")
+                .arg(&desktop_settings.asr.provider_id)
+                .arg("--asr-model")
+                .arg(&desktop_settings.asr.model_id)
+                .arg("--llm-provider")
+                .arg(&desktop_settings.llm.provider_id)
+                .arg("--llm-model")
+                .arg(&desktop_settings.llm.model_id);
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
@@ -2287,11 +2605,6 @@ fn resume_meeting_asr_blocking(
             if let Some(key) = credentials.deepseek.as_deref() {
                 c.env("DEEPSEEK_API_KEY", key);
             }
-            if let Some(model) = deepseek_model.as_deref() {
-                if !model.is_empty() {
-                    c.env("DEEPSEEK_MODEL", model);
-                }
-            }
             c
         }
     };
@@ -2313,7 +2626,6 @@ async fn resume_meeting_asr(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2325,7 +2637,6 @@ async fn resume_meeting_asr(
             backend,
             mimo_api_key,
             deepseek_api_key,
-            deepseek_model,
         )
     })
     .await
@@ -2505,6 +2816,46 @@ async fn list_prompt_templates() -> Result<Vec<PromptTemplateSummary>, String> {
         })?
 }
 
+fn list_providers_blocking() -> Result<ProviderCatalog, String> {
+    let output = Command::new(go_sidecar_binary().map_err(String::from)?)
+        .arg("list-providers")
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .output()
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Could not start the provider sidecar.".to_string(),
+                code: None,
+            })
+        })?;
+    if !output.status.success() {
+        return Err(BackendError::ProcessFailed {
+            message: "Provider sidecar failed.".to_string(),
+            code: output.status.code(),
+        }
+        .into());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| {
+        BackendError::ProcessFailed {
+            message: "Provider sidecar returned invalid JSON.".to_string(),
+            code: output.status.code(),
+        }
+        .into()
+    })
+}
+
+#[tauri::command]
+async fn list_providers() -> Result<ProviderCatalog, String> {
+    tauri::async_runtime::spawn_blocking(list_providers_blocking)
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Provider worker failed.".to_string(),
+                code: None,
+            })
+        })?
+}
+
 #[derive(Clone, serde::Serialize)]
 struct GenerateContentResult {
     generation_id: String,
@@ -2571,7 +2922,7 @@ fn generate_task_content_blocking(
     task_folder: String,
     template_id: String,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
+    llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
     let output_root = resolve_task_library_output_root(&app)
         .map_err(|_| {
@@ -2592,6 +2943,15 @@ fn generate_task_content_blocking(
     })?;
     let task_dir =
         resolve_generation_task(&output_root, &discovery, &task_folder).map_err(String::from)?;
+    let desktop_settings =
+        load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+            .map_err(String::from)?;
+    validate_llm_selection(&llm_config).map_err(String::from)?;
+    if llm_config != desktop_settings.llm {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Generated-content settings changed. Refresh and try again.".to_string(),
+        }));
+    }
     let runtime_mode = RuntimeMode::current();
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credential = resolve_credential(
@@ -2609,7 +2969,11 @@ fn generate_task_content_blocking(
         .arg("--task-dir")
         .arg(&task_dir)
         .arg("--template-id")
-        .arg(&template_id);
+        .arg(&template_id)
+        .arg("--llm-provider")
+        .arg(&llm_config.provider_id)
+        .arg("--llm-model")
+        .arg(&llm_config.model_id);
     let isolated = isolated_go_project_root().map_err(String::from)?;
     cmd.arg("--project-root")
         .arg(&isolated)
@@ -2617,9 +2981,6 @@ fn generate_task_content_blocking(
         .env_remove("MIMO_API_KEY")
         .env_remove("DEEPSEEK_API_KEY")
         .env("DEEPSEEK_API_KEY", &credential.value);
-    if let Some(model) = deepseek_model.filter(|value| !value.trim().is_empty()) {
-        cmd.env("DEEPSEEK_MODEL", model);
-    }
     let secrets = vec![credential.value];
     let runner = spawn_and_watch(&app, &active, cmd, &secrets).map_err(String::from)?;
     let (code, stdout, stderr) = runner.wait()?;
@@ -2652,7 +3013,7 @@ async fn generate_task_content(
     task_folder: String,
     template_id: String,
     deepseek_api_key: Option<String>,
-    deepseek_model: Option<String>,
+    llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2662,7 +3023,7 @@ async fn generate_task_content(
             task_folder,
             template_id,
             deepseek_api_key,
-            deepseek_model,
+            llm_config,
         )
     })
     .await
@@ -3099,6 +3460,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
             get_runtime_preflight,
+            get_provider_settings,
+            set_provider_settings,
             get_output_root,
             set_output_root,
             reset_output_root,
@@ -3108,6 +3471,7 @@ pub fn run() {
             resume_meeting_asr,
             list_tasks,
             list_prompt_templates,
+            list_providers,
             generate_task_content,
             open_task_artifact,
             reveal_task_artifact,
@@ -3800,6 +4164,76 @@ mod tests {
     }
 
     #[test]
+    fn test_provider_settings_defaults_migrate_and_round_trip_without_credentials() {
+        let base = test_dir("meeting-asr-provider-settings");
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join(DESKTOP_SETTINGS_FILE);
+
+        fs::write(&path, r#"{"output_root":"/tmp/example","language":"zh","theme":"dark","deepseek_model":"deepseek-v4-flash"}"#).unwrap();
+        let migrated = load_desktop_settings(&path).unwrap();
+        assert_eq!(migrated.asr, ProviderSelection::default_asr());
+        assert_eq!(migrated.llm, ProviderSelection::default_llm());
+        assert_eq!(migrated.language.as_deref(), Some("zh"));
+        assert_eq!(migrated.theme.as_deref(), Some("dark"));
+
+        save_desktop_settings(&path, &migrated).unwrap();
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(json.contains("\"asr\"") && json.contains("\"llm\""));
+        assert!(!json.contains("deepseek_model"));
+        assert!(!json.contains("API_KEY") && !json.contains("secret"));
+
+        let saved = set_provider_settings_at(
+            &path,
+            &ActiveProcess::default(),
+            ProviderSelection::default_asr(),
+            ProviderSelection::default_llm(),
+        )
+        .unwrap();
+        assert_eq!(saved.asr, ProviderSelection::default_asr());
+        assert_eq!(saved.llm, ProviderSelection::default_llm());
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_provider_settings_reject_invalid_values_and_active_mutation() {
+        let invalid_asr = ProviderSelection {
+            provider_id: "other".to_string(),
+            model_id: DEFAULT_ASR_MODEL.to_string(),
+        };
+        assert!(validate_asr_selection(&invalid_asr).is_err());
+        let invalid_llm = ProviderSelection {
+            provider_id: DEFAULT_LLM_PROVIDER.to_string(),
+            model_id: "other".to_string(),
+        };
+        assert!(validate_llm_selection(&invalid_llm).is_err());
+
+        assert!(validate_output_root_mutation_state(true).is_err());
+    }
+
+    #[test]
+    fn test_provider_readiness_is_local_safe_and_provider_specific() {
+        let ready_asr = provider_readiness(&ProviderSelection::default_asr(), true, true);
+        assert!(ready_asr.ready && ready_asr.blocking_reasons.is_empty());
+        let missing_llm = provider_readiness(&ProviderSelection::default_llm(), false, false);
+        assert!(!missing_llm.ready);
+        assert!(missing_llm
+            .blocking_reasons
+            .iter()
+            .any(|reason| reason.contains("credential")));
+        let invalid = provider_readiness(
+            &ProviderSelection {
+                provider_id: DEFAULT_ASR_PROVIDER.to_string(),
+                model_id: "invalid".to_string(),
+            },
+            true,
+            true,
+        );
+        assert!(!invalid.ready);
+        let json = serde_json::to_string(&invalid).unwrap();
+        assert!(!json.contains("API_KEY") && !json.contains("secret"));
+    }
+
+    #[test]
     fn test_selected_output_root_requires_existing_writable_directory() {
         let base = test_dir("meeting-asr-selected-output-root");
         let root = base.join("output");
@@ -3947,7 +4381,7 @@ mod tests {
 
     #[test]
     fn test_settings_reject_unknown_fields() {
-        assert!(serde_json::from_str::<DesktopSettings>(
+        assert!(serde_json::from_str::<DesktopSettingsWire>(
             r#"{"output_root":"/tmp/output","unexpected_value":"ignored"}"#
         )
         .is_err());
@@ -4494,6 +4928,8 @@ mod tests {
                     reference: Some(reference.to_string()),
                     has_error: false,
                     retryable: None,
+                    provider: String::new(),
+                    model: String::new(),
                 }],
                 has_partial_errors: false,
                 task_folder: task_folder.to_string(),
@@ -4521,6 +4957,8 @@ mod tests {
             reference: Some("transcript.md".to_string()),
             has_error: false,
             retryable: None,
+            provider: "mimo".to_string(),
+            model: "mimo-v2.5-asr".to_string(),
         });
         assert_eq!(
             resolve_generation_task(&root, &discovery, "task").unwrap(),
