@@ -114,6 +114,8 @@ export interface ArtifactSummary {
 
 export interface GenerationSummary {
   generation_id: string;
+  template_revision: number;
+  template_display_name: string;
   status: string;
   created_at: string;
   reference: string | null;

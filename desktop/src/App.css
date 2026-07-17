@@ -755,6 +755,32 @@ button {
   gap: 14px;
 }
 
+.library-quick-tags {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.library-quick-tags .library-tags {
+  margin-top: 0;
+}
+
+.library-quick-tag-form {
+  display: flex;
+  gap: 7px;
+}
+
+.library-quick-tag-form input {
+  width: min(190px, 45vw);
+  min-height: 32px;
+}
+
+.library-quick-tag-form button {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
 .library-details-heading h2 {
   margin-top: 4px;
   font-family: var(--font-display);
@@ -781,6 +807,24 @@ button {
 }
 
 .library-details-section .library-details-form {
+  margin-top: 10px;
+}
+
+.library-task-information {
+  padding-top: 15px;
+  border-top: 1px solid var(--border);
+}
+
+.library-task-information > summary {
+  width: fit-content;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.library-task-information .library-full-time,
+.library-task-information .library-details-form {
   margin-top: 10px;
 }
 
@@ -2442,13 +2486,6 @@ textarea:focus-visible,
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
-}
-
-.generation-group-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
 }
 
 .generation-group details {

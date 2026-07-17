@@ -310,7 +310,7 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	m.CanonicalTranscript = &taskmanifest.CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "hash", HashContractVersion: 1, CreatedAt: "2026-07-16T01:00:00Z", ASRProvider: "mimo", ASRModel: "model", Status: "completed"}
 	m.Generations = []taskmanifest.GenerationRecord{
 		{GenerationID: "gen_1", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:10:00Z", UpdatedAt: "2026-07-16T01:10:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "one", Status: "completed", ArtifactReference: "generated/structured-notes/gen_1.md"},
-		{GenerationID: "gen_2", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:20:00Z", UpdatedAt: "2026-07-16T01:20:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
+		{GenerationID: "gen_2", TemplateID: "structured-notes", TemplateRevision: 2, TemplateDisplayName: "Renamed snapshot", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:20:00Z", UpdatedAt: "2026-07-16T01:20:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
 	}
 	writeTask(t, root, "v2", m)
 	result, err := Discover(root)
@@ -329,6 +329,9 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	}
 	if group.Latest.Provider != "deepseek" || group.Latest.Model != "model" {
 		t.Fatalf("generation provenance = %#v", group.Latest)
+	}
+	if group.Versions[0].TemplateRevision != 2 || group.Versions[0].TemplateDisplayName != "Renamed snapshot" || group.Latest.TemplateRevision != 1 || group.Latest.TemplateDisplayName != "Structured notes" {
+		t.Fatalf("generation template snapshots = %#v", group)
 	}
 }
 

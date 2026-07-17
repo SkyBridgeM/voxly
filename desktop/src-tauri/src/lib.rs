@@ -419,6 +419,10 @@ struct GenerationGroup {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct GenerationSummary {
     generation_id: String,
+    #[serde(default)]
+    template_revision: u32,
+    #[serde(default)]
+    template_display_name: String,
     status: String,
     created_at: String,
     reference: Option<String>,
@@ -4995,7 +4999,23 @@ mod tests {
               {"kind":"transcript","status":"completed","reference":"transcript.md","has_error":false}
             ],
             "has_partial_errors": true,
-            "task_folder": "task-folder"
+            "task_folder": "task-folder",
+            "generated_content": [{
+              "template_id": "future-template",
+              "display_name": "Historical name",
+              "latest": {
+                "generation_id": "gen-1",
+                "template_revision": 3,
+                "template_display_name": "Historical name r3",
+                "status": "completed",
+                "created_at": "2026-07-15T02:00:00Z",
+                "reference": "generated/future-template/gen-1.md",
+                "has_error": false,
+                "retryable": null,
+                "legacy": false
+              },
+              "versions": []
+            }]
           }],
           "issues": [{
             "task_folder": "invalid-task",
@@ -5014,6 +5034,12 @@ mod tests {
         assert!(result.tasks[0].has_partial_errors);
         assert_eq!(result.tasks[0].primary_artifacts[0].kind, "minutes");
         assert_eq!(result.tasks[0].primary_artifacts[0].retryable, Some(true));
+        let generation = result.tasks[0].generated_content[0]
+            .latest
+            .as_ref()
+            .unwrap();
+        assert_eq!(generation.template_revision, 3);
+        assert_eq!(generation.template_display_name, "Historical name r3");
         assert_eq!(result.issues.len(), 1);
         assert_eq!(result.issues[0].code, "invalid_manifest");
     }

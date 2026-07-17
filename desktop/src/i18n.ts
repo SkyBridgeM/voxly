@@ -158,6 +158,8 @@ export interface Translations {
   generatedArtifactCount: string;
   saveTitle: string;
   cancelTitleEdit: string;
+  taskInformation: string;
+  generationVersion: string;
   existingTags: string;
   available: string;
   unavailable: string;
@@ -365,6 +367,8 @@ export const translations: Record<Locale, Translations> = {
     generatedArtifactCount: "生成内容",
     saveTitle: "保存任务名称",
     cancelTitleEdit: "取消编辑任务名称",
+    taskInformation: "任务信息",
+    generationVersion: "版本",
     existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
@@ -570,6 +574,8 @@ export const translations: Record<Locale, Translations> = {
     generatedArtifactCount: "Generated artifacts",
     saveTitle: "Save task title",
     cancelTitleEdit: "Cancel title editing",
+    taskInformation: "Task information",
+    generationVersion: "Version",
     existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",

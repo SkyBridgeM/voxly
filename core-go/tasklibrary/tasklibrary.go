@@ -62,15 +62,17 @@ type GenerationGroup struct {
 }
 
 type GenerationSummary struct {
-	GenerationID string `json:"generation_id"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
-	Reference    string `json:"reference,omitempty"`
-	HasError     bool   `json:"has_error"`
-	Retryable    *bool  `json:"retryable,omitempty"`
-	Legacy       bool   `json:"legacy"`
-	Provider     string `json:"provider,omitempty"`
-	Model        string `json:"model,omitempty"`
+	GenerationID        string `json:"generation_id"`
+	TemplateRevision    int    `json:"template_revision,omitempty"`
+	TemplateDisplayName string `json:"template_display_name,omitempty"`
+	Status              string `json:"status"`
+	CreatedAt           string `json:"created_at"`
+	Reference           string `json:"reference,omitempty"`
+	HasError            bool   `json:"has_error"`
+	Retryable           *bool  `json:"retryable,omitempty"`
+	Legacy              bool   `json:"legacy"`
+	Provider            string `json:"provider,omitempty"`
+	Model               string `json:"model,omitempty"`
 }
 
 // DiscoveryIssue reports one task folder that could not be represented safely.
@@ -215,7 +217,7 @@ func generationGroups(taskDir string, manifest *taskmanifest.TaskManifest) []Gen
 			status = "unavailable"
 			reference = ""
 		}
-		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable, Provider: record.LLMProvider, Model: record.LLMModel})
+		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, TemplateRevision: record.TemplateRevision, TemplateDisplayName: record.TemplateDisplayName, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable, Provider: record.LLMProvider, Model: record.LLMModel})
 	}
 	appendLegacy := func(id, name string, artifact taskmanifest.Artifact) {
 		if artifact.State == "unavailable" && artifact.Path == "" {
