@@ -186,6 +186,66 @@ func TestValidationRejectsSensitiveUnknownFields(t *testing.T) {
 	}
 }
 
+func TestUserMetadataRoundTripAndLegacyAbsence(t *testing.T) {
+	manifest, err := LoadManifest(fixturePath(t, "task_manifest_completed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.UserMetadata != nil {
+		t.Fatal("legacy fixture unexpectedly has user metadata")
+	}
+	manifest.UserMetadata = &UserMetadata{Title: "Interview", Description: "Research notes", Tags: []string{"访谈", "工作"}}
+	path := filepath.Join(t.TempDir(), "task_manifest.json")
+	if err := WriteManifestAtomic(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.UserMetadata == nil || reloaded.UserMetadata.Title != "Interview" || reloaded.UserMetadata.Description != "Research notes" || len(reloaded.UserMetadata.Tags) != 2 {
+		t.Fatalf("user metadata = %#v", reloaded.UserMetadata)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"api_key", "credential", "secret"} {
+		if strings.Contains(strings.ToLower(string(data)), forbidden) {
+			t.Fatalf("manifest contains forbidden field %q", forbidden)
+		}
+	}
+}
+
+func TestWriteManifestAtomicReplacesWithOwnerOnlyFile(t *testing.T) {
+	manifest, err := LoadManifest(fixturePath(t, "task_manifest_completed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	path := filepath.Join(directory, ManifestFilename)
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifestAtomic(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("manifest permissions = %o, want 600", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != ManifestFilename {
+		t.Fatalf("atomic write left temporary files: %v", entries)
+	}
+}
+
 func deepCopyMap(t *testing.T, source map[string]any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(source)

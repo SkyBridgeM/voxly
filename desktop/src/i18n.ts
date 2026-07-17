@@ -137,6 +137,30 @@ export interface Translations {
   outputMode: string;
   outputs: string;
   tags: string;
+  editMetadata: string;
+  taskTitle: string;
+  taskDescription: string;
+  descriptionPlaceholder: string;
+  addTag: string;
+  tagPlaceholder: string;
+  removeTag: string;
+  metadataSaveFailed: string;
+  sortBy: string;
+  sortUpdated: string;
+  sortCreated: string;
+  sortTitle: string;
+  filterByTag: string;
+  allTasks: string;
+  taskDetails: string;
+  openTaskDetails: string;
+  backToTaskLibrary: string;
+  transcriptSummary: string;
+  generatedArtifactCount: string;
+  saveTitle: string;
+  cancelTitleEdit: string;
+  taskInformation: string;
+  generationVersion: string;
+  existingTags: string;
   available: string;
   unavailable: string;
   artifactError: string;
@@ -322,6 +346,30 @@ export const translations: Record<Locale, Translations> = {
     outputMode: "输出模式",
     outputs: "主要输出",
     tags: "标签",
+    editMetadata: "编辑任务信息",
+    taskTitle: "任务名称",
+    taskDescription: "描述",
+    descriptionPlaceholder: "添加任务背景、重点或备注（可选）",
+    addTag: "添加",
+    tagPlaceholder: "输入标签",
+    removeTag: "移除标签",
+    metadataSaveFailed: "无法保存任务信息，请重试。",
+    sortBy: "排序",
+    sortUpdated: "最近更新",
+    sortCreated: "最近创建",
+    sortTitle: "名称",
+    filterByTag: "标签筛选",
+    allTasks: "全部任务",
+    taskDetails: "任务详情",
+    openTaskDetails: "打开任务详情",
+    backToTaskLibrary: "返回任务库",
+    transcriptSummary: "转写",
+    generatedArtifactCount: "生成内容",
+    saveTitle: "保存任务名称",
+    cancelTitleEdit: "取消编辑任务名称",
+    taskInformation: "任务信息",
+    generationVersion: "版本",
+    existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
     artifactError: "生成出错",
@@ -505,6 +553,30 @@ export const translations: Record<Locale, Translations> = {
     outputMode: "Output mode",
     outputs: "Primary outputs",
     tags: "Tags",
+    editMetadata: "Edit task details",
+    taskTitle: "Task title",
+    taskDescription: "Description",
+    descriptionPlaceholder: "Add optional context, highlights, or notes",
+    addTag: "Add",
+    tagPlaceholder: "Enter a tag",
+    removeTag: "Remove tag",
+    metadataSaveFailed: "Task details could not be saved. Try again.",
+    sortBy: "Sort by",
+    sortUpdated: "Recently updated",
+    sortCreated: "Recently created",
+    sortTitle: "Title",
+    filterByTag: "Filter by tag",
+    allTasks: "All tasks",
+    taskDetails: "Task details",
+    openTaskDetails: "Open task details",
+    backToTaskLibrary: "Back to Task Library",
+    transcriptSummary: "Transcript",
+    generatedArtifactCount: "Generated artifacts",
+    saveTitle: "Save task title",
+    cancelTitleEdit: "Cancel title editing",
+    taskInformation: "Task information",
+    generationVersion: "Version",
+    existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",
     artifactError: "Generation error",

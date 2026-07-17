@@ -103,3 +103,56 @@ func TestRunListTasksRequiresApplicationRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskMetadataCLIReadAndUpdate(t *testing.T) {
+	root := t.TempDir()
+	copyTaskLibraryFixture(t, root, "valid", "task_manifest_completed.json")
+
+	var readOutput bytes.Buffer
+	if err := runGetTaskMetadata([]string{"--output-root", root, "--task-id", "task_fixture_completed_001"}, &readOutput); err != nil {
+		t.Fatal(err)
+	}
+	var initial tasklibrary.TaskMetadata
+	if err := json.Unmarshal(readOutput.Bytes(), &initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Title == "" || initial.Description != "" || len(initial.Tags) != 0 {
+		t.Fatalf("initial metadata = %#v", initial)
+	}
+
+	input := bytes.NewBufferString(`{"title":"Project review","description":"Key decisions","tags":["项目","工作"]}`)
+	var updateOutput bytes.Buffer
+	if err := runUpdateTaskMetadata([]string{"--output-root", root, "--task-id", initial.TaskID}, input, &updateOutput); err != nil {
+		t.Fatal(err)
+	}
+	var updated tasklibrary.TaskMetadata
+	if err := json.Unmarshal(updateOutput.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Project review" || updated.Description != "Key decisions" || len(updated.Tags) != 2 {
+		t.Fatalf("updated metadata = %#v", updated)
+	}
+}
+
+func TestTaskMetadataCLIRejectsUnknownInputAndTraversal(t *testing.T) {
+	root := t.TempDir()
+	copyTaskLibraryFixture(t, root, "valid", "task_manifest_completed.json")
+	var stdout bytes.Buffer
+	if err := runUpdateTaskMetadata(
+		[]string{"--output-root", root, "--task-id", "../valid"},
+		bytes.NewBufferString(`{"title":"x","description":"","tags":[]}`),
+		&stdout,
+	); err == nil {
+		t.Fatal("traversal task ID accepted")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty on failure", stdout.String())
+	}
+	if err := runUpdateTaskMetadata(
+		[]string{"--output-root", root, "--task-id", "task_fixture_completed_001"},
+		bytes.NewBufferString(`{"title":"x","description":"","tags":[],"secret":"no"}`),
+		&stdout,
+	); err == nil {
+		t.Fatal("unknown metadata field accepted")
+	}
+}

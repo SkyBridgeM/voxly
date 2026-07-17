@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -222,9 +223,9 @@ type ArtifactError struct {
 }
 
 type UserMetadata struct {
-	Title         string                     `json:"title,omitempty"`
-	Description   string                     `json:"description,omitempty"`
-	Tags          []string                   `json:"tags,omitempty"`
+	Title         string                     `json:"title"`
+	Description   string                     `json:"description"`
+	Tags          []string                   `json:"tags"`
 	Favorite      *bool                      `json:"favorite,omitempty"`
 	Annotations   []string                   `json:"annotations,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
@@ -464,6 +465,48 @@ func (manifest *TaskManifest) WriteManifest(path string) error {
 	data = append(data, '\n')
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write task manifest: %w", err)
+	}
+	return nil
+}
+
+// WriteManifestAtomic validates and replaces a manifest through an owner-only
+// temporary file in the same directory. Existing files are never edited in place.
+func WriteManifestAtomic(path string, manifest *TaskManifest) error {
+	if manifest == nil {
+		return errors.New("task manifest is nil")
+	}
+	if err := manifest.ValidateManifest(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal task manifest: %w", err)
+	}
+	data = append(data, '\n')
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".task-manifest-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary task manifest: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("secure temporary task manifest: %w", err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write temporary task manifest: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("sync temporary task manifest: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary task manifest: %w", err)
+	}
+	if err := replaceFile(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace task manifest: %w", err)
 	}
 	return nil
 }
@@ -746,6 +789,9 @@ func (metadata *UserMetadata) UnmarshalJSON(data []byte) error {
 
 func (metadata UserMetadata) MarshalJSON() ([]byte, error) {
 	type plain UserMetadata
+	if metadata.Tags == nil {
+		metadata.Tags = make([]string, 0)
+	}
 	return marshalWithUnknown(plain(metadata), metadata.UnknownFields)
 }
 

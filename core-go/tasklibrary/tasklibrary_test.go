@@ -99,22 +99,22 @@ func TestIssueForPermissionFailure(t *testing.T) {
 	}
 }
 
-func TestTaskTitleUsesFilenameThenTimestampFallback(t *testing.T) {
+func TestTaskTitleUsesUserTitleThenTimestampFallback(t *testing.T) {
 	manifest := manifestFor("task-id", "completed", "2026-07-14T10:00:00Z", "transcript")
 	manifest.Source.OriginalName = "  lecture.wav  "
-	if title, source := taskTitle(manifest); title != "lecture" || source != "filename" {
-		t.Fatalf("taskTitle() = %q (%s), want lecture (filename)", title, source)
-	}
-	manifest.Source.OriginalName = ""
 	if title, source := taskTitle(manifest); title != "Task 2026-07-14 08:00" || source != "fallback" {
 		t.Fatalf("taskTitle() = %q (%s), want timestamp fallback", title, source)
+	}
+	manifest.UserMetadata = &taskmanifest.UserMetadata{Title: "Lecture title"}
+	if title, source := taskTitle(manifest); title != "Lecture title" || source != "user" {
+		t.Fatalf("taskTitle() = %q (%s), want user title", title, source)
 	}
 }
 
 func TestDiscoverLifecycleAndArtifactPresentation(t *testing.T) {
 	root := t.TempDir()
 	completed := manifestFor("completed", "completed", "2026-07-14T10:00:00Z", "minutes")
-	completed.UserMetadata = &taskmanifest.UserMetadata{Title: "Research interview", Tags: []string{"访谈", "工作"}}
+	completed.UserMetadata = &taskmanifest.UserMetadata{Title: "Research interview", Description: "Customer discovery", Tags: []string{"访谈", "工作"}}
 	writeTask(t, root, "completed-folder", completed)
 
 	partial := manifestFor("partial", "completed_with_errors", "2026-07-14T09:00:00Z", "minutes")
@@ -147,6 +147,9 @@ func TestDiscoverLifecycleAndArtifactPresentation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(completedSummary.Tags, []string{"访谈", "工作"}) {
 		t.Errorf("tags = %v", completedSummary.Tags)
+	}
+	if completedSummary.Description != "Customer discovery" {
+		t.Errorf("description = %q", completedSummary.Description)
 	}
 	assertArtifactKinds(t, completedSummary.PrimaryArtifacts, []string{"minutes", "notes", "transcript"})
 	for _, artifact := range completedSummary.PrimaryArtifacts {
@@ -307,7 +310,7 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	m.CanonicalTranscript = &taskmanifest.CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "hash", HashContractVersion: 1, CreatedAt: "2026-07-16T01:00:00Z", ASRProvider: "mimo", ASRModel: "model", Status: "completed"}
 	m.Generations = []taskmanifest.GenerationRecord{
 		{GenerationID: "gen_1", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:10:00Z", UpdatedAt: "2026-07-16T01:10:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "one", Status: "completed", ArtifactReference: "generated/structured-notes/gen_1.md"},
-		{GenerationID: "gen_2", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:20:00Z", UpdatedAt: "2026-07-16T01:20:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
+		{GenerationID: "gen_2", TemplateID: "structured-notes", TemplateRevision: 2, TemplateDisplayName: "Renamed snapshot", TemplateInstructions: "notes", CreatedAt: "2026-07-16T01:20:00Z", UpdatedAt: "2026-07-16T01:20:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
 	}
 	writeTask(t, root, "v2", m)
 	result, err := Discover(root)
@@ -326,6 +329,9 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	}
 	if group.Latest.Provider != "deepseek" || group.Latest.Model != "model" {
 		t.Fatalf("generation provenance = %#v", group.Latest)
+	}
+	if group.Versions[0].TemplateRevision != 2 || group.Versions[0].TemplateDisplayName != "Renamed snapshot" || group.Latest.TemplateRevision != 1 || group.Latest.TemplateDisplayName != "Structured notes" {
+		t.Fatalf("generation template snapshots = %#v", group)
 	}
 }
 

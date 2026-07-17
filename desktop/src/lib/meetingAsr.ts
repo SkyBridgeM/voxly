@@ -114,6 +114,8 @@ export interface ArtifactSummary {
 
 export interface GenerationSummary {
   generation_id: string;
+  template_revision: number;
+  template_display_name: string;
   status: string;
   created_at: string;
   reference: string | null;
@@ -135,6 +137,7 @@ export interface TaskSummary {
   task_id: string;
   title: string;
   title_source: string;
+  description: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -146,6 +149,21 @@ export interface TaskSummary {
   canonical_transcript: ArtifactSummary | null;
   generated_content: GenerationGroup[];
   can_generate: boolean;
+}
+
+export interface TaskMetadata {
+  task_id: string;
+  title: string;
+  description: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskMetadataUpdate {
+  title: string;
+  description: string;
+  tags: string[];
 }
 
 export interface PromptTemplateSummary {
@@ -200,6 +218,17 @@ export async function getRuntimeInfo(): Promise<RuntimeInfo> {
 /** Returns presentation-safe Task Library data from the configured output root. */
 export async function listTasks(): Promise<DiscoveryResult> {
   return invoke<DiscoveryResult>("list_tasks");
+}
+
+export async function getTaskMetadata(taskId: string): Promise<TaskMetadata> {
+  return invoke<TaskMetadata>("get_task_metadata", { taskId });
+}
+
+export async function updateTaskMetadata(
+  taskId: string,
+  metadata: TaskMetadataUpdate
+): Promise<TaskMetadata> {
+  return invoke<TaskMetadata>("update_task_metadata", { taskId, metadata });
 }
 
 export async function listPromptTemplates(): Promise<PromptTemplateSummary[]> {
