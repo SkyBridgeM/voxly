@@ -1,6 +1,7 @@
-// Package tasklibrary provides a read-only presentation model over task folders.
-// TaskManifest files remain the source of truth; this package does not index,
-// cache, migrate, watch, or mutate tasks.
+// Package tasklibrary provides a presentation model and tightly scoped
+// user-metadata access over task folders. TaskManifest files remain the source
+// of truth; this package does not index, cache, migrate, watch, move, or delete
+// tasks or artifacts.
 package tasklibrary
 
 import (
@@ -28,6 +29,7 @@ type TaskSummary struct {
 	TaskID              string            `json:"task_id"`
 	Title               string            `json:"title"`
 	TitleSource         string            `json:"title_source"`
+	Description         string            `json:"description"`
 	Status              string            `json:"status"`
 	CreatedAt           string            `json:"created_at"`
 	UpdatedAt           string            `json:"updated_at"`
@@ -147,8 +149,10 @@ func Discover(root string) (DiscoveryResult, error) {
 
 func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) TaskSummary {
 	title, titleSource := taskTitle(manifest)
+	description := ""
 	tags := make([]string, 0)
 	if manifest.UserMetadata != nil {
+		description = manifest.UserMetadata.Description
 		tags = append(tags, manifest.UserMetadata.Tags...)
 	}
 	primary := primaryArtifacts(taskDir, manifest)
@@ -158,6 +162,7 @@ func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) 
 		TaskID:              manifest.TaskID,
 		Title:               title,
 		TitleSource:         titleSource,
+		Description:         description,
 		Status:              manifest.Status,
 		CreatedAt:           manifest.CreatedAt,
 		UpdatedAt:           manifest.UpdatedAt,
@@ -267,19 +272,10 @@ func taskTitle(manifest *taskmanifest.TaskManifest) (string, string) {
 			return title, "user"
 		}
 	}
-	if name := sanitizedFilenameTitle(manifest.Source.OriginalName); name != "" {
-		return name, "filename"
-	}
 	if createdAt, err := time.Parse(time.RFC3339, manifest.CreatedAt); err == nil {
 		return "Task " + createdAt.UTC().Format("2006-01-02 15:04"), "fallback"
 	}
 	return "Task " + manifest.TaskID, "fallback"
-}
-
-func sanitizedFilenameTitle(name string) string {
-	name = filepath.Base(strings.TrimSpace(name))
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	return strings.TrimSpace(name)
 }
 
 func primaryArtifacts(taskDir string, manifest *taskmanifest.TaskManifest) []ArtifactSummary {

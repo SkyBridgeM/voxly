@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listTasks,
   generateTaskContent,
   openTaskArtifact,
   revealTaskArtifact,
+  updateTaskMetadata,
   type ArtifactSummary,
   type DiscoveryResult,
   type TaskSummary,
   type PromptTemplateSummary,
   type ProviderSelection,
+  type TaskMetadataUpdate,
 } from "../lib/meetingAsr";
 
 export interface TaskLibraryLabels {
@@ -71,6 +73,20 @@ export interface TaskLibraryLabels {
   providerUnknown: string;
   providerNotReady: string;
   openSettings: string;
+  editMetadata: string;
+  taskTitle: string;
+  taskDescription: string;
+  descriptionPlaceholder: string;
+  addTag: string;
+  tagPlaceholder: string;
+  removeTag: string;
+  save: string;
+  cancel: string;
+  metadataSaveFailed: string;
+  sortBy: string;
+  sortUpdated: string;
+  sortCreated: string;
+  sortTitle: string;
 }
 
 interface TaskLibraryProps {
@@ -215,6 +231,9 @@ function TaskCard({
   generationError,
   onGenerate,
   llmReady,
+  metadataPending,
+  metadataError,
+  onUpdateMetadata,
 }: {
   task: TaskSummary;
   locale: "zh" | "en";
@@ -232,9 +251,38 @@ function TaskCard({
   generationError: string | null;
   onGenerate: (task: TaskSummary, templateId: string) => void;
   llmReady: boolean;
+  metadataPending: boolean;
+  metadataError: string | null;
+  onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>;
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(task.title_source === "user" ? task.title : "");
+  const [description, setDescription] = useState(task.description);
+  const [tags, setTags] = useState<string[]>(task.tags);
+  const [tagInput, setTagInput] = useState("");
   const transcript = task.canonical_transcript ?? task.primary_artifacts.find((artifact) => artifact.kind === "transcript") ?? null;
+
+  const beginEditing = () => {
+    setTitle(task.title_source === "user" ? task.title : "");
+    setDescription(task.description);
+    setTags([...task.tags]);
+    setTagInput("");
+    setEditing(true);
+  };
+
+  const addTag = () => {
+    const next = tagInput.trim();
+    if (!next || tags.includes(next) || tags.length >= 20) return;
+    setTags((current) => [...current, next]);
+    setTagInput("");
+  };
+
+  const saveMetadata = async () => {
+    const saved = await onUpdateMetadata(task, { title, description, tags });
+    if (saved) setEditing(false);
+  };
+
   return (
     <article className="library-task-card" aria-labelledby={`task-${task.task_id}`}>
       <div className="library-task-header">
@@ -256,6 +304,56 @@ function TaskCard({
         </span>
       </div>
 
+      {!editing && (
+        <div className="library-metadata-summary">
+          {task.description && <p>{task.description}</p>}
+          <button className="link-button" onClick={beginEditing} disabled={metadataPending}>
+            {labels.editMetadata}
+          </button>
+        </div>
+      )}
+
+      {editing && (
+        <form
+          className="library-metadata-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveMetadata();
+          }}
+        >
+          <label>
+            <span>{labels.taskTitle}</span>
+            <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={metadataPending} />
+          </label>
+          <label>
+            <span>{labels.taskDescription}</span>
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} placeholder={labels.descriptionPlaceholder} disabled={metadataPending} />
+          </label>
+          <div className="library-tag-editor">
+            <span>{labels.tags}</span>
+            {tags.length > 0 && (
+              <div className="library-tags">
+                {tags.map((tag, index) => (
+                  <span key={`${tag}-${index}`}>
+                    {tag}
+                    <button type="button" onClick={() => setTags((current) => current.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="library-tag-input">
+              <input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} maxLength={50} placeholder={labels.tagPlaceholder} disabled={metadataPending || tags.length >= 20} />
+              <button type="button" className="btn-secondary" onClick={addTag} disabled={metadataPending || !tagInput.trim() || tags.length >= 20}>{labels.addTag}</button>
+            </div>
+          </div>
+          <div className="library-metadata-actions">
+            <button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button>
+            <button type="button" className="btn-secondary" onClick={() => setEditing(false)} disabled={metadataPending}>{labels.cancel}</button>
+          </div>
+          {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
+        </form>
+      )}
+
       <div className="library-task-meta">
         <span>{labels.outputMode}: {outputModeLabel(task.output_mode, labels)}</span>
         {task.has_partial_errors && (
@@ -263,9 +361,9 @@ function TaskCard({
         )}
       </div>
 
-      {task.tags.length > 0 && (
+      {!editing && task.tags.length > 0 && (
         <div className="library-tags" aria-label={labels.tags}>
-          {task.tags.map((tag) => <span key={tag}>{tag}</span>)}
+          {task.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}
         </div>
       )}
 
@@ -322,8 +420,12 @@ export function TaskLibrary({
     () => new Map<string, string>()
   );
   const generationPendingRef = useRef(new Set<string>());
+  const metadataPendingRef = useRef(new Set<string>());
   const [generationPending, setGenerationPending] = useState(new Set<string>());
   const [generationErrors, setGenerationErrors] = useState(new Map<string, string>());
+  const [metadataPending, setMetadataPending] = useState(new Set<string>());
+  const [metadataErrors, setMetadataErrors] = useState(new Map<string, string>());
+  const [sortMode, setSortMode] = useState<"updated" | "created" | "title">("updated");
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) {
@@ -359,6 +461,7 @@ export function TaskLibrary({
       mountedRef.current = false;
       pendingRefreshRef.current = false;
       pendingArtifactActionsRef.current.clear();
+      metadataPendingRef.current.clear();
     };
   }, []);
 
@@ -423,6 +526,56 @@ export function TaskLibrary({
     }
   }, [deepseekApiKey, llmConfig, labels.generationFailed, refresh]);
 
+  const handleUpdateMetadata = useCallback(async (task: TaskSummary, metadata: TaskMetadataUpdate) => {
+    if (metadataPendingRef.current.has(task.task_id)) return false;
+    metadataPendingRef.current.add(task.task_id);
+    setMetadataPending((current) => new Set(current).add(task.task_id));
+    setMetadataErrors((current) => { const next = new Map(current); next.delete(task.task_id); return next; });
+    try {
+      const updated = await updateTaskMetadata(task.task_id, metadata);
+      if (!mountedRef.current) return false;
+      setResult((current) => current ? {
+        ...current,
+        tasks: current.tasks.map((item) => item.task_id === task.task_id ? {
+          ...item,
+          title: updated.title,
+          title_source: metadata.title.trim() ? "user" : "fallback",
+          description: updated.description,
+          tags: [...updated.tags],
+          updated_at: updated.updated_at,
+        } : item),
+      } : current);
+      void refresh();
+      return true;
+    } catch {
+      if (mountedRef.current) setMetadataErrors((current) => new Map(current).set(task.task_id, labels.metadataSaveFailed));
+      return false;
+    } finally {
+      metadataPendingRef.current.delete(task.task_id);
+      if (mountedRef.current) setMetadataPending((current) => { const next = new Set(current); next.delete(task.task_id); return next; });
+    }
+  }, [labels.metadataSaveFailed, refresh]);
+
+  const sortedTasks = useMemo(() => {
+    const tasks = result ? [...result.tasks] : [];
+    const timestamp = (value: string) => { const parsed = Date.parse(value); return Number.isNaN(parsed) ? null : parsed; };
+    tasks.sort((left, right) => {
+      let comparison = 0;
+      if (sortMode === "title") comparison = left.title.localeCompare(right.title, locale === "zh" ? "zh-CN" : "en", { sensitivity: "base" });
+      else {
+        const leftTime = timestamp(sortMode === "created" ? left.created_at : left.updated_at);
+        const rightTime = timestamp(sortMode === "created" ? right.created_at : right.updated_at);
+        if (leftTime !== null && rightTime !== null) comparison = rightTime - leftTime;
+        else if (leftTime !== null) comparison = -1;
+        else if (rightTime !== null) comparison = 1;
+      }
+      if (comparison !== 0) return comparison;
+      comparison = left.task_id.localeCompare(right.task_id);
+      return comparison !== 0 ? comparison : left.task_folder.localeCompare(right.task_folder);
+    });
+    return tasks;
+  }, [locale, result, sortMode]);
+
   return (
     <section className="task-library" aria-labelledby="task-library-title">
       <div className="library-heading">
@@ -431,14 +584,10 @@ export function TaskLibrary({
           <h2 id="task-library-title">{labels.taskLibraryTitle}</h2>
           <p>{labels.taskLibraryDescription}</p>
         </div>
-        <button
-          className="btn-secondary"
-          onClick={() => void refresh()}
-          disabled={loading}
-          aria-label={labels.refresh}
-        >
-          {loading && result ? labels.refreshing : labels.refresh}
-        </button>
+        <div className="library-heading-actions">
+          <label><span>{labels.sortBy}</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}><option value="updated">{labels.sortUpdated}</option><option value="created">{labels.sortCreated}</option><option value="title">{labels.sortTitle}</option></select></label>
+          <button className="btn-secondary" onClick={() => void refresh()} disabled={loading} aria-label={labels.refresh}>{loading && result ? labels.refreshing : labels.refresh}</button>
+        </div>
       </div>
 
       <div aria-live="polite" aria-atomic="true">
@@ -492,7 +641,7 @@ export function TaskLibrary({
 
       {result && result.tasks.length > 0 && (
         <div className="library-task-list" aria-busy={loading}>
-          {result.tasks.map((task) => (
+          {sortedTasks.map((task) => (
             <TaskCard
               key={`${task.task_id}:${task.task_folder}`}
               task={task}
@@ -506,6 +655,9 @@ export function TaskLibrary({
               generationError={generationErrors.get(task.task_folder) ?? null}
               onGenerate={handleGenerate}
               llmReady={llmReady}
+              metadataPending={metadataPending.has(task.task_id)}
+              metadataError={metadataErrors.get(task.task_id) ?? null}
+              onUpdateMetadata={handleUpdateMetadata}
             />
           ))}
         </div>

@@ -36,6 +36,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "get-task-metadata":
+		if err := runGetTaskMetadata(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "update-task-metadata":
+		if err := runUpdateTaskMetadata(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "list-templates":
 		if err := json.NewEncoder(os.Stdout).Encode(BuiltInTemplates()); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -69,6 +79,8 @@ Usage:
   meeting-asr-go transcribe <audio_path> [flags]
   meeting-asr-go resume <task_dir> [flags]
   meeting-asr-go list-tasks --output-root <path>
+  meeting-asr-go get-task-metadata --output-root <path> --task-id <id>
+  meeting-asr-go update-task-metadata --output-root <path> --task-id <id>
   meeting-asr-go list-templates
   meeting-asr-go list-providers
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
@@ -174,6 +186,53 @@ func runListTasks(args []string, stdout io.Writer) error {
 		return fmt.Errorf("encoding task library result: %w", err)
 	}
 	return nil
+}
+
+func metadataFlags(command string, args []string) (string, string, error) {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	outputRoot := fs.String("output-root", "", "Application-owned output root")
+	taskID := fs.String("task-id", "", "Stable Task identity")
+	if err := fs.Parse(args); err != nil {
+		return "", "", err
+	}
+	if fs.NArg() != 0 || !filepath.IsAbs(*outputRoot) || strings.TrimSpace(*taskID) == "" {
+		return "", "", fmt.Errorf("--output-root must be absolute and --task-id is required")
+	}
+	return *outputRoot, *taskID, nil
+}
+
+func runGetTaskMetadata(args []string, stdout io.Writer) error {
+	root, taskID, err := metadataFlags("get-task-metadata", args)
+	if err != nil {
+		return err
+	}
+	metadata, err := tasklibrary.ReadMetadata(root, taskID)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(metadata)
+}
+
+func runUpdateTaskMetadata(args []string, stdin io.Reader, stdout io.Writer) error {
+	root, taskID, err := metadataFlags("update-task-metadata", args)
+	if err != nil {
+		return err
+	}
+	var update tasklibrary.MetadataUpdate
+	decoder := json.NewDecoder(io.LimitReader(stdin, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&update); err != nil {
+		return fmt.Errorf("decode metadata update: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("metadata update must contain exactly one JSON document")
+	}
+	metadata, err := tasklibrary.UpdateMetadata(root, taskID, update)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(metadata)
 }
 
 // reorderArgs moves all flags (and their values) before positional arguments.

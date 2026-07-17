@@ -137,6 +137,18 @@ export interface Translations {
   outputMode: string;
   outputs: string;
   tags: string;
+  editMetadata: string;
+  taskTitle: string;
+  taskDescription: string;
+  descriptionPlaceholder: string;
+  addTag: string;
+  tagPlaceholder: string;
+  removeTag: string;
+  metadataSaveFailed: string;
+  sortBy: string;
+  sortUpdated: string;
+  sortCreated: string;
+  sortTitle: string;
   available: string;
   unavailable: string;
   artifactError: string;
@@ -322,6 +334,18 @@ export const translations: Record<Locale, Translations> = {
     outputMode: "输出模式",
     outputs: "主要输出",
     tags: "标签",
+    editMetadata: "编辑任务信息",
+    taskTitle: "任务名称",
+    taskDescription: "描述",
+    descriptionPlaceholder: "添加任务背景、重点或备注（可选）",
+    addTag: "添加",
+    tagPlaceholder: "输入标签",
+    removeTag: "移除标签",
+    metadataSaveFailed: "无法保存任务信息，请重试。",
+    sortBy: "排序",
+    sortUpdated: "最近更新",
+    sortCreated: "最近创建",
+    sortTitle: "名称",
     available: "可用",
     unavailable: "不可用",
     artifactError: "生成出错",
@@ -505,6 +529,18 @@ export const translations: Record<Locale, Translations> = {
     outputMode: "Output mode",
     outputs: "Primary outputs",
     tags: "Tags",
+    editMetadata: "Edit task details",
+    taskTitle: "Task title",
+    taskDescription: "Description",
+    descriptionPlaceholder: "Add optional context, highlights, or notes",
+    addTag: "Add",
+    tagPlaceholder: "Enter a tag",
+    removeTag: "Remove tag",
+    metadataSaveFailed: "Task details could not be saved. Try again.",
+    sortBy: "Sort by",
+    sortUpdated: "Recently updated",
+    sortCreated: "Recently created",
+    sortTitle: "Title",
     available: "Available",
     unavailable: "Unavailable",
     artifactError: "Generation error",

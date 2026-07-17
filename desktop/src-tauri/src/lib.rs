@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -390,6 +390,8 @@ struct TaskSummary {
     task_id: String,
     title: String,
     title_source: String,
+    #[serde(default)]
+    description: String,
     status: String,
     created_at: String,
     updated_at: String,
@@ -475,6 +477,23 @@ struct DiscoveryIssue {
 struct DiscoveryResult {
     tasks: Vec<TaskSummary>,
     issues: Vec<DiscoveryIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TaskMetadata {
+    task_id: String,
+    title: String,
+    description: String,
+    tags: Vec<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TaskMetadataUpdate {
+    title: String,
+    description: String,
+    tags: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2754,6 +2773,158 @@ async fn list_tasks(app: AppHandle) -> Result<DiscoveryResult, String> {
         })?
 }
 
+fn decode_task_metadata_output(
+    success: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+) -> Result<TaskMetadata, BackendError> {
+    if !success {
+        return Err(BackendError::ProcessFailed {
+            message: format!(
+                "Task metadata sidecar exited with code {}.",
+                code.unwrap_or(-1)
+            ),
+            code,
+        });
+    }
+    serde_json::from_slice(stdout).map_err(|_| BackendError::ProcessFailed {
+        message: "Task metadata sidecar returned invalid JSON.".to_string(),
+        code: Some(0),
+    })
+}
+
+fn run_task_metadata_sidecar(
+    binary: &Path,
+    command_name: &str,
+    output_root: &Path,
+    task_id: &str,
+    update: Option<&TaskMetadataUpdate>,
+) -> Result<TaskMetadata, BackendError> {
+    let mut command = Command::new(binary);
+    command
+        .arg(command_name)
+        .arg("--output-root")
+        .arg(output_root)
+        .arg("--task-id")
+        .arg(task_id)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if update.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = command.spawn().map_err(|_| BackendError::ProcessFailed {
+        message: "Could not start the Task metadata sidecar.".to_string(),
+        code: None,
+    })?;
+    if let Some(payload) = update {
+        let data = serde_json::to_vec(payload).map_err(|_| BackendError::InvalidInput {
+            message: "Task metadata is invalid.".to_string(),
+        })?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| BackendError::ProcessFailed {
+                message: "Task metadata sidecar input is unavailable.".to_string(),
+                code: None,
+            })?
+            .write_all(&data)
+            .map_err(|_| BackendError::ProcessFailed {
+                message: "Could not send Task metadata to the sidecar.".to_string(),
+                code: None,
+            })?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|_| BackendError::ProcessFailed {
+            message: "Task metadata sidecar did not complete.".to_string(),
+            code: None,
+        })?;
+    decode_task_metadata_output(
+        output.status.success(),
+        output.status.code(),
+        &output.stdout,
+    )
+}
+
+fn task_metadata_root(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    resolve_task_library_output_root(app)?.ok_or_else(|| BackendError::ArtifactUnavailable {
+        message: "Task Library is empty.".to_string(),
+    })
+}
+
+fn read_task_metadata_blocking(app: AppHandle, task_id: String) -> Result<TaskMetadata, String> {
+    let root = task_metadata_root(&app).map_err(String::from)?;
+    run_task_metadata_sidecar(
+        &go_sidecar_binary().map_err(String::from)?,
+        "get-task-metadata",
+        &root,
+        &task_id,
+        None,
+    )
+    .map_err(String::from)
+}
+
+#[tauri::command]
+async fn get_task_metadata(app: AppHandle, task_id: String) -> Result<TaskMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || read_task_metadata_blocking(app, task_id))
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Task metadata worker failed.".to_string(),
+                code: None,
+            })
+        })?
+}
+
+fn update_task_metadata_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    task_id: String,
+    metadata: TaskMetadataUpdate,
+) -> Result<TaskMetadata, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    let root = task_metadata_root(&app).map_err(String::from)?;
+    run_task_metadata_sidecar(
+        &go_sidecar_binary().map_err(String::from)?,
+        "update-task-metadata",
+        &root,
+        &task_id,
+        Some(&metadata),
+    )
+    .map_err(String::from)
+}
+
+fn validate_task_metadata_mutation_state(is_active: bool) -> Result<(), BackendError> {
+    if is_active {
+        return Err(BackendError::InvalidInput {
+            message: "Task metadata cannot be changed while processing.".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_task_metadata(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_id: String,
+    metadata: TaskMetadataUpdate,
+) -> Result<TaskMetadata, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        update_task_metadata_blocking(app, active, task_id, metadata)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task metadata worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
 fn go_sidecar_binary() -> Result<PathBuf, BackendError> {
     let runtime_mode = RuntimeMode::current();
     let packaged = if runtime_mode == RuntimeMode::Production {
@@ -3470,6 +3641,8 @@ pub fn run() {
             run_meeting_asr,
             resume_meeting_asr,
             list_tasks,
+            get_task_metadata,
+            update_task_metadata,
             list_prompt_templates,
             list_providers,
             generate_task_content,
@@ -4911,12 +5084,51 @@ mod tests {
         assert!(!encoded.contains("secret"));
     }
 
+    #[test]
+    fn test_task_metadata_transport_decodes_user_fields() {
+        let metadata = decode_task_metadata_output(
+            true,
+            Some(0),
+            br#"{"task_id":"task-1","title":"Interview","description":"Research","tags":["work"],"created_at":"2026-07-15T01:00:00Z","updated_at":"2026-07-17T02:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(metadata.task_id, "task-1");
+        assert_eq!(metadata.description, "Research");
+        assert_eq!(metadata.tags, vec!["work"]);
+    }
+
+    #[test]
+    fn test_task_metadata_transport_errors_are_safe() {
+        let malformed = decode_task_metadata_output(true, Some(0), b"private manifest content")
+            .unwrap_err()
+            .to_json_string();
+        assert!(malformed.contains("invalid JSON"));
+        assert!(!malformed.contains("private manifest content"));
+
+        let failed =
+            decode_task_metadata_output(false, Some(9), br#"{"api_key":"must-not-be-exposed"}"#)
+                .unwrap_err()
+                .to_json_string();
+        assert!(failed.contains(r#""code":9"#));
+        assert!(!failed.contains("api_key"));
+    }
+
+    #[test]
+    fn test_task_metadata_mutation_rejects_active_processing() {
+        assert!(validate_task_metadata_mutation_state(false).is_ok());
+        assert!(matches!(
+            validate_task_metadata_mutation_state(true),
+            Err(BackendError::InvalidInput { .. })
+        ));
+    }
+
     fn artifact_discovery(task_folder: &str, reference: &str) -> DiscoveryResult {
         DiscoveryResult {
             tasks: vec![TaskSummary {
                 task_id: "task-id".to_string(),
                 title: "Task".to_string(),
                 title_source: "fallback".to_string(),
+                description: String::new(),
                 status: "completed".to_string(),
                 created_at: "2026-07-15T01:00:00Z".to_string(),
                 updated_at: "2026-07-15T02:00:00Z".to_string(),
