@@ -18,7 +18,20 @@ const (
 	maxTemplateNameLength       = 120
 	maxTemplateDescription      = 1000
 	maxTemplateInstructions     = 20000
+	templateLockStaleAfter      = 5 * time.Minute
+	templateLockOwnerFilename   = "owner.json"
 )
+
+type templateStoreLockOwner struct {
+	Token     string `json:"token"`
+	PID       int    `json:"pid"`
+	CreatedAt int64  `json:"created_at_unix_nano"`
+}
+
+type templateStoreLock struct {
+	path  string
+	owner templateStoreLockOwner
+}
 
 type CustomTemplateRevision struct {
 	Revision     int    `json:"revision"`
@@ -123,7 +136,7 @@ func loadCustomTemplateStore(path string) (CustomTemplateStore, error) {
 func validateCustomTemplateStore(store CustomTemplateStore) error {
 	seen := make(map[string]bool)
 	for _, template := range store.Templates {
-		if !strings.HasPrefix(template.TemplateID, "custom-") || seen[template.TemplateID] || template.Status != "active" && template.Status != "deleted" || template.CurrentRevision < 1 {
+		if validateCustomTemplateID(template.TemplateID) != nil || seen[template.TemplateID] || template.Status != "active" && template.Status != "deleted" || template.CurrentRevision < 1 {
 			return fmt.Errorf("corrupted_template_storage: custom template storage is invalid")
 		}
 		seen[template.TemplateID] = true
@@ -136,6 +149,21 @@ func validateCustomTemplateStore(store CustomTemplateStore) error {
 			}
 			if _, err := validateTemplateInput(CustomTemplateInput{DisplayName: revision.DisplayName, Description: revision.Description, Instructions: revision.Instructions}); err != nil {
 				return fmt.Errorf("corrupted_template_storage: custom template revision is invalid")
+			}
+		}
+	}
+	return nil
+}
+
+func validateCustomTemplateID(id string) error {
+	const prefix = "custom-"
+	if len(id) != len(prefix)+32 || !strings.HasPrefix(id, prefix) {
+		return fmt.Errorf("invalid_template_id: custom template ID is invalid")
+	}
+	for _, char := range id[len(prefix):] {
+		if char < '0' || char > '9' {
+			if char < 'a' || char > 'f' {
+				return fmt.Errorf("invalid_template_id: custom template ID is invalid")
 			}
 		}
 	}
@@ -160,23 +188,142 @@ func saveCustomTemplateStore(path string, store CustomTemplateStore) error {
 	return nil
 }
 
-func withTemplateStoreLock(path string, fn func() error) error {
+func newTemplateStoreLockOwner() (templateStoreLockOwner, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return templateStoreLockOwner{}, fmt.Errorf("template_storage_write_failed: lock owner could not be created")
+	}
+	return templateStoreLockOwner{Token: hex.EncodeToString(raw[:]), PID: os.Getpid(), CreatedAt: time.Now().UnixNano()}, nil
+}
+
+func writeTemplateStoreLockOwner(lockPath string, owner templateStoreLockOwner) error {
+	data, err := json.Marshal(owner)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(lockPath, templateLockOwnerFilename), data, 0600)
+}
+
+func readTemplateStoreLockOwner(lockPath string) (templateStoreLockOwner, error) {
+	data, err := os.ReadFile(filepath.Join(lockPath, templateLockOwnerFilename))
+	if err != nil {
+		return templateStoreLockOwner{}, err
+	}
+	var owner templateStoreLockOwner
+	if err := json.Unmarshal(data, &owner); err != nil || owner.Token == "" || owner.PID <= 0 || owner.CreatedAt <= 0 {
+		return templateStoreLockOwner{}, fmt.Errorf("invalid lock owner")
+	}
+	return owner, nil
+}
+
+func recoverStaleTemplateStoreLock(lockPath string, staleAfter time.Duration) (bool, error) {
+	info, err := os.Stat(lockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	owner, ownerErr := readTemplateStoreLockOwner(lockPath)
+	createdAt := info.ModTime()
+	if ownerErr == nil {
+		createdAt = time.Unix(0, owner.CreatedAt)
+		if time.Since(createdAt) < staleAfter || processAlive(owner.PID) {
+			return false, nil
+		}
+	} else if time.Since(createdAt) < staleAfter {
+		return false, nil
+	}
+	quarantine := fmt.Sprintf("%s.stale-%d-%s", lockPath, os.Getpid(), mustRandomToken())
+	if err := os.Rename(lockPath, quarantine); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}
+	movedOwner, movedOwnerErr := readTemplateStoreLockOwner(quarantine)
+	ownershipChanged := ownerErr == nil && (movedOwnerErr != nil || movedOwner.Token != owner.Token)
+	if ownerErr != nil && movedOwnerErr == nil {
+		ownershipChanged = true
+	}
+	if ownershipChanged {
+		if _, statErr := os.Stat(lockPath); errors.Is(statErr, os.ErrNotExist) {
+			_ = os.Rename(quarantine, lockPath)
+		}
+		return false, nil
+	}
+	if err := os.RemoveAll(quarantine); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func mustRandomToken() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func acquireTemplateStoreLock(path string, staleAfter time.Duration) (*templateStoreLock, error) {
 	lockPath := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("template_storage_write_failed: custom template directory could not be created")
+		return nil, fmt.Errorf("template_storage_write_failed: custom template directory could not be created")
+	}
+	owner, err := newTemplateStoreLockOwner()
+	if err != nil {
+		return nil, err
 	}
 	for attempt := 0; attempt < 200; attempt++ {
 		err := os.Mkdir(lockPath, 0700)
 		if err == nil {
-			defer os.Remove(lockPath)
-			return fn()
+			if err := writeTemplateStoreLockOwner(lockPath, owner); err != nil {
+				_ = os.RemoveAll(lockPath)
+				return nil, fmt.Errorf("template_storage_write_failed: custom template lock owner could not be written")
+			}
+			return &templateStoreLock{path: lockPath, owner: owner}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("template_storage_write_failed: custom template storage could not be locked")
+			return nil, fmt.Errorf("template_storage_write_failed: custom template storage could not be locked")
+		}
+		if _, err := recoverStaleTemplateStoreLock(lockPath, staleAfter); err != nil {
+			return nil, fmt.Errorf("template_storage_write_failed: stale custom template lock could not be recovered")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return fmt.Errorf("revision_conflict: custom template storage is busy")
+	return nil, fmt.Errorf("revision_conflict: custom template storage is busy")
+}
+
+func (lock *templateStoreLock) Release() error {
+	owner, err := readTemplateStoreLockOwner(lock.path)
+	if err != nil || owner.Token != lock.owner.Token {
+		return nil
+	}
+	quarantine := fmt.Sprintf("%s.release-%d-%s", lock.path, os.Getpid(), lock.owner.Token)
+	if err := os.Rename(lock.path, quarantine); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	movedOwner, err := readTemplateStoreLockOwner(quarantine)
+	if err != nil || movedOwner.Token != lock.owner.Token {
+		if _, statErr := os.Stat(lock.path); errors.Is(statErr, os.ErrNotExist) {
+			_ = os.Rename(quarantine, lock.path)
+		}
+		return nil
+	}
+	return os.RemoveAll(quarantine)
+}
+
+func withTemplateStoreLock(path string, fn func() error) error {
+	lock, err := acquireTemplateStoreLock(path, templateLockStaleAfter)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	return fn()
 }
 
 func newCustomTemplateID() (string, error) {
@@ -220,6 +367,9 @@ func ListPromptTemplateCatalog(path string) TemplateCatalog {
 }
 
 func ResolveCustomPromptTemplate(path, id string) (PromptTemplate, error) {
+	if err := validateCustomTemplateID(id); err != nil {
+		return PromptTemplate{}, err
+	}
 	store, err := loadCustomTemplateStore(path)
 	if err != nil {
 		return PromptTemplate{}, err
@@ -272,8 +422,11 @@ func UpdateCustomPromptTemplate(path string, input UpdateCustomTemplateInput) (P
 	if err != nil {
 		return PromptTemplate{}, err
 	}
-	if !strings.HasPrefix(input.TemplateID, "custom-") {
-		return PromptTemplate{}, fmt.Errorf("builtin_mutation_forbidden: built-in templates are immutable")
+	if err := validateCustomTemplateID(input.TemplateID); err != nil {
+		if _, builtIn := builtInTemplates[input.TemplateID]; builtIn {
+			return PromptTemplate{}, fmt.Errorf("builtin_mutation_forbidden: built-in templates are immutable")
+		}
+		return PromptTemplate{}, err
 	}
 	var updated PromptTemplate
 	err = withTemplateStoreLock(path, func() error {
@@ -308,8 +461,11 @@ func UpdateCustomPromptTemplate(path string, input UpdateCustomTemplateInput) (P
 }
 
 func DeleteCustomPromptTemplate(path string, input DeleteCustomTemplateInput) error {
-	if !strings.HasPrefix(input.TemplateID, "custom-") {
-		return fmt.Errorf("builtin_mutation_forbidden: built-in templates are immutable")
+	if err := validateCustomTemplateID(input.TemplateID); err != nil {
+		if _, builtIn := builtInTemplates[input.TemplateID]; builtIn {
+			return fmt.Errorf("builtin_mutation_forbidden: built-in templates are immutable")
+		}
+		return err
 	}
 	return withTemplateStoreLock(path, func() error {
 		store, err := loadCustomTemplateStore(path)

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,61 @@ func relativeTaskReference(taskDir, path string) (string, error) {
 		return "", fmt.Errorf("artifact path is outside task folder")
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+func validateTemplateArtifactID(id string) error {
+	if _, ok := builtInTemplates[id]; ok {
+		return nil
+	}
+	return validateCustomTemplateID(id)
+}
+
+func validatedGeneratedArtifactPath(taskDir, templateID, generationID, extension string) (string, string, error) {
+	if err := validateTemplateArtifactID(templateID); err != nil {
+		return "", "", err
+	}
+	if extension != ".md" || generationID == "" {
+		return "", "", fmt.Errorf("generated artifact identity is invalid")
+	}
+	for _, char := range generationID {
+		if char != '_' && char != '-' && (char < '0' || char > '9') && (char < 'a' || char > 'z') {
+			return "", "", fmt.Errorf("generated artifact identity is invalid")
+		}
+	}
+	root, err := filepath.EvalSymlinks(taskDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve task folder: %w", err)
+	}
+	reference := filepath.Join("generated", templateID, generationID+extension)
+	target := filepath.Join(root, reference)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("artifact path is outside task folder")
+	}
+	existing := filepath.Dir(target)
+	for {
+		_, statErr := os.Lstat(existing)
+		if statErr == nil {
+			break
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", "", fmt.Errorf("generated artifact path is unsafe")
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", "", fmt.Errorf("generated artifact path is unsafe")
+		}
+		existing = parent
+	}
+	resolvedAncestor, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", "", fmt.Errorf("generated artifact path is unsafe")
+	}
+	ancestorRel, err := filepath.Rel(root, resolvedAncestor)
+	if err != nil || ancestorRel == ".." || filepath.IsAbs(ancestorRel) || strings.HasPrefix(ancestorRel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("generated artifact path is outside task folder")
+	}
+	return target, filepath.ToSlash(reference), nil
 }
 
 func validatedTaskFile(taskDir, reference string) (string, error) {
@@ -167,7 +223,11 @@ func GenerateContent(taskDir string, m *Manifest, templateID string, settings *S
 		failGenerationRecord(taskDir, m, index, "generation_failed", "Content generation provider request failed.", retryable)
 		return &m.Generations[index], fmt.Errorf("content generation provider request failed")
 	}
-	path := filepath.Join(taskDir, "generated", template.ID, generationID+template.Extension)
+	path, reference, err := validatedGeneratedArtifactPath(taskDir, template.ID, generationID, template.Extension)
+	if err != nil {
+		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact path is unsafe.", false)
+		return &m.Generations[index], err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact could not be written.", false)
 		return &m.Generations[index], fmt.Errorf("create generated artifact directory: %w", err)
@@ -175,10 +235,6 @@ func GenerateContent(taskDir string, m *Manifest, templateID string, settings *S
 	if err := WriteFileAtomically(path, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
 		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact could not be written.", false)
 		return &m.Generations[index], err
-	}
-	reference, err := relativeTaskReference(taskDir, path)
-	if err != nil {
-		return nil, err
 	}
 	m.Generations[index].Status = "completed"
 	m.Generations[index].ArtifactReference = reference
@@ -256,17 +312,17 @@ func ResumeOrGenerateContent(taskDir string, m *Manifest, settings *Settings, ge
 		failGenerationRecord(taskDir, m, index, "generation_failed", "Content generation provider request failed.", IsRetryableError(err))
 		return fmt.Errorf("content generation provider request failed")
 	}
-	path := filepath.Join(taskDir, "generated", template.ID, record.GenerationID+template.Extension)
+	path, reference, err := validatedGeneratedArtifactPath(taskDir, template.ID, record.GenerationID, template.Extension)
+	if err != nil {
+		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact path is unsafe.", false)
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact could not be written.", false)
 		return err
 	}
 	if err := WriteFileAtomically(path, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
 		failGenerationRecord(taskDir, m, index, "artifact_write_failed", "Generated artifact could not be written.", false)
-		return err
-	}
-	reference, err := relativeTaskReference(taskDir, path)
-	if err != nil {
 		return err
 	}
 	record.Status, record.Error, record.ArtifactReference, record.UpdatedAt = "completed", nil, reference, nowFunc().UTC().Format(time.RFC3339)

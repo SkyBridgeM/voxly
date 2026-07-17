@@ -3,17 +3,183 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func customStorePath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "templates", "custom_templates.json")
+}
+
+func TestCustomTemplateIDGrammarAndArtifactPathSafety(t *testing.T) {
+	valid := "custom-0123456789abcdef0123456789abcdef"
+	if err := validateCustomTemplateID(valid); err != nil {
+		t.Fatalf("valid ID rejected: %v", err)
+	}
+	invalid := []string{
+		"custom-../../escape",
+		"custom-/absolute",
+		"custom-abc",
+		"custom-0123456789abcdef0123456789abcde",
+		"custom-0123456789abcdef0123456789abc",
+		"custom-0123456789ABCDEF0123456789ABCDEF",
+		"custom-0123456789abcdef0123456789abcdeg",
+	}
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "task")
+	if err := os.Mkdir(taskDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range invalid {
+		t.Run(strings.ReplaceAll(id, "/", "_"), func(t *testing.T) {
+			if err := validateCustomTemplateID(id); err == nil {
+				t.Fatalf("invalid ID accepted: %q", id)
+			}
+			storePath := filepath.Join(root, strings.ReplaceAll(strings.ReplaceAll(id, "/", "_"), ".", "dot")+".json")
+			store := CustomTemplateStore{SchemaVersion: customTemplateSchemaVersion, Templates: []CustomTemplate{{TemplateID: id, Status: "active", CurrentRevision: 1, Revisions: []CustomTemplateRevision{{Revision: 1, DisplayName: "Unsafe", Instructions: "Unsafe", CreatedAt: time.Now().UTC().Format(time.RFC3339)}}}}}
+			data, err := json.Marshal(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(storePath, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadCustomTemplateStore(storePath); err == nil {
+				t.Fatalf("corrupted storage accepted ID %q", id)
+			}
+			if _, _, err := validatedGeneratedArtifactPath(taskDir, id, "gen_0123456789abcdef0123456789abcdef", ".md"); err == nil {
+				t.Fatalf("artifact path accepted ID %q", id)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(root, "escape")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("escape path was created: %v", err)
+	}
+}
+
+func TestGeneratedArtifactPathRejectsExistingSymlinkEscapeBeforeWrite(t *testing.T) {
+	root := t.TempDir()
+	taskDir, outside := filepath.Join(root, "task"), filepath.Join(root, "outside")
+	if err := os.MkdirAll(filepath.Join(taskDir, "generated"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	id := "custom-0123456789abcdef0123456789abcdef"
+	if err := os.Symlink(outside, filepath.Join(taskDir, "generated", id)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := validatedGeneratedArtifactPath(taskDir, id, "gen_0123456789abcdef0123456789abcdef", ".md"); err == nil {
+		t.Fatal("symlink escape was accepted")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outside directory changed: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestTemplateStoreLockNormalAcquireReleaseAndActiveProtection(t *testing.T) {
+	path := customStorePath(t)
+	lock, err := acquireTemplateStoreLock(path, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireTemplateStoreLock(path, time.Hour); err == nil || !strings.Contains(err.Error(), "revision_conflict") {
+		t.Fatalf("active lock was stolen: %v", err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock remains after release: %v", err)
+	}
+}
+
+func TestTemplateStoreLockDoesNotStealOldLiveOwner(t *testing.T) {
+	path := customStorePath(t)
+	lock, err := acquireTemplateStoreLock(path, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.owner.CreatedAt = time.Now().Add(-time.Hour).UnixNano()
+	if err := writeTemplateStoreLockOwner(lock.path, lock.owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireTemplateStoreLock(path, time.Millisecond); err == nil || !strings.Contains(err.Error(), "revision_conflict") {
+		t.Fatalf("live lock was stolen: %v", err)
+	}
+	_ = lock.Release()
+}
+
+func TestTemplateStoreLockRecoversCrashOrphan(t *testing.T) {
+	path := customStorePath(t)
+	lockPath := path + ".lock"
+	if err := os.MkdirAll(lockPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	orphan := templateStoreLockOwner{Token: "orphan", PID: 1 << 30, CreatedAt: time.Now().Add(-time.Hour).UnixNano()}
+	if err := writeTemplateStoreLockOwner(lockPath, orphan); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireTemplateStoreLock(path, time.Millisecond)
+	if err != nil {
+		t.Fatalf("orphan lock was not recovered: %v", err)
+	}
+	defer lock.Release()
+	if lock.owner.Token == orphan.Token {
+		t.Fatal("orphan ownership was reused")
+	}
+}
+
+func TestTemplateStoreLockRecoversOldCorruptMetadata(t *testing.T) {
+	path := customStorePath(t)
+	lockPath := path + ".lock"
+	if err := os.MkdirAll(lockPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireTemplateStoreLock(path, time.Millisecond)
+	if err != nil {
+		t.Fatalf("corrupt orphan lock was not recovered: %v", err)
+	}
+	_ = lock.Release()
+}
+
+func TestTemplateStoreUnlockDoesNotRemoveAnotherOwner(t *testing.T) {
+	path := customStorePath(t)
+	lock, err := acquireTemplateStoreLock(path, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath := lock.path + ".old"
+	if err := os.Rename(lock.path, oldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lock.path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	replacement := templateStoreLockOwner{Token: "replacement", PID: os.Getpid(), CreatedAt: time.Now().UnixNano()}
+	if err := writeTemplateStoreLockOwner(lock.path, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := readTemplateStoreLockOwner(lock.path)
+	if err != nil || owner.Token != replacement.Token {
+		t.Fatalf("replacement lock was removed: owner=%#v err=%v", owner, err)
+	}
 }
 
 func TestCustomTemplateCreateEditDeletePreservesRevisions(t *testing.T) {
