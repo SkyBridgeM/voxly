@@ -87,6 +87,10 @@ export interface TaskLibraryLabels {
   sortUpdated: string;
   sortCreated: string;
   sortTitle: string;
+  filterByTag: string;
+  allTasks: string;
+  taskDetails: string;
+  existingTags: string;
 }
 
 interface TaskLibraryProps {
@@ -234,6 +238,7 @@ function TaskCard({
   metadataPending,
   metadataError,
   onUpdateMetadata,
+  tagSuggestions,
 }: {
   task: TaskSummary;
   locale: "zh" | "en";
@@ -254,40 +259,90 @@ function TaskCard({
   metadataPending: boolean;
   metadataError: string | null;
   onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>;
+  tagSuggestions: readonly string[];
 }) {
   const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(task.title_source === "user" ? task.title : "");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(task.title_source === "user" ? task.title : "");
   const [description, setDescription] = useState(task.description);
   const [tags, setTags] = useState<string[]>(task.tags);
   const [tagInput, setTagInput] = useState("");
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const transcript = task.canonical_transcript ?? task.primary_artifacts.find((artifact) => artifact.kind === "transcript") ?? null;
 
-  const beginEditing = () => {
-    setTitle(task.title_source === "user" ? task.title : "");
+  const beginTitleEditing = () => {
+    setTitleDraft(task.title_source === "user" ? task.title : "");
+    setEditingTitle(true);
+  };
+
+  const cancelTitleEditing = () => {
+    setTitleDraft(task.title_source === "user" ? task.title : "");
+    setEditingTitle(false);
+  };
+
+  const saveTitle = async () => {
+    const saved = await onUpdateMetadata(task, {
+      title: titleDraft,
+      description: task.description,
+      tags: task.tags,
+    });
+    if (saved) setEditingTitle(false);
+  };
+
+  const beginDetailsEditing = () => {
     setDescription(task.description);
     setTags([...task.tags]);
     setTagInput("");
-    setEditing(true);
   };
 
-  const addTag = () => {
-    const next = tagInput.trim();
+  const addTag = (value = tagInput) => {
+    const next = value.trim();
     if (!next || tags.includes(next) || tags.length >= 20) return;
     setTags((current) => [...current, next]);
     setTagInput("");
   };
 
-  const saveMetadata = async () => {
-    const saved = await onUpdateMetadata(task, { title, description, tags });
-    if (saved) setEditing(false);
+  const saveDetails = async () => {
+    const saved = await onUpdateMetadata(task, {
+      title: task.title_source === "user" ? task.title : "",
+      description,
+      tags,
+    });
+    if (saved) detailsRef.current?.removeAttribute("open");
   };
+
+  const visibleTagSuggestions = tagSuggestions
+    .filter((tag) => !tags.includes(tag))
+    .filter((tag) => !tagInput.trim() || tag.toLocaleLowerCase().includes(tagInput.trim().toLocaleLowerCase()))
+    .slice(0, 8);
 
   return (
     <article className="library-task-card" aria-labelledby={`task-${task.task_id}`}>
       <div className="library-task-header">
-        <div>
-          <h3 id={`task-${task.task_id}`}>{task.title}</h3>
+        <div className="library-task-identity">
+          {editingTitle ? (
+            <form className="library-title-form" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}>
+              <input
+                id={`task-${task.task_id}`}
+                autoFocus
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelTitleEditing(); } }}
+                maxLength={200}
+                aria-label={labels.taskTitle}
+                placeholder={task.title}
+                disabled={metadataPending}
+              />
+              <button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button>
+              <button type="button" className="btn-secondary" onClick={cancelTitleEditing} disabled={metadataPending}>{labels.cancel}</button>
+            </form>
+          ) : (
+            <h3 id={`task-${task.task_id}`}>
+              <button className="library-title-button" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`}>
+                {task.title}<span className="library-title-edit-mark" aria-hidden="true">✎</span>
+              </button>
+            </h3>
+          )}
           <div className="library-task-time">
             <span>
               {labels.updatedAt}: {formatDate(task.updated_at, locale, labels.invalidDate)}
@@ -304,55 +359,8 @@ function TaskCard({
         </span>
       </div>
 
-      {!editing && (
-        <div className="library-metadata-summary">
-          {task.description && <p>{task.description}</p>}
-          <button className="link-button" onClick={beginEditing} disabled={metadataPending}>
-            {labels.editMetadata}
-          </button>
-        </div>
-      )}
-
-      {editing && (
-        <form
-          className="library-metadata-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void saveMetadata();
-          }}
-        >
-          <label>
-            <span>{labels.taskTitle}</span>
-            <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} disabled={metadataPending} />
-          </label>
-          <label>
-            <span>{labels.taskDescription}</span>
-            <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} placeholder={labels.descriptionPlaceholder} disabled={metadataPending} />
-          </label>
-          <div className="library-tag-editor">
-            <span>{labels.tags}</span>
-            {tags.length > 0 && (
-              <div className="library-tags">
-                {tags.map((tag, index) => (
-                  <span key={`${tag}-${index}`}>
-                    {tag}
-                    <button type="button" onClick={() => setTags((current) => current.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="library-tag-input">
-              <input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} maxLength={50} placeholder={labels.tagPlaceholder} disabled={metadataPending || tags.length >= 20} />
-              <button type="button" className="btn-secondary" onClick={addTag} disabled={metadataPending || !tagInput.trim() || tags.length >= 20}>{labels.addTag}</button>
-            </div>
-          </div>
-          <div className="library-metadata-actions">
-            <button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button>
-            <button type="button" className="btn-secondary" onClick={() => setEditing(false)} disabled={metadataPending}>{labels.cancel}</button>
-          </div>
-          {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
-        </form>
-      )}
+      {task.description && <p className="library-description-preview" title={task.description}>{task.description}</p>}
+      {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
 
       <div className="library-task-meta">
         <span>{labels.outputMode}: {outputModeLabel(task.output_mode, labels)}</span>
@@ -361,7 +369,7 @@ function TaskCard({
         )}
       </div>
 
-      {!editing && task.tags.length > 0 && (
+      {task.tags.length > 0 && (
         <div className="library-tags" aria-label={labels.tags}>
           {task.tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}
         </div>
@@ -387,6 +395,29 @@ function TaskCard({
       </div>
 
       {task.generated_content.length > 0 && <div className="library-generated"><h4>{labels.generatedContent}</h4>{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div>}
+
+      <details ref={detailsRef} className="library-task-details" onToggle={(event) => { if (event.currentTarget.open) beginDetailsEditing(); }}>
+        <summary>{labels.taskDetails}</summary>
+        <form className="library-details-form" onSubmit={(event) => { event.preventDefault(); void saveDetails(); }}>
+          <label>
+            <span>{labels.taskDescription}</span>
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} placeholder={labels.descriptionPlaceholder} disabled={metadataPending} />
+          </label>
+          <div className="library-tag-editor">
+            <span>{labels.tags}</span>
+            {tags.length > 0 && <div className="library-tags">{tags.map((tag, index) => <span key={`${tag}-${index}`}>{tag}<button type="button" onClick={() => setTags((current) => current.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button></span>)}</div>}
+            <div className="library-tag-input">
+              <input value={tagInput} onChange={(event) => setTagInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} maxLength={50} placeholder={labels.tagPlaceholder} disabled={metadataPending || tags.length >= 20} />
+              <button type="button" className="btn-secondary" onClick={() => addTag()} disabled={metadataPending || !tagInput.trim() || tags.includes(tagInput.trim()) || tags.length >= 20}>{labels.addTag}</button>
+            </div>
+            {visibleTagSuggestions.length > 0 && <div className="library-tag-suggestions"><span>{labels.existingTags}</span><div>{visibleTagSuggestions.map((tag) => <button type="button" key={tag} onClick={() => addTag(tag)} disabled={metadataPending}>+ {tag}</button>)}</div></div>}
+          </div>
+          <div className="library-metadata-actions">
+            <button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button>
+            <button type="button" className="btn-secondary" onClick={() => detailsRef.current?.removeAttribute("open")} disabled={metadataPending}>{labels.cancel}</button>
+          </div>
+        </form>
+      </details>
 
       {task.can_generate && <div className="task-generation-action"><label htmlFor={`template-${task.task_id}`}>{labels.templateLabel}</label><select id={`template-${task.task_id}`} value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}>{templates.map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</select><button className="btn-secondary" disabled={generationPending || templates.length === 0 || !llmReady} onClick={() => onGenerate(task, selectedTemplate)}>{generationPending ? labels.generatingContent : task.generated_content.some((group) => group.template_id === selectedTemplate) ? labels.generateAgain : labels.generateContent}</button>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}
     </article>
@@ -426,6 +457,7 @@ export function TaskLibrary({
   const [metadataPending, setMetadataPending] = useState(new Set<string>());
   const [metadataErrors, setMetadataErrors] = useState(new Map<string, string>());
   const [sortMode, setSortMode] = useState<"updated" | "created" | "title">("updated");
+  const [tagFilter, setTagFilter] = useState("");
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) {
@@ -556,8 +588,16 @@ export function TaskLibrary({
     }
   }, [labels.metadataSaveFailed, refresh]);
 
+  const tagSuggestions = useMemo(() => {
+    const tags = new Set<string>();
+    result?.tasks.forEach((task) => task.tags.forEach((tag) => tags.add(tag)));
+    return [...tags].sort((left, right) => left.localeCompare(right, locale === "zh" ? "zh-CN" : "en", { sensitivity: "base" }));
+  }, [locale, result]);
+
+  const effectiveTagFilter = tagSuggestions.includes(tagFilter) ? tagFilter : "";
+
   const sortedTasks = useMemo(() => {
-    const tasks = result ? [...result.tasks] : [];
+    const tasks = result ? result.tasks.filter((task) => !effectiveTagFilter || task.tags.includes(effectiveTagFilter)) : [];
     const timestamp = (value: string) => { const parsed = Date.parse(value); return Number.isNaN(parsed) ? null : parsed; };
     tasks.sort((left, right) => {
       let comparison = 0;
@@ -574,7 +614,7 @@ export function TaskLibrary({
       return comparison !== 0 ? comparison : left.task_folder.localeCompare(right.task_folder);
     });
     return tasks;
-  }, [locale, result, sortMode]);
+  }, [effectiveTagFilter, locale, result, sortMode]);
 
   return (
     <section className="task-library" aria-labelledby="task-library-title">
@@ -585,6 +625,7 @@ export function TaskLibrary({
           <p>{labels.taskLibraryDescription}</p>
         </div>
         <div className="library-heading-actions">
+          <label><span>{labels.filterByTag}</span><select value={effectiveTagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">{labels.allTasks}</option>{tagSuggestions.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           <label><span>{labels.sortBy}</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}><option value="updated">{labels.sortUpdated}</option><option value="created">{labels.sortCreated}</option><option value="title">{labels.sortTitle}</option></select></label>
           <button className="btn-secondary" onClick={() => void refresh()} disabled={loading} aria-label={labels.refresh}>{loading && result ? labels.refreshing : labels.refresh}</button>
         </div>
@@ -658,6 +699,7 @@ export function TaskLibrary({
               metadataPending={metadataPending.has(task.task_id)}
               metadataError={metadataErrors.get(task.task_id) ?? null}
               onUpdateMetadata={handleUpdateMetadata}
+              tagSuggestions={tagSuggestions}
             />
           ))}
         </div>

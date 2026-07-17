@@ -149,6 +149,10 @@ export interface Translations {
   sortUpdated: string;
   sortCreated: string;
   sortTitle: string;
+  filterByTag: string;
+  allTasks: string;
+  taskDetails: string;
+  existingTags: string;
   available: string;
   unavailable: string;
   artifactError: string;
@@ -346,6 +350,10 @@ export const translations: Record<Locale, Translations> = {
     sortUpdated: "最近更新",
     sortCreated: "最近创建",
     sortTitle: "名称",
+    filterByTag: "标签筛选",
+    allTasks: "全部任务",
+    taskDetails: "任务详情",
+    existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
     artifactError: "生成出错",
@@ -541,6 +549,10 @@ export const translations: Record<Locale, Translations> = {
     sortUpdated: "Recently updated",
     sortCreated: "Recently created",
     sortTitle: "Title",
+    filterByTag: "Filter by tag",
+    allTasks: "All tasks",
+    taskDetails: "Task details",
+    existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",
     artifactError: "Generation error",
