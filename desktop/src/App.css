@@ -800,6 +800,20 @@ button {
   overflow-wrap: anywhere;
 }
 
+.library-details-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.library-details-title .library-title-form {
+  margin-top: 4px;
+}
+
+.library-details-title .library-title-form input {
+  min-width: min(260px, 55vw);
+  font-size: 1rem;
+}
+
 .library-full-time {
   justify-content: flex-start;
   flex-wrap: wrap;
