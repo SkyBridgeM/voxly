@@ -766,17 +766,29 @@ button {
   margin-top: 0;
 }
 
-.library-quick-tag-form {
+.library-tag-panel {
+  display: grid;
+  gap: 9px;
+  width: min(360px, 100%);
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.library-tag-panel > input {
+  width: 100%;
+  min-height: 34px;
+}
+
+.library-tag-panel-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 7px;
 }
 
-.library-quick-tag-form input {
-  width: min(190px, 45vw);
-  min-height: 32px;
-}
-
-.library-quick-tag-form button {
+.library-tag-panel-actions button,
+.library-quick-tags > .btn-secondary {
   min-height: 32px;
   white-space: nowrap;
 }
