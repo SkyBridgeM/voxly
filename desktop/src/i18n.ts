@@ -152,6 +152,12 @@ export interface Translations {
   filterByTag: string;
   allTasks: string;
   taskDetails: string;
+  openTaskDetails: string;
+  backToTaskLibrary: string;
+  transcriptSummary: string;
+  generatedArtifactCount: string;
+  saveTitle: string;
+  cancelTitleEdit: string;
   existingTags: string;
   available: string;
   unavailable: string;
@@ -353,6 +359,12 @@ export const translations: Record<Locale, Translations> = {
     filterByTag: "标签筛选",
     allTasks: "全部任务",
     taskDetails: "任务详情",
+    openTaskDetails: "打开任务详情",
+    backToTaskLibrary: "返回任务库",
+    transcriptSummary: "转写",
+    generatedArtifactCount: "生成内容",
+    saveTitle: "保存任务名称",
+    cancelTitleEdit: "取消编辑任务名称",
     existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
@@ -552,6 +564,12 @@ export const translations: Record<Locale, Translations> = {
     filterByTag: "Filter by tag",
     allTasks: "All tasks",
     taskDetails: "Task details",
+    openTaskDetails: "Open task details",
+    backToTaskLibrary: "Back to Task Library",
+    transcriptSummary: "Transcript",
+    generatedArtifactCount: "Generated artifacts",
+    saveTitle: "Save task title",
+    cancelTitleEdit: "Cancel title editing",
     existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",

@@ -549,6 +549,27 @@ button {
   font-size: 0.66rem;
 }
 
+.library-title-form .library-title-icon {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+
+.library-title-icon.save {
+  color: var(--success);
+  border-color: var(--success-border);
+  background: var(--success-soft);
+}
+
+.library-title-icon.cancel {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
 .library-task-time {
   display: flex;
   flex-wrap: wrap;
@@ -691,6 +712,82 @@ button {
   margin-top: 12px;
   color: var(--text-secondary);
   font-size: 0.72rem;
+}
+
+.library-card-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 16px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.library-tag-summary {
+  margin-top: 9px;
+}
+
+.library-open-details {
+  margin-top: 13px;
+  min-height: 32px;
+}
+
+.library-details-view {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-card);
+}
+
+.library-back {
+  width: fit-content;
+}
+
+.library-details-heading,
+.library-section-heading,
+.library-full-time {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.library-details-heading h2 {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  overflow-wrap: anywhere;
+}
+
+.library-full-time {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.library-details-section {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.library-details-section > h3,
+.library-section-heading h3 {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.library-details-section .library-details-form {
+  margin-top: 10px;
+}
+
+.library-generation-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .library-partial-error {
