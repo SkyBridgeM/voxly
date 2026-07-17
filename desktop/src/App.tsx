@@ -37,6 +37,7 @@ import { RunControls } from "./components/RunControls";
 import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
+import { TemplateManager } from "./components/TemplateManager";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
@@ -66,6 +67,7 @@ function App() {
   const [audioPath, setAudioPath] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript_only");
   const [templates, setTemplates] = useState<PromptTemplateSummary[]>([]);
+  const [templateIssues, setTemplateIssues] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState("structured-notes");
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
@@ -237,15 +239,14 @@ function App() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    listPromptTemplates().then((next) => {
-      if (!active) return;
-      setTemplates(next);
-      if (next.length > 0 && !next.some((template) => template.id === templateId)) setTemplateId(next[0].id);
-    }).catch(() => { if (active) setTemplates([]); });
-    return () => { active = false; };
+  const refreshTemplates = useCallback(async () => {
+    const catalog = await listPromptTemplates();
+    setTemplates(catalog.templates);
+    setTemplateIssues(catalog.issues.map((issue) => issue.message));
+    setTemplateId((current) => catalog.templates.some((template) => template.id === current) ? current : catalog.templates[0]?.id ?? "");
   }, []);
+
+  useEffect(() => { void refreshTemplates().catch(() => { setTemplates([]); setTemplateIssues([t.templateSaveFailed]); }); }, [refreshTemplates]);
 
   useEffect(() => {
     if (!showSettings) return;
@@ -753,6 +754,8 @@ function App() {
                     generatedWithProvider: t.generatedWithProvider,
                     providerNotReady: t.providerNotReady,
                     openSettings: t.openSettings,
+                    builtInTemplates: t.builtInTemplates,
+                    myTemplates: t.myTemplates,
                   }}
                 />
               </div>
@@ -1217,9 +1220,15 @@ function App() {
               </section>
 
               <section className="settings-section">
+                <div className="settings-section-header"><div className="settings-section-title"><span>06</span><div><h3>{t.settingsTemplates}</h3><p>{t.settingsTemplatesDesc}</p></div></div></div>
+                {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
+                <TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} />
+              </section>
+
+              <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
-                    <span>06</span>
+                    <span>07</span>
                     <div>
                       <h3>{t.settingsOutputLocation}</h3>
                       <p>{t.settingsOutputLocationDesc}</p>

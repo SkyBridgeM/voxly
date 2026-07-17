@@ -130,7 +130,7 @@ func GenerateContent(taskDir string, m *Manifest, templateID string, settings *S
 	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
 		return nil, err
 	}
-	template, err := LookupPromptTemplate(templateID)
+	template, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, templateID)
 	if err != nil {
 		return nil, err
 	}
@@ -225,12 +225,7 @@ func ResumeOrGenerateContent(taskDir string, m *Manifest, settings *Settings, ge
 	if !eligible {
 		return nil
 	}
-	template, err := LookupPromptTemplate(record.TemplateID)
-	if err != nil {
-		return err
-	}
-	template.Revision = record.TemplateRevision
-	template.Instructions = record.TemplateInstructions
+	template := PromptTemplate{ID: record.TemplateID, Revision: record.TemplateRevision, DisplayName: map[string]string{"en": record.TemplateDisplayName, "zh": record.TemplateDisplayName}, Instructions: record.TemplateInstructions, ContentType: "text/markdown", Extension: ".md"}
 	if m.CanonicalTranscript == nil || m.CanonicalTranscript.Status != "completed" {
 		return fmt.Errorf("canonical transcript is not completed")
 	}

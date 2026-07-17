@@ -47,7 +47,22 @@ func main() {
 			os.Exit(1)
 		}
 	case "list-templates":
-		if err := json.NewEncoder(os.Stdout).Encode(BuiltInTemplates()); err != nil {
+		if err := runListTemplates(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "create-custom-template":
+		if err := runCreateCustomTemplate(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "update-custom-template":
+		if err := runUpdateCustomTemplate(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "delete-custom-template":
+		if err := runDeleteCustomTemplate(os.Args[2:], os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -81,7 +96,10 @@ Usage:
   meeting-asr-go list-tasks --output-root <path>
   meeting-asr-go get-task-metadata --output-root <path> --task-id <id>
   meeting-asr-go update-task-metadata --output-root <path> --task-id <id>
-  meeting-asr-go list-templates
+  meeting-asr-go list-templates [--templates-file <path>]
+  meeting-asr-go create-custom-template --templates-file <path>
+  meeting-asr-go update-custom-template --templates-file <path>
+  meeting-asr-go delete-custom-template --templates-file <path>
   meeting-asr-go list-providers
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
 
@@ -112,14 +130,12 @@ func runGenerateContent(args []string) error {
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 	envFile := fs.String("env-file", "", "Explicit .env path")
 	projectRoot := fs.String("project-root", "", "Project root")
+	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || !filepath.IsAbs(*taskDir) {
 		return fmt.Errorf("--task-dir must be an absolute path")
-	}
-	if _, err := LookupPromptTemplate(*templateID); err != nil {
-		return err
 	}
 	lock, err := AcquireTaskLock(*taskDir)
 	if err != nil {
@@ -139,6 +155,10 @@ func runGenerateContent(args []string) error {
 	}
 	settings.LLMProvider = *llmProvider
 	settings.DeepSeekModel = *llmModel
+	settings.TemplateStorePath = *templatesFile
+	if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
+		return err
+	}
 	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
 		return err
 	}
@@ -159,6 +179,99 @@ func runGenerateContent(args []string) error {
 	}
 	fmt.Printf("Generated artifact: %s\n", record.ArtifactReference)
 	return nil
+}
+
+func parseTemplatesFile(args []string, command string) (string, error) {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("templates-file", "", "Application-owned custom template storage")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", fmt.Errorf("%s does not accept positional arguments", command)
+	}
+	if strings.TrimSpace(*path) != "" && !filepath.IsAbs(*path) {
+		return "", fmt.Errorf("--templates-file must be an absolute path")
+	}
+	return *path, nil
+}
+
+func decodeTemplateInput(stdin io.Reader, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(stdin, 64*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("invalid_template_input: request JSON is invalid")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("invalid_template_input: exactly one JSON document is required")
+	}
+	return nil
+}
+
+func runListTemplates(args []string, stdout io.Writer) error {
+	path, err := parseTemplatesFile(args, "list-templates")
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(ListPromptTemplateCatalog(path))
+}
+
+func runCreateCustomTemplate(args []string, stdin io.Reader, stdout io.Writer) error {
+	path, err := parseTemplatesFile(args, "create-custom-template")
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("--templates-file is required")
+	}
+	var input CustomTemplateInput
+	if err := decodeTemplateInput(stdin, &input); err != nil {
+		return err
+	}
+	template, err := CreateCustomPromptTemplate(path, input)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(template)
+}
+
+func runUpdateCustomTemplate(args []string, stdin io.Reader, stdout io.Writer) error {
+	path, err := parseTemplatesFile(args, "update-custom-template")
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("--templates-file is required")
+	}
+	var input UpdateCustomTemplateInput
+	if err := decodeTemplateInput(stdin, &input); err != nil {
+		return err
+	}
+	template, err := UpdateCustomPromptTemplate(path, input)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(template)
+}
+
+func runDeleteCustomTemplate(args []string, stdin io.Reader, stdout io.Writer) error {
+	path, err := parseTemplatesFile(args, "delete-custom-template")
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("--templates-file is required")
+	}
+	var input DeleteCustomTemplateInput
+	if err := decodeTemplateInput(stdin, &input); err != nil {
+		return err
+	}
+	if err := DeleteCustomPromptTemplate(path, input); err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(map[string]bool{"deleted": true})
 }
 
 func runListTasks(args []string, stdout io.Writer) error {
@@ -270,6 +383,7 @@ func runTranscribe(args []string) error {
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	outputMode := fs.String("output-mode", "transcript", "Output mode")
 	templateID := fs.String("template-id", "structured-notes", "Built-in generation template")
+	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
 	outputDir := fs.String("output-dir", "output", "Base output directory")
 	chunkMinutes := fs.Int("chunk-minutes", 0, "Chunk length in minutes (0 = use .env or default)")
 	maxUploadMB := fs.Float64("max-upload-mb", 0, "Max upload size in MB (0 = use .env or default)")
@@ -398,6 +512,12 @@ func runTranscribe(args []string) error {
 		return fmt.Errorf("resolving output dir: %w", err)
 	}
 
+	settings.TemplateStorePath = *templatesFile
+	if *outputMode == "transcript_and_generate" {
+		if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
+			return err
+		}
+	}
 	// Run the workflow.
 	return runWorkflowV2(absAudio, absOutput, settings, *outputMode, *templateID)
 }
@@ -411,8 +531,8 @@ func normalizeProcessingSelection(mode, templateID string) (string, string, erro
 	case "minutes":
 		return "transcript_and_generate", "meeting-minutes", nil
 	case "transcript_and_generate":
-		if _, err := LookupPromptTemplate(templateID); err != nil {
-			return "", "", err
+		if strings.TrimSpace(templateID) == "" {
+			return "", "", fmt.Errorf("template_id is required")
 		}
 		return mode, templateID, nil
 	default:

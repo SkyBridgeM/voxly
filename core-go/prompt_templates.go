@@ -24,6 +24,12 @@ type PromptTemplate struct {
 	ContentType  string            `json:"content_type"`
 	Extension    string            `json:"extension"`
 	BuiltIn      bool              `json:"built_in"`
+	Ownership    string            `json:"ownership"`
+	Status       string            `json:"status"`
+	CanEdit      bool              `json:"can_edit"`
+	CanDelete    bool              `json:"can_delete"`
+	CreatedAt    string            `json:"created_at,omitempty"`
+	UpdatedAt    string            `json:"updated_at,omitempty"`
 }
 
 var builtInTemplates = map[string]PromptTemplate{
@@ -41,9 +47,22 @@ func BuiltInTemplates() []PromptTemplate {
 	sort.Strings(ids)
 	out := make([]PromptTemplate, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, builtInTemplates[id])
+		template := builtInTemplates[id]
+		template.Ownership, template.Status = "builtin", "active"
+		out = append(out, template)
 	}
 	return out
+}
+
+func LookupPromptTemplateWithStore(path, id string) (PromptTemplate, error) {
+	if template, ok := builtInTemplates[id]; ok {
+		template.Ownership, template.Status = "builtin", "active"
+		return template, nil
+	}
+	if strings.TrimSpace(path) == "" {
+		return PromptTemplate{}, fmt.Errorf("unknown template_id %q", id)
+	}
+	return ResolveCustomPromptTemplate(path, id)
 }
 
 func LookupPromptTemplate(id string) (PromptTemplate, error) {

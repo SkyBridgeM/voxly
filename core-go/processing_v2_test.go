@@ -137,6 +137,41 @@ func TestGenerationSnapshotsEffectiveProviderConfiguration(t *testing.T) {
 	}
 }
 
+func TestCustomTemplateGenerationSnapshotsImmutableRevision(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	storePath := customStorePath(t)
+	created, err := CreateCustomPromptTemplate(storePath, CustomTemplateInput{DisplayName: "Research brief", Instructions: "Summarize research evidence."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := DefaultSettings()
+	settings.TemplateStorePath = storePath
+	first, err := GenerateContent(taskDir, m, created.ID, settings, fakeContentGenerator{text: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := UpdateCustomPromptTemplate(storePath, UpdateCustomTemplateInput{TemplateID: created.ID, ExpectedCurrentRevision: 1, CustomTemplateInput: CustomTemplateInput{DisplayName: "Research brief revised", Instructions: "Summarize evidence and risks."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := GenerateContent(taskDir, m, created.ID, settings, fakeContentGenerator{text: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.TemplateRevision != 1 || first.TemplateDisplayName != "Research brief" || second.TemplateRevision != 2 || second.TemplateDisplayName != "Research brief revised" {
+		t.Fatalf("snapshots first=%#v second=%#v", first, second)
+	}
+	if err := DeleteCustomPromptTemplate(storePath, DeleteCustomTemplateInput{TemplateID: created.ID, ExpectedCurrentRevision: updated.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GenerateContent(taskDir, m, created.ID, settings, fakeContentGenerator{text: "third"}); err == nil || !strings.Contains(err.Error(), "deleted_template") {
+		t.Fatalf("deleted generation error = %v", err)
+	}
+	if first.TemplateDisplayName != "Research brief" || second.TemplateDisplayName != "Research brief revised" {
+		t.Fatal("historical snapshots changed after deletion")
+	}
+}
+
 func TestGenerationFailurePreservesTranscriptAndRecordsSafeError(t *testing.T) {
 	taskDir, m := completedV2Manifest(t)
 	settings := DefaultSettings()

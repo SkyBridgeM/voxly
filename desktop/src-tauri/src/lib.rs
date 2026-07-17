@@ -441,9 +441,55 @@ struct PromptTemplateSummary {
     revision: u32,
     display_name: std::collections::HashMap<String, String>,
     description: std::collections::HashMap<String, String>,
+    instructions: String,
     content_type: String,
     extension: String,
     built_in: bool,
+    ownership: String,
+    status: String,
+    can_edit: bool,
+    can_delete: bool,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct PromptTemplateCatalog {
+    templates: Vec<PromptTemplateSummary>,
+    issues: Vec<TemplateIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TemplateIssue {
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustomTemplateInput {
+    display_name: String,
+    description: String,
+    instructions: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateCustomTemplateInput {
+    template_id: String,
+    expected_current_revision: u32,
+    display_name: String,
+    description: String,
+    instructions: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteCustomTemplateInput {
+    template_id: String,
+    expected_current_revision: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1143,6 +1189,16 @@ fn desktop_settings_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
             message: format!("Could not resolve the desktop settings directory: {e}"),
         })?;
     Ok(config_dir.join(DESKTOP_SETTINGS_FILE))
+}
+
+fn custom_templates_path(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Could not resolve custom template storage.".to_string(),
+        })?;
+    Ok(config_dir.join("templates").join("custom_templates.json"))
 }
 
 fn load_desktop_settings(path: &Path) -> Result<DesktopSettings, BackendError> {
@@ -2360,7 +2416,7 @@ fn run_meeting_asr_blocking(
     let env_file = (runtime_mode == RuntimeMode::Development)
         .then(find_env_file)
         .flatten();
-    let cmd = match backend_kind {
+    let mut cmd = match backend_kind {
         BackendKind::Python => build_python_command(
             &abs_audio_str,
             backend_output_mode,
@@ -2384,6 +2440,10 @@ fn run_meeting_asr_blocking(
         )
         .map_err(String::from)?,
     };
+    if backend_kind == BackendKind::Go {
+        cmd.arg("--templates-file")
+            .arg(custom_templates_path(&app).map_err(String::from)?);
+    }
 
     let secrets = std::iter::once(credentials.mimo.clone())
         .chain(credentials.deepseek.iter().cloned())
@@ -2598,6 +2658,8 @@ fn resume_meeting_asr_blocking(
 
             let mut c = Command::new(binary);
             c.arg("resume").arg(abs_task_dir.as_os_str());
+            c.arg("--templates-file")
+                .arg(custom_templates_path(&app).map_err(String::from)?);
             c.arg("--asr-provider")
                 .arg(&desktop_settings.asr.provider_id)
                 .arg("--asr-model")
@@ -2951,9 +3013,11 @@ fn go_sidecar_binary() -> Result<PathBuf, BackendError> {
     Ok(binary)
 }
 
-fn list_prompt_templates_blocking() -> Result<Vec<PromptTemplateSummary>, String> {
+fn list_prompt_templates_blocking(app: AppHandle) -> Result<PromptTemplateCatalog, String> {
     let output = Command::new(go_sidecar_binary().map_err(String::from)?)
         .arg("list-templates")
+        .arg("--templates-file")
+        .arg(custom_templates_path(&app).map_err(String::from)?)
         .env_remove("MIMO_API_KEY")
         .env_remove("DEEPSEEK_API_KEY")
         .output()
@@ -2980,8 +3044,8 @@ fn list_prompt_templates_blocking() -> Result<Vec<PromptTemplateSummary>, String
 }
 
 #[tauri::command]
-async fn list_prompt_templates() -> Result<Vec<PromptTemplateSummary>, String> {
-    tauri::async_runtime::spawn_blocking(list_prompt_templates_blocking)
+async fn list_prompt_templates(app: AppHandle) -> Result<PromptTemplateCatalog, String> {
+    tauri::async_runtime::spawn_blocking(move || list_prompt_templates_blocking(app))
         .await
         .map_err(|_| {
             String::from(BackendError::ProcessFailed {
@@ -2989,6 +3053,138 @@ async fn list_prompt_templates() -> Result<Vec<PromptTemplateSummary>, String> {
                 code: None,
             })
         })?
+}
+
+fn run_custom_template_sidecar<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+    app: &AppHandle,
+    command_name: &str,
+    payload: &T,
+) -> Result<R, String> {
+    let mut command = Command::new(go_sidecar_binary().map_err(String::from)?);
+    command
+        .arg(command_name)
+        .arg("--templates-file")
+        .arg(custom_templates_path(app).map_err(String::from)?)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Could not start the custom template sidecar.".to_string(),
+            code: None,
+        })
+    })?;
+    let data = serde_json::to_vec(payload).map_err(|_| {
+        String::from(BackendError::InvalidInput {
+            message: "Custom template input is invalid.".to_string(),
+        })
+    })?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| {
+            String::from(BackendError::ProcessFailed {
+                message: "Custom template sidecar input is unavailable.".to_string(),
+                code: None,
+            })
+        })?
+        .write_all(&data)
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Could not send custom template input.".to_string(),
+                code: None,
+            })
+        })?;
+    let output = child.wait_with_output().map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Custom template sidecar did not complete.".to_string(),
+            code: None,
+        })
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = if stderr.contains("revision_conflict") {
+            "Custom template changed. Refresh and try again."
+        } else if stderr.contains("builtin_mutation_forbidden") {
+            "Built-in templates cannot be changed."
+        } else if stderr.contains("deleted_template") {
+            "This custom template has been deleted."
+        } else if stderr.contains("unknown_template") {
+            "Custom template was not found."
+        } else if stderr.contains("invalid_template_input") {
+            "Custom template input is invalid."
+        } else if stderr.contains("corrupted_template_storage")
+            || stderr.contains("unsupported_template_schema")
+        {
+            "Custom template storage is invalid."
+        } else if stderr.contains("template_storage") {
+            "Custom template storage is unavailable."
+        } else {
+            "Custom template operation failed."
+        };
+        return Err(String::from(BackendError::InvalidInput {
+            message: message.to_string(),
+        }));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Custom template sidecar returned invalid JSON.".to_string(),
+            code: output.status.code(),
+        })
+    })
+}
+
+#[tauri::command]
+async fn create_custom_template(
+    app: AppHandle,
+    input: CustomTemplateInput,
+) -> Result<PromptTemplateSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_custom_template_sidecar(&app, "create-custom-template", &input)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Custom template worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+#[tauri::command]
+async fn update_custom_template(
+    app: AppHandle,
+    input: UpdateCustomTemplateInput,
+) -> Result<PromptTemplateSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_custom_template_sidecar(&app, "update-custom-template", &input)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Custom template worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+#[tauri::command]
+async fn delete_custom_template(
+    app: AppHandle,
+    input: DeleteCustomTemplateInput,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_custom_template_sidecar(&app, "delete-custom-template", &input)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Custom template worker failed.".to_string(),
+            code: None,
+        })
+    })?
 }
 
 fn list_providers_blocking() -> Result<ProviderCatalog, String> {
@@ -3145,6 +3341,8 @@ fn generate_task_content_blocking(
         .arg(&task_dir)
         .arg("--template-id")
         .arg(&template_id)
+        .arg("--templates-file")
+        .arg(custom_templates_path(&app).map_err(String::from)?)
         .arg("--llm-provider")
         .arg(&llm_config.provider_id)
         .arg("--llm-model")
@@ -3648,6 +3846,9 @@ pub fn run() {
             get_task_metadata,
             update_task_metadata,
             list_prompt_templates,
+            create_custom_template,
+            update_custom_template,
+            delete_custom_template,
             list_providers,
             generate_task_content,
             open_task_artifact,
@@ -5137,6 +5338,20 @@ mod tests {
                 .to_json_string();
         assert!(failed.contains(r#""code":9"#));
         assert!(!failed.contains("api_key"));
+    }
+
+    #[test]
+    fn test_custom_template_transport_decodes_catalog_and_rejects_unknown_input() {
+        let catalog: PromptTemplateCatalog = serde_json::from_str(r#"{
+          "templates":[{"id":"custom-safe","revision":2,"display_name":{"en":"Safe","zh":"Safe"},"description":{"en":"","zh":""},"instructions":"Do work","content_type":"text/markdown","extension":".md","built_in":false,"ownership":"custom","status":"active","can_edit":true,"can_delete":true}],
+          "issues":[]
+        }"#).unwrap();
+        assert_eq!(catalog.templates[0].revision, 2);
+        assert!(catalog.templates[0].can_edit);
+        assert!(serde_json::from_str::<CustomTemplateInput>(
+            r#"{"display_name":"Name","description":"","instructions":"Work","unexpected":"value"}"#
+        )
+        .is_err());
     }
 
     #[test]

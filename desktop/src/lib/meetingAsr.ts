@@ -171,9 +171,27 @@ export interface PromptTemplateSummary {
   revision: number;
   display_name: Record<"zh" | "en", string>;
   description: Record<"zh" | "en", string>;
+  instructions: string;
   content_type: string;
   extension: string;
   built_in: boolean;
+  ownership: "builtin" | "custom";
+  status: "active" | "deleted";
+  can_edit: boolean;
+  can_delete: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptTemplateCatalog {
+  templates: PromptTemplateSummary[];
+  issues: Array<{ code: string; message: string }>;
+}
+
+export interface CustomTemplateInput {
+  display_name: string;
+  description: string;
+  instructions: string;
 }
 
 export interface DiscoveryIssue {
@@ -231,8 +249,20 @@ export async function updateTaskMetadata(
   return invoke<TaskMetadata>("update_task_metadata", { taskId, metadata });
 }
 
-export async function listPromptTemplates(): Promise<PromptTemplateSummary[]> {
-  return invoke<PromptTemplateSummary[]>("list_prompt_templates");
+export async function listPromptTemplates(): Promise<PromptTemplateCatalog> {
+  return invoke<PromptTemplateCatalog>("list_prompt_templates");
+}
+
+export async function createCustomTemplate(input: CustomTemplateInput): Promise<PromptTemplateSummary> {
+  return invoke("create_custom_template", { input });
+}
+
+export async function updateCustomTemplate(input: CustomTemplateInput & { template_id: string; expected_current_revision: number }): Promise<PromptTemplateSummary> {
+  return invoke("update_custom_template", { input });
+}
+
+export async function deleteCustomTemplate(templateId: string, expectedCurrentRevision: number): Promise<void> {
+  await invoke("delete_custom_template", { input: { template_id: templateId, expected_current_revision: expectedCurrentRevision } });
 }
 
 export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
