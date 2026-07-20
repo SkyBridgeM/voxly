@@ -92,15 +92,46 @@ export interface ProviderDescriptor {
   display_name: Record<"zh" | "en", string>;
   models: ProviderModelDescriptor[];
   default_model: string;
-  credential_key: CredentialKey;
+  credential_key: CredentialKey | "";
   allow_custom_model: boolean;
   built_in: boolean;
+	execution_location: "local" | "cloud";
+	runtime_kind: "remote_http" | "bundled_sidecar" | "external_local_service";
+	requires_credentials: boolean;
+	requires_external_service: boolean;
+	model_source: "static_catalog" | "installed_models" | "external_discovery";
+	supports_model_installation: boolean;
+	supports_manual_import: boolean;
+	privacy: { sends_audio_off_device: boolean; sends_text_off_device: boolean };
 }
 
 export interface ProviderCatalog {
   asr: ProviderDescriptor[];
   llm: ProviderDescriptor[];
 }
+
+export interface ManagedModelCatalog {
+	schema_version: string;
+	catalog_revision: string;
+	models: ManagedModel[];
+}
+
+export interface ManagedModel {
+	model_id: string;
+	display_mode: string;
+	display_name: Record<"zh" | "en", string>;
+	engine: string;
+	engine_runtime: string;
+	runtime_version: string | null;
+	model_version: string;
+	platforms: string[];
+	source: { kind: string; repository: string; revision: string; url: string };
+	archive: { filename: string; type: string; size_bytes: number; sha256: string; root_directory: string };
+}
+
+export interface LocalModelStatus { model_id: string; model_version: string; state: string; message: string; installed_size_bytes: number }
+export interface ModelProgressEvent { state: string; completed: number; total: number }
+export interface ModelDownloadSettings { huggingface_endpoint: string }
 
 export interface ArtifactSummary {
   kind: string;
@@ -272,6 +303,17 @@ export async function generateTaskContent(options: { taskFolder: string; templat
 export async function listProviders(): Promise<ProviderCatalog> {
   return invoke<ProviderCatalog>("list_providers");
 }
+
+export const getLocalModelCatalog = () => invoke<ManagedModelCatalog>("get_local_model_catalog");
+export const getLocalModelStatus = () => invoke<LocalModelStatus>("get_local_model_status");
+export const startModelDownload = () => invoke<LocalModelStatus>("start_model_download");
+export const cancelModelDownload = () => invoke<void>("cancel_model_download");
+export const importLocalModel = (sourceArchive: string) => invoke<LocalModelStatus>("import_local_model", { sourceArchive });
+export const deleteLocalModel = () => invoke<LocalModelStatus>("delete_local_model");
+export const getModelDownloadSettings = () => invoke<ModelDownloadSettings>("get_model_download_settings");
+export const updateModelDownloadSettings = (endpoint: string) => invoke<ModelDownloadSettings>("update_model_download_settings", { endpoint });
+export const testHuggingFaceEndpoint = (endpoint: string) => invoke<{ endpoint: string; reachable: boolean }>("test_huggingface_endpoint", { endpoint });
+export const listenModelProgress = (handler: (event: ModelProgressEvent) => void) => listen<ModelProgressEvent>("model-progress", ({ payload }) => handler(payload));
 
 export async function getProviderSettings(): Promise<ProviderSettingsInfo> {
   return invoke<ProviderSettingsInfo>("get_provider_settings");

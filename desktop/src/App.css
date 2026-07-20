@@ -1919,6 +1919,23 @@ button:disabled {
 .provider-settings-card { padding: 14px; }
 .provider-settings-card h4 { margin: 0 0 12px; }
 .provider-settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.privacy-summary { margin: 12px 0 0; color: var(--text-secondary); font-size: 0.84rem; }
+.local-model-card { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); }
+.local-model-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+.local-model-heading h4, .local-model-heading p { margin: 0; }
+.local-model-heading p { margin-top: 4px; color: var(--text-secondary); font-size: .86rem; }
+.privacy-chip { white-space: nowrap; padding: 4px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .76rem; font-weight: 650; }
+.local-model-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.local-model-facts div { min-width: 0; padding: 9px; border-radius: 9px; background: var(--surface); }
+.local-model-facts dt { color: var(--text-secondary); font-size: .72rem; }
+.local-model-facts dd { margin: 3px 0 0; font-size: .82rem; overflow-wrap: anywhere; }
+.local-model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.local-model-privacy { color: var(--text-secondary); font-size: .82rem; }
+.local-model-card details { margin-top: 12px; }
+.local-model-card details code { display: block; overflow-wrap: anywhere; color: var(--text-secondary); font-size: .7rem; }
+.model-progress { position: relative; min-height: 32px; overflow: hidden; border-radius: 8px; background: var(--surface); }
+.model-progress > div { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width .15s ease; }
+.model-progress > span { position: relative; display: block; padding: 7px 10px; font-size: .78rem; }
 
 .template-manager,
 .template-manager-group,
@@ -2465,6 +2482,7 @@ textarea:focus-visible,
 }
 
 @media (max-width: 520px) {
+	.local-model-facts { grid-template-columns: 1fr; }
   .app {
     padding: 15px 14px 22px;
   }

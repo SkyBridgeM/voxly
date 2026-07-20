@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/yudi/meet-asr/core-go/modelcatalog"
 	"github.com/yudi/meet-asr/core-go/tasklibrary"
 )
 
@@ -71,6 +77,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "model-catalog", "model-status", "download-model", "import-model", "delete-model", "normalize-hf-endpoint", "test-hf-endpoint":
+		if err := runModelCommand(os.Args[1], os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			encodeModelCommandError(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "generate-content":
 		if err := runGenerateContent(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -101,6 +112,11 @@ Usage:
   meeting-asr-go update-custom-template --templates-file <path>
   meeting-asr-go delete-custom-template --templates-file <path>
   meeting-asr-go list-providers
+	meeting-asr-go model-catalog
+	meeting-asr-go model-status --app-data-root <path> --model-id sensevoice-small-int8
+	meeting-asr-go download-model --app-data-root <path> --model-id sensevoice-small-int8
+	meeting-asr-go import-model --app-data-root <path> --model-id sensevoice-small-int8 --source-archive <path>
+	meeting-asr-go delete-model --app-data-root <path> --model-id sensevoice-small-int8
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
 
 Flags:
@@ -119,6 +135,106 @@ Flags:
   --obsidian-template-path path  Path to Obsidian template
 
 `, version)
+}
+
+func runModelCommand(command string, args []string, stdout, stderr io.Writer) error {
+	catalog, err := modelcatalog.Load()
+	if err != nil {
+		return err
+	}
+	if command == "model-catalog" {
+		if len(args) != 0 {
+			return fmt.Errorf("model-catalog accepts no arguments")
+		}
+		return json.NewEncoder(stdout).Encode(catalog)
+	}
+	if command == "normalize-hf-endpoint" {
+		fs := flag.NewFlagSet(command, flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		endpoint := fs.String("endpoint", "", "Hugging Face origin")
+		if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+			return fmt.Errorf("invalid endpoint arguments")
+		}
+		normalized, err := modelcatalog.NormalizeHuggingFaceEndpoint(*endpoint)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(map[string]string{"endpoint": normalized})
+	}
+	if command == "test-hf-endpoint" {
+		fs := flag.NewFlagSet(command, flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		endpoint := fs.String("endpoint", "", "Hugging Face origin")
+		if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+			return fmt.Errorf("invalid endpoint arguments")
+		}
+		normalized, err := modelcatalog.NormalizeHuggingFaceEndpoint(*endpoint)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, normalized, nil)
+		client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) >= 4 { return fmt.Errorf("too many redirects") }
+			redirect, normalizeErr := modelcatalog.NormalizeHuggingFaceEndpoint(request.URL.String())
+			if normalizeErr != nil || redirect != normalized { return fmt.Errorf("unsafe endpoint redirect") }
+			return nil
+		}}
+		response, err := client.Do(req)
+		if err != nil {
+			return &modelcatalog.Error{Code: "network_unavailable", Message: "Could not connect to the Hugging Face endpoint.", Retryable: true}
+		}
+		response.Body.Close()
+		return json.NewEncoder(stdout).Encode(map[string]any{"endpoint": normalized, "reachable": response.StatusCode < 500})
+	}
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("app-data-root", "", "Voxly app data root")
+	modelID := fs.String("model-id", "sensevoice-small-int8", "Managed model ID")
+	source := fs.String("source-archive", "", "Official archive selected for import")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || !filepath.IsAbs(*root) {
+		return fmt.Errorf("--app-data-root must be absolute")
+	}
+	model, err := catalog.Model(*modelID)
+	if err != nil {
+		return err
+	}
+	if command == "model-status" {
+		return json.NewEncoder(stdout).Encode(modelcatalog.Status(*root, catalog.CatalogRevision, model))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	progress := func(state string, completed, total int64) {
+		fmt.Fprintf(stderr, "Model-Progress: %s %d %d\n", state, completed, total)
+	}
+	var result modelcatalog.Readiness
+	switch command {
+	case "download-model":
+		result, err = modelcatalog.DownloadAndInstall(ctx, *root, catalog.CatalogRevision, model, modelcatalog.DefaultHTTPClient(45*time.Minute), progress)
+	case "import-model":
+		if !filepath.IsAbs(*source) {
+			return fmt.Errorf("--source-archive must be absolute")
+		}
+		result, err = modelcatalog.ImportArchive(ctx, *root, catalog.CatalogRevision, model, *source, progress)
+	case "delete-model":
+		result, err = modelcatalog.Delete(*root, catalog.CatalogRevision, model)
+	default:
+		return fmt.Errorf("unknown model command")
+	}
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
+func encodeModelCommandError(stderr io.Writer, err error) {
+	var managed *modelcatalog.Error
+	if errors.As(err, &managed) {
+		_ = json.NewEncoder(stderr).Encode(managed)
+		return
+	}
+	_ = json.NewEncoder(stderr).Encode(modelcatalog.Error{Code: "internal_error", Message: "The local model operation failed.", Retryable: false})
 }
 
 func runGenerateContent(args []string) error {
@@ -494,9 +610,11 @@ func runTranscribe(args []string) error {
 		}
 	}
 
-	// Validate API key (always needed).
-	if _, err := settings.RequireMimoAPIKey(); err != nil {
-		return err
+	// Cloud ASR requires a credential; the local provider does not.
+	if settings.ASRConfig().ProviderID == ASRProviderMimo {
+		if _, err := settings.RequireMimoAPIKey(); err != nil {
+			return err
+		}
 	}
 
 	// Fail fast on unsupported generated-content configuration before expensive work.

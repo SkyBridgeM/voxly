@@ -199,6 +199,11 @@ export interface Translations {
   latestVersion: string;
   legacyArtifact: string;
   settingsProviders: string;
+	localModelTitle: string; localModelDescription: string; localChineseFirst: string; localModelStatus: string;
+	localNotInstalled: string; localRuntimeMissing: string; localModelInvalid: string; localUnsupported: string;
+	localDownload: string; localImport: string; localCancel: string; localDelete: string; localSource: string; localSize: string;
+	localAdvanced: string; localEndpoint: string; localTestEndpoint: string; localEndpointReachable: string;
+	localOperationFailed: string; localConfirmDelete: string; localPrivacyTitle: string; localPrivacyBody: string;
   settingsProvidersDesc: string;
   settingsTemplates: string;
   settingsTemplatesDesc: string;
@@ -428,6 +433,10 @@ export const translations: Record<Locale, Translations> = {
     latestVersion: "最新成功版本",
     legacyArtifact: "旧版输出",
     settingsProviders: "服务商与模型",
+	localModelTitle: "本地语音识别", localModelDescription: "管理声笺应用数据中的官方 SenseVoice 模型。模型安装不会写入任务目录。", localChineseFirst: "中文为主", localModelStatus: "状态",
+	localNotInstalled: "未安装", localRuntimeMissing: "模型已安装，运行时待提供", localModelInvalid: "模型无效，请重新安装", localUnsupported: "当前平台暂不支持",
+	localDownload: "下载模型", localImport: "导入官方模型", localCancel: "取消", localDelete: "删除模型", localSource: "官方来源", localSize: "下载大小",
+	localAdvanced: "高级下载设置", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "测试连接", localEndpointReachable: "连接可用", localOperationFailed: "本地模型操作失败，现有模型未被修改。", localConfirmDelete: "删除已安装的 SenseVoice 模型？任务和历史记录不会被删除。", localPrivacyTitle: "隐私：", localPrivacyBody: "选择本地语音识别时，原始音频不会发送到云端。若使用云端内容生成，转写文本仍会发送给所选服务。",
     settingsProvidersDesc: "选择语音识别和生成内容使用的内置服务商与模型。密钥仍单独安全保存。",
     settingsTemplates: "内容模板",
     settingsTemplatesDesc: "管理本机自定义提示词模板；内置模板保持只读。",
@@ -655,6 +664,10 @@ export const translations: Record<Locale, Translations> = {
     latestVersion: "Latest successful version",
     legacyArtifact: "Legacy output",
     settingsProviders: "Providers and models",
+	localModelTitle: "Local speech recognition", localModelDescription: "Manage the official SenseVoice model in Voxly app data. Model installation never writes into Task folders.", localChineseFirst: "Chinese-first", localModelStatus: "Status",
+	localNotInstalled: "Not installed", localRuntimeMissing: "Model installed; runtime pending", localModelInvalid: "Model invalid; reinstall required", localUnsupported: "Unsupported on this platform",
+	localDownload: "Download model", localImport: "Import official model", localCancel: "Cancel", localDelete: "Delete model", localSource: "Official source", localSize: "Download size",
+	localAdvanced: "Advanced download settings", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "Test connection", localEndpointReachable: "Endpoint is reachable", localOperationFailed: "The local model operation failed. Existing model data was not changed.", localConfirmDelete: "Delete the installed SenseVoice model? Tasks and history will remain unchanged.", localPrivacyTitle: "Privacy:", localPrivacyBody: "With local speech recognition, original audio is not sent to the cloud. If cloud content generation is selected, transcript text is still sent to that service.",
     settingsProvidersDesc: "Choose the built-in providers and models used for speech recognition and generated content. Credentials remain stored separately.",
     settingsTemplates: "Content templates",
     settingsTemplatesDesc: "Manage local custom prompt templates. Built-in templates remain read-only.",

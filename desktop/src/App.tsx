@@ -38,6 +38,7 @@ import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
 import { TemplateManager } from "./components/TemplateManager";
+import { LocalModelManager } from "./components/LocalModelManager";
 import voxlyAppIcon from "./assets/voxly-app-icon.png";
 import "./App.css";
 
@@ -607,8 +608,9 @@ function App() {
       ? t.productionCredentialPlaceholder
       : t.developmentCredentialPlaceholder;
 
-  const preflightReadyForMode =
-    outputMode === "transcript_and_generate" ? preflight?.ready_for_minutes : preflight?.ready;
+	const preflightReadyForMode = providerSettings.asr.provider_id === "local-sensevoice"
+		? false
+		: outputMode === "transcript_and_generate" ? preflight?.ready_for_minutes : preflight?.ready;
 
   const asrDescriptor = providerCatalog?.asr.find((provider) => provider.id === providerSettings.asr.provider_id);
   const llmDescriptor = providerCatalog?.llm.find((provider) => provider.id === providerSettings.llm.provider_id);
@@ -616,6 +618,14 @@ function App() {
   const llmProviderLabel = llmDescriptor?.display_name[locale] ?? "DeepSeek";
   const asrModelLabel = asrDescriptor?.models.find((model) => model.id === providerSettings.asr.model_id)?.display_name[locale] ?? providerSettings.asr.model_id;
   const llmModelLabel = llmDescriptor?.models.find((model) => model.id === providerSettings.llm.model_id)?.display_name[locale] ?? providerSettings.llm.model_id;
+	const privacySummary = (() => {
+		const audioCloud = asrDescriptor?.privacy.sends_audio_off_device ?? true;
+		const textCloud = llmDescriptor?.privacy.sends_text_off_device ?? true;
+		if (!audioCloud && !textCloud) return locale === "zh" ? "音频与转写文本均留在本机。" : "Audio and transcript text stay on this device.";
+		if (!audioCloud && textCloud) return locale === "zh" ? "音频留在本机；生成内容时转写文本会发送到云端。" : "Audio stays local; transcript text is sent to the cloud for content generation.";
+		if (audioCloud && !textCloud) return locale === "zh" ? "音频会发送到云端；内容生成在本机完成。" : "Audio is sent to the cloud; content generation stays local.";
+		return locale === "zh" ? "音频和生成内容所需的转写文本会发送到所选云端服务。" : "Audio and transcript text used for generation are sent to the selected cloud services.";
+	})();
 
   const hasActivity = isRunning || logs.length > 0 || taskFolder || status;
 
@@ -760,6 +770,7 @@ function App() {
                     myTemplates: t.myTemplates,
                   }}
                 />
+				<p className="privacy-summary">{privacySummary}</p>
               </div>
             </div>
           </section>
@@ -1226,7 +1237,7 @@ function App() {
                     <h4>{t.speechRecognition}</h4>
                     <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
                     <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
-                    <p className={preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                    <p className={providerSettings.asr.provider_id !== "local-sensevoice" && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{providerSettings.asr.provider_id !== "local-sensevoice" && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
                   </div>
                   <div className="provider-settings-card">
                     <h4>{t.generatedContentProvider}</h4>
@@ -1236,6 +1247,7 @@ function App() {
                   </div>
                 </div>
                 <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
+				<LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody }} />
               </section>
 
               <section className="settings-section">
