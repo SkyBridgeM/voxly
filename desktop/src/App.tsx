@@ -995,6 +995,23 @@ function App() {
                 )}
               </section>
 
+              <section className="settings-section about-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span aria-hidden="true">V</span>
+                    <div>
+                      <h3>{t.aboutTitle}</h3>
+                      <p>{t.aboutDescription}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="about-card">
+                  <strong>{t.aboutProductNames}</strong>
+                  <span>{t.aboutSubtitles}</span>
+                  <span>{t.aboutVersion}</span>
+                </div>
+              </section>
+
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">

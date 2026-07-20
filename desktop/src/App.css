@@ -221,6 +221,22 @@ button {
   height: 22px;
 }
 
+.about-card {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.about-card strong {
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 17px;
+}
+
 .brand-mark span:nth-child(3) {
   height: 16px;
 }

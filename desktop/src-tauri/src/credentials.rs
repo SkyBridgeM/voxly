@@ -4,7 +4,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-const KEYRING_SERVICE: &str = "com.meeting-asr.desktop-experiment";
+const KEYRING_SERVICE: &str = "com.skybridgem.voxly";
+const LEGACY_KEYRING_SERVICE: &str = "com.meeting-asr.desktop-experiment";
 
 /// The only credential names accepted by the desktop credential boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,9 +111,11 @@ pub(crate) trait CredentialStore {
 /// Windows Credential Manager on Windows, and Secret Service on Linux.
 pub(crate) struct KeyringCredentialStore;
 
-impl CredentialStore for KeyringCredentialStore {
+struct ServiceCredentialStore(&'static str);
+
+impl CredentialStore for ServiceCredentialStore {
     fn get(&self, key: CredentialKey) -> Result<Option<String>, CredentialError> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key.env_name()).map_err(|_| {
+        let entry = keyring::Entry::new(self.0, key.env_name()).map_err(|_| {
             CredentialError::SecureStoreUnavailable {
                 key,
                 operation: CredentialOperation::Read,
@@ -133,7 +136,7 @@ impl CredentialStore for KeyringCredentialStore {
         if value.trim().is_empty() {
             return Err(CredentialError::InvalidValue);
         }
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key.env_name()).map_err(|_| {
+        let entry = keyring::Entry::new(self.0, key.env_name()).map_err(|_| {
             CredentialError::SecureStoreUnavailable {
                 key,
                 operation: CredentialOperation::Save,
@@ -148,7 +151,7 @@ impl CredentialStore for KeyringCredentialStore {
     }
 
     fn delete(&self, key: CredentialKey) -> Result<(), CredentialError> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key.env_name()).map_err(|_| {
+        let entry = keyring::Entry::new(self.0, key.env_name()).map_err(|_| {
             CredentialError::SecureStoreUnavailable {
                 key,
                 operation: CredentialOperation::Delete,
@@ -161,6 +164,41 @@ impl CredentialStore for KeyringCredentialStore {
                 operation: CredentialOperation::Delete,
             }),
         }
+    }
+}
+
+fn read_with_legacy_fallback<C: CredentialStore, L: CredentialStore>(
+    current: &C,
+    legacy: &L,
+    key: CredentialKey,
+) -> Result<Option<String>, CredentialError> {
+    if let Some(value) = current.get(key)? {
+        return Ok(Some(value));
+    }
+    let Some(value) = legacy.get(key)? else {
+        return Ok(None);
+    };
+    // Copy through the platform secure-store API only. The legacy item is
+    // intentionally retained until a later explicit cleanup policy exists.
+    let _ = current.save(key, &value);
+    Ok(Some(value))
+}
+
+impl CredentialStore for KeyringCredentialStore {
+    fn get(&self, key: CredentialKey) -> Result<Option<String>, CredentialError> {
+        read_with_legacy_fallback(
+            &ServiceCredentialStore(KEYRING_SERVICE),
+            &ServiceCredentialStore(LEGACY_KEYRING_SERVICE),
+            key,
+        )
+    }
+
+    fn save(&self, key: CredentialKey, value: &str) -> Result<(), CredentialError> {
+        ServiceCredentialStore(KEYRING_SERVICE).save(key, value)
+    }
+
+    fn delete(&self, key: CredentialKey) -> Result<(), CredentialError> {
+        ServiceCredentialStore(KEYRING_SERVICE).delete(key)
     }
 }
 
@@ -367,6 +405,36 @@ mod tests {
         assert!(configured.configured);
         assert_eq!(configured.source, CredentialSource::SecureStore);
         assert!(!json.contains("test-secret"));
+    }
+
+    #[test]
+    fn current_secure_namespace_precedes_legacy_and_legacy_is_copied_safely() {
+        let current = MemoryCredentialStore::default();
+        let legacy = MemoryCredentialStore::default();
+        legacy
+            .save(CredentialKey::MimoApiKey, "legacy-secret")
+            .unwrap();
+
+        assert_eq!(
+            read_with_legacy_fallback(&current, &legacy, CredentialKey::MimoApiKey).unwrap(),
+            Some("legacy-secret".to_string())
+        );
+        assert_eq!(
+            current.get(CredentialKey::MimoApiKey).unwrap(),
+            Some("legacy-secret".to_string())
+        );
+        assert_eq!(
+            legacy.get(CredentialKey::MimoApiKey).unwrap(),
+            Some("legacy-secret".to_string())
+        );
+
+        current
+            .save(CredentialKey::MimoApiKey, "current-secret")
+            .unwrap();
+        assert_eq!(
+            read_with_legacy_fallback(&current, &legacy, CredentialKey::MimoApiKey).unwrap(),
+            Some("current-secret".to_string())
+        );
     }
 
     #[test]

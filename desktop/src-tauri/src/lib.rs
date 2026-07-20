@@ -8,7 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
+mod app_namespace;
 mod credentials;
+use app_namespace::{migrate_app_namespace, AppNamespacePaths};
 use credentials::{
     resolve_credential, status_for, CredentialError, CredentialKey, CredentialSource,
     CredentialStatus, CredentialStore, EnvironmentValues, KeyringCredentialStore,
@@ -3830,6 +3832,19 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(ActiveProcess::default())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let config = app.path().app_config_dir();
+            let data = app.path().app_data_dir();
+            if let (Ok(config), Ok(data)) = (config, data) {
+                if let Ok(paths) = AppNamespacePaths::from_current(config, data) {
+                    let report = migrate_app_namespace(&paths);
+                    if !report.completed || !report.issues.is_empty() {
+                        eprintln!("Voxly app-data migration completed with a recoverable issue.");
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
             get_runtime_preflight,
@@ -3877,6 +3892,28 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn voxly_branding_metadata_is_consistent() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["productName"], "Voxly");
+        assert_eq!(config["identifier"], "com.skybridgem.voxly");
+        assert_eq!(config["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            config["app"]["windows"][0]["title"],
+            "Voxly — Local Voice Workspace"
+        );
+        for icon in [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico",
+        ] {
+            assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join(icon).is_file());
+        }
+    }
 
     #[derive(Default)]
     struct TestCredentialStore {
