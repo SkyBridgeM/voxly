@@ -28,6 +28,8 @@ interface RunControlsProps {
     generatedWithProvider: string;
     providerNotReady: string;
     openSettings: string;
+    builtInTemplates: string;
+    myTemplates: string;
   };
 }
 
@@ -48,7 +50,8 @@ export function RunControls({ outputMode, onModeChange, templates, templateId, o
         <div className="template-selector">
           <label htmlFor="generation-template">{labels.templateLabel}</label>
           <select id="generation-template" value={templateId} onChange={(event) => onTemplateChange(event.target.value)} disabled={isRunning}>
-            {templates.map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}
+            <optgroup label={labels.builtInTemplates}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>
+            {templates.some((template) => !template.built_in) && <optgroup label={labels.myTemplates}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}
           </select>
           {templates.find((template) => template.id === templateId) && <p>{templates.find((template) => template.id === templateId)!.description[locale]}</p>}
         </div>

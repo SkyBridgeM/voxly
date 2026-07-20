@@ -26,6 +26,7 @@ func RunResume(args []string) error {
 	asrModel := fs.String("asr-model", string(ASRModelMimoV25), "Speech-recognition model")
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
+	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
@@ -110,6 +111,7 @@ func RunResume(args []string) error {
 	}
 	settings.ASRProvider, settings.MimoModel = *asrProvider, *asrModel
 	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
+	settings.TemplateStorePath = *templatesFile
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return err
 	}

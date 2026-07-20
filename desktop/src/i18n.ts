@@ -159,7 +159,6 @@ export interface Translations {
   saveTitle: string;
   cancelTitleEdit: string;
   taskInformation: string;
-  generationVersion: string;
   existingTags: string;
   available: string;
   unavailable: string;
@@ -196,6 +195,22 @@ export interface Translations {
   legacyArtifact: string;
   settingsProviders: string;
   settingsProvidersDesc: string;
+  settingsTemplates: string;
+  settingsTemplatesDesc: string;
+  builtInTemplates: string;
+  myTemplates: string;
+  newTemplate: string;
+  editTemplate: string;
+  deleteTemplate: string;
+  templateName: string;
+  templateDescription: string;
+  templateInstructions: string;
+  technicalDetails: string;
+  revision: string;
+  saveCreatesRevision: string;
+  confirmDeleteTemplate: string;
+  templateSaveFailed: string;
+  noCustomTemplates: string;
   speechRecognition: string;
   generatedContentProvider: string;
   provider: string;
@@ -368,7 +383,6 @@ export const translations: Record<Locale, Translations> = {
     saveTitle: "保存任务名称",
     cancelTitleEdit: "取消编辑任务名称",
     taskInformation: "任务信息",
-    generationVersion: "版本",
     existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
@@ -405,6 +419,22 @@ export const translations: Record<Locale, Translations> = {
     legacyArtifact: "旧版输出",
     settingsProviders: "服务商与模型",
     settingsProvidersDesc: "选择语音识别和生成内容使用的内置服务商与模型。密钥仍单独安全保存。",
+    settingsTemplates: "内容模板",
+    settingsTemplatesDesc: "管理本机自定义提示词模板；内置模板保持只读。",
+    builtInTemplates: "内置模板",
+    myTemplates: "我的模板",
+    newTemplate: "新建模板",
+    editTemplate: "编辑",
+    deleteTemplate: "删除",
+    templateName: "名称",
+    templateDescription: "描述",
+    templateInstructions: "提示词指令",
+    technicalDetails: "技术详情",
+    revision: "修订",
+    saveCreatesRevision: "保存更改不会影响之前生成的内容。",
+    confirmDeleteTemplate: "删除此模板？历史生成内容会保留，但该模板将不再可选。",
+    templateSaveFailed: "无法保存模板，请刷新后重试。",
+    noCustomTemplates: "还没有自定义模板。",
     speechRecognition: "语音识别",
     generatedContentProvider: "生成内容",
     provider: "服务商",
@@ -575,7 +605,6 @@ export const translations: Record<Locale, Translations> = {
     saveTitle: "Save task title",
     cancelTitleEdit: "Cancel title editing",
     taskInformation: "Task information",
-    generationVersion: "Version",
     existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",
@@ -612,6 +641,22 @@ export const translations: Record<Locale, Translations> = {
     legacyArtifact: "Legacy output",
     settingsProviders: "Providers and models",
     settingsProvidersDesc: "Choose the built-in providers and models used for speech recognition and generated content. Credentials remain stored separately.",
+    settingsTemplates: "Content templates",
+    settingsTemplatesDesc: "Manage local custom prompt templates. Built-in templates remain read-only.",
+    builtInTemplates: "Built-in templates",
+    myTemplates: "My templates",
+    newTemplate: "New template",
+    editTemplate: "Edit",
+    deleteTemplate: "Delete",
+    templateName: "Name",
+    templateDescription: "Description",
+    templateInstructions: "Prompt instructions",
+    technicalDetails: "Technical details",
+    revision: "Revision",
+    saveCreatesRevision: "Saving changes will not affect content generated earlier.",
+    confirmDeleteTemplate: "Delete this template? Historical outputs remain, but the template will no longer be selectable.",
+    templateSaveFailed: "The template could not be saved. Refresh and try again.",
+    noCustomTemplates: "No custom templates yet.",
     speechRecognition: "Speech recognition",
     generatedContentProvider: "Generated content",
     provider: "Provider",
