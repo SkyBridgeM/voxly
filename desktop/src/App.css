@@ -2001,6 +2001,39 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.form-action-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.form-action-row > button {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.form-action-row > .btn-secondary {
+  flex: 0 0 auto;
+  min-width: 88px;
+}
+
+.form-action-row > .btn-primary {
+  flex: 1 1 auto;
+}
+
+.provider-settings-actions button,
+.output-location-actions button,
+.modal-footer button,
+.btn-save-key {
+  white-space: nowrap;
+}
+
 .template-manager-error {
   color: var(--error);
   font-size: 0.72rem;
@@ -2546,6 +2579,12 @@ textarea:focus-visible,
 
   .key-input-row {
     flex-direction: column;
+  }
+
+  .form-action-row > .btn-secondary,
+  .form-action-row > .btn-primary {
+    flex: 1 1 0;
+    min-width: 0;
   }
 }
 
