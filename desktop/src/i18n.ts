@@ -159,7 +159,6 @@ export interface Translations {
   saveTitle: string;
   cancelTitleEdit: string;
   taskInformation: string;
-  generationVersion: string;
   existingTags: string;
   available: string;
   unavailable: string;
@@ -206,6 +205,7 @@ export interface Translations {
   templateName: string;
   templateDescription: string;
   templateInstructions: string;
+  technicalDetails: string;
   revision: string;
   saveCreatesRevision: string;
   confirmDeleteTemplate: string;
@@ -383,7 +383,6 @@ export const translations: Record<Locale, Translations> = {
     saveTitle: "保存任务名称",
     cancelTitleEdit: "取消编辑任务名称",
     taskInformation: "任务信息",
-    generationVersion: "版本",
     existingTags: "已有标签",
     available: "可用",
     unavailable: "不可用",
@@ -430,8 +429,9 @@ export const translations: Record<Locale, Translations> = {
     templateName: "名称",
     templateDescription: "描述",
     templateInstructions: "提示词指令",
+    technicalDetails: "技术详情",
     revision: "修订",
-    saveCreatesRevision: "保存会创建新的修订；已有生成内容不会改变。",
+    saveCreatesRevision: "保存更改不会影响之前生成的内容。",
     confirmDeleteTemplate: "删除此模板？历史生成内容会保留，但该模板将不再可选。",
     templateSaveFailed: "无法保存模板，请刷新后重试。",
     noCustomTemplates: "还没有自定义模板。",
@@ -605,7 +605,6 @@ export const translations: Record<Locale, Translations> = {
     saveTitle: "Save task title",
     cancelTitleEdit: "Cancel title editing",
     taskInformation: "Task information",
-    generationVersion: "Version",
     existingTags: "Existing tags",
     available: "Available",
     unavailable: "Unavailable",
@@ -652,8 +651,9 @@ export const translations: Record<Locale, Translations> = {
     templateName: "Name",
     templateDescription: "Description",
     templateInstructions: "Prompt instructions",
+    technicalDetails: "Technical details",
     revision: "Revision",
-    saveCreatesRevision: "Saving creates a new revision. Existing generated content is unchanged.",
+    saveCreatesRevision: "Saving changes will not affect content generated earlier.",
     confirmDeleteTemplate: "Delete this template? Historical outputs remain, but the template will no longer be selectable.",
     templateSaveFailed: "The template could not be saved. Refresh and try again.",
     noCustomTemplates: "No custom templates yet.",

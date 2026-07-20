@@ -97,7 +97,6 @@ export interface TaskLibraryLabels {
   saveTitle: string;
   cancelTitleEdit: string;
   taskInformation: string;
-  generationVersion: string;
   existingTags: string;
   builtInTemplates: string;
   myTemplates: string;
@@ -227,7 +226,7 @@ function GenerationGroupView({ group, task, locale, labels, templates, pendingAc
   const registryName = templates.find((template) => template.built_in && template.id === group.template_id)?.display_name[locale];
   const visibleVersions = group.latest ? [group.latest] : group.versions;
   const versionName = (version: TaskSummary["generated_content"][number]["versions"][number]) => registryName || version.template_display_name.trim() || snapshotName || group.template_id || labels.generatedContent;
-  const versionMetadata = (version: TaskSummary["generated_content"][number]["versions"][number]) => [version.template_revision > 0 ? `${labels.generationVersion}: r${version.template_revision}` : "", `${labels.createdAt}: ${formatDate(version.created_at, locale, labels.invalidDate)}`].filter(Boolean);
+  const versionMetadata = (version: TaskSummary["generated_content"][number]["versions"][number]) => [`${labels.createdAt}: ${formatDate(version.created_at, locale, labels.invalidDate)}`];
   return <section className="generation-group"><ul>{visibleVersions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${versionName(version)} · ${labels.legacyArtifact}` : versionName(version), status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable, provider: version.provider, model: version.model}} labels={labels} metadata={versionMetadata(version)} actionKey={`${task.task_folder}:generation:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:generation:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul>{group.latest && group.versions.length > 1 && <details><summary>{labels.generationHistory} ({group.versions.length})</summary><ul>{group.versions.map((version) => <ArtifactItem key={version.generation_id} artifact={{kind: version.legacy ? `${versionName(version)} · ${labels.legacyArtifact}` : versionName(version), status: version.status, reference: version.reference, has_error: version.has_error, retryable: version.retryable, provider: version.provider, model: version.model}} labels={labels} metadata={versionMetadata(version)} actionKey={`${task.task_folder}:history:${version.generation_id}`} pendingAction={pendingActions.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} actionError={actionErrors.get(`${task.task_folder}:history:${version.generation_id}`) ?? null} onAction={(actionKey, action, reference) => onArtifactAction(task.task_folder, actionKey, action, reference)} />)}</ul></details>}</section>;
 }
 
