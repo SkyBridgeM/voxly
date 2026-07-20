@@ -93,9 +93,12 @@ re-enter the credential.
 ## Icon source
 
 `voxly-app-icon-concept.png` is a visual reference sheet only.
-`voxly-app-icon-master.png` is a separately generated 1024×1024 production
+`voxly-app-icon-master.png` is a separately generated 1254×1254 production
 master. Tauri platform PNG, ICNS and ICO assets are generated from that master,
-not cropped from the reference sheet.
+not cropped from the reference sheet. The master and generated platform PNGs
+have transparent canvas corners; the rounded emerald tile is the only outer
+icon surface. The desktop header uses a dedicated 128×128 derivative of the
+same master instead of the earlier CSS placeholder mark.
 
 ## Future model storage
 

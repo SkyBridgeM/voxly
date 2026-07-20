@@ -193,32 +193,11 @@ button {
 }
 
 .brand-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
   width: 46px;
   height: 46px;
   flex: 0 0 46px;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 14px;
-  background: var(--accent);
-  box-shadow: 0 8px 18px rgba(23, 107, 91, 0.22);
-}
-
-.brand-mark span {
-  width: 3px;
-  border-radius: 3px;
-  background: currentColor;
-}
-
-.brand-mark span:nth-child(1) {
-  height: 12px;
-}
-
-.brand-mark span:nth-child(2) {
-  height: 22px;
+  object-fit: contain;
+  filter: drop-shadow(0 7px 10px rgba(23, 107, 91, 0.2));
 }
 
 .about-card {
@@ -237,9 +216,6 @@ button {
   font-size: 17px;
 }
 
-.brand-mark span:nth-child(3) {
-  height: 16px;
-}
 
 .brand-copy {
   min-width: 0;

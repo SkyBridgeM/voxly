@@ -38,6 +38,7 @@ import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
 import { TemplateManager } from "./components/TemplateManager";
+import voxlyAppIcon from "./assets/voxly-app-icon.png";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
@@ -623,11 +624,12 @@ function App() {
       <div className="app">
         <header className="app-header">
           <div className="brand-lockup">
-            <div className="brand-mark" aria-hidden="true">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
+            <img
+              className="brand-mark"
+              src={voxlyAppIcon}
+              alt=""
+              aria-hidden="true"
+            />
             <div className="brand-copy">
               <span className="app-kicker">{t.appKicker}</span>
               <h1>{t.appTitle}</h1>
