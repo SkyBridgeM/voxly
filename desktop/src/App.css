@@ -33,6 +33,7 @@
   --radius-md: 12px;
   --radius-lg: 18px;
   --radius-xl: 24px;
+  --form-action-height: 42px;
   --font-sans: "Avenir Next", "SF Pro Text", -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: "Avenir Next", "SF Pro Display", -apple-system,
@@ -2012,10 +2013,24 @@ button:disabled {
 }
 
 .form-action-row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--form-action-height);
+  min-height: var(--form-action-height);
+  max-height: var(--form-action-height);
   min-width: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.form-action-row > button:hover:not(:disabled),
+.form-action-row > button:active:not(:disabled) {
+  transform: none;
 }
 
 .form-action-row > .btn-secondary {
