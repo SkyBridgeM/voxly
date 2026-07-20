@@ -1,8 +1,8 @@
 [package]
 name = "meeting-asr-desktop"
-version = "0.1.0"
-description = "Tauri desktop experiment for meeting-asr"
-authors = ["you"]
+version = "0.1.0-alpha"
+description = "Voxly — Local Voice Workspace"
+authors = ["SkyBridgeM"]
 edition = "2021"
 
 [lib]

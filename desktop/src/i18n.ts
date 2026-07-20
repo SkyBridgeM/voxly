@@ -4,6 +4,11 @@ export interface Translations {
   appTitle: string;
   appSubtitle: string;
   appKicker: string;
+  aboutTitle: string;
+  aboutProductNames: string;
+  aboutSubtitles: string;
+  aboutVersion: string;
+  aboutDescription: string;
   workflowEyebrow: string;
   workflowTitle: string;
   workflowDescription: string;
@@ -224,9 +229,14 @@ export interface Translations {
 
 export const translations: Record<Locale, Translations> = {
   zh: {
-    appTitle: "Meeting ASR Desktop",
-    appSubtitle: "将音频转写为文本，并按模板生成所需内容",
-    appKicker: "本地会议工作台",
+    appTitle: "声笺",
+    appSubtitle: "本地语音工作台",
+    appKicker: "Voxly",
+    aboutTitle: "关于声笺",
+    aboutProductNames: "Voxly · 声笺",
+    aboutSubtitles: "Local Voice Workspace · 本地语音工作台",
+    aboutVersion: "版本 0.1.0-alpha",
+    aboutDescription: "将语音转写为可整理、可生成、可追溯的内容。",
     workflowEyebrow: "新建任务",
     workflowTitle: "处理会议录音",
     workflowDescription: "选择一段音频和需要的输出，其余文件会整理到同一个任务文件夹。",
@@ -446,9 +456,14 @@ export const translations: Record<Locale, Translations> = {
     openSettings: "打开设置",
   },
   en: {
-    appTitle: "Meeting ASR Desktop",
-    appSubtitle: "Transcribe audio, then generate the content you need from a built-in template",
-    appKicker: "Local meeting workspace",
+    appTitle: "Voxly",
+    appSubtitle: "Local Voice Workspace",
+    appKicker: "声笺",
+    aboutTitle: "About Voxly",
+    aboutProductNames: "Voxly · 声笺",
+    aboutSubtitles: "Local Voice Workspace · 本地语音工作台",
+    aboutVersion: "Version 0.1.0-alpha",
+    aboutDescription: "Turn voice into structured, traceable content.",
     workflowEyebrow: "New task",
     workflowTitle: "Process a meeting recording",
     workflowDescription: "Choose an audio file and the output you need. Generated files stay together in one task folder.",

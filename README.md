@@ -1,10 +1,38 @@
-# meeting-asr
+# Voxly / 声笺
 
-`meeting-asr` is a local-first Python CLI for recording or importing meeting audio, splitting it into upload-safe chunks, transcribing each chunk with MiMo ASR, and generating meeting minutes via LLM (DeepSeek).
+**Local Voice Workspace · 本地语音工作台**
 
-Three output modes are available: `transcript` (raw transcription only), `notes` (transcript + notes input for manual processing), and `minutes` (full pipeline including LLM-generated meeting minutes).
+Voxly turns imported voice recordings into structured, traceable content. The current desktop alpha uses the Go runtime, MiMo cloud speech recognition, and optional DeepSeek cloud generation. Tasks, manifests, transcripts, generated content, metadata, and custom templates remain in user-controlled local storage.
 
-## Installation
+Current workflow:
+
+1. Import an existing audio file.
+2. Create a canonical transcript with MiMo ASR.
+3. Optionally generate versioned content with a built-in or custom prompt template through DeepSeek.
+4. Browse, organize, open, and reveal results in the Task Library.
+
+Local SenseVoice/Whisper transcription and Ollama generation are planned; they are not included in `0.1.0-alpha`. Voxly does not currently claim fully local processing, built-in recording, or bundled local models.
+
+The actively supported desktop targets are macOS arm64 development builds. Windows x64 is an intended release target but is not yet confirmed as a packaged alpha in this repository.
+
+## Desktop development
+
+Internal repository, Go binary, and package names intentionally remain `meet-asr` / `meeting-asr-go`.
+
+```bash
+cd core-go
+go build -o /tmp/meeting-asr-go .
+cd ..
+MEETING_ASR_GO_BINARY=/tmp/meeting-asr-go npm --prefix desktop run tauri -- dev
+```
+
+The desktop requires `ffmpeg` on `PATH`. MiMo credentials are required for transcription; DeepSeek credentials are required only when generated content is requested. Production credential storage uses the operating system secure credential store.
+
+## Legacy Python CLI
+
+The Python CLI remains in the repository as a deprecated development boundary. It is not the active production desktop runtime. The following instructions are retained for contributors working on that legacy implementation.
+
+### Installation
 
 Create and activate a virtual environment:
 

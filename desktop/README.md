@@ -1,22 +1,22 @@
-# meeting-asr Desktop Prototype
+# Voxly / 声笺 Desktop
 
-> **EXPERIMENTAL** — Python is the stable default in development; Go is
-> available as an explicitly experimental development backend and as the
-> packaged production-candidate sidecar.
+> **0.1.0-alpha** — Local Voice Workspace / 本地语音工作台. Go is the
+> default development backend and the only packaged production runtime.
 
 ## What This Is
 
-A thin Tauri + React + TypeScript desktop wrapper that calls either Python via
-`uv run meeting-asr` or the experimental Go CLI. Rust validates paths, streams
-the stable stdout contract, and validates final artifacts before reporting success.
+A Tauri + React + TypeScript desktop application that calls the Go sidecar.
+Rust validates paths, streams the stable stdout contract, and validates final
+artifacts before reporting success. Python remains an explicit deprecated
+development fallback only.
 
 ## Architecture
 
 ```
 desktop/ (Tauri + React)
-  ├── Python (default): uv run meeting-asr transcribe ...
-  ├── Go (development): core-go/meeting-asr-go transcribe ...
-  └── Go (production candidate): packaged meeting-asr-go sidecar
+  ├── Go (development default): core-go/meeting-asr-go transcribe ...
+  ├── Python (development fallback): uv run meeting-asr transcribe ...
+  └── Go (production): packaged meeting-asr-go sidecar
 ```
 
 ## Prerequisites
@@ -25,8 +25,8 @@ desktop/ (Tauri + React)
 |---|---|
 | **Node.js + npm** | Frontend build and Tauri CLI |
 | **Rust** (rustc, cargo) | Tauri Rust backend |
-| **[uv](https://docs.astral.sh/uv/)** | Python backend only |
-| **Go 1.21+** | Build the experimental Go backend or desktop sidecar |
+| **[uv](https://docs.astral.sh/uv/)** | Deprecated Python fallback only |
+| **Go 1.21+** | Build the active Go backend or desktop sidecar |
 | **ffmpeg** | Audio splitting (required by both backends; not bundled) |
 | **`.env` at project root (development only)** | Development API-key compatibility |
 
@@ -49,7 +49,7 @@ npm install
 #    minutes additionally:  DEEPSEEK_API_KEY
 ```
 
-### Go backend (experimental)
+### Go backend
 
 ```bash
 cd core-go
@@ -246,11 +246,11 @@ No filesystem, shell, network, or opener permissions are granted.
 
 ## Manual Verification Checklist
 
-- [ ] Tauri window opens with title "meeting-asr Desktop Prototype"
-- [ ] Subtitle shows "Experimental Tauri prototype"
+- [ ] Tauri window opens with title "Voxly — Local Voice Workspace"
+- [ ] Header shows Voxly / 声笺 and the localized subtitle
 - [ ] File picker allows `.mp3`, `.wav`, and `.m4a`
 - [ ] Output mode shows `transcript`, `notes`, and `minutes`
-- [ ] Development Settings show Python as default and Go as experimental
+- [ ] Development Settings show Go first/default and Python as fallback
 - [ ] Internal bundle smoke finds `Contents/MacOS/meeting-asr-go` and its
       `version` command succeeds
 - [ ] Settings readiness panel reports runtime/backend, sidecar, ffmpeg,
