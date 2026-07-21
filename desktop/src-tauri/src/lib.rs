@@ -393,6 +393,12 @@ struct ArtifactSummary {
     provider: String,
     #[serde(default)]
     model: String,
+    #[serde(default)]
+    runtime: String,
+    #[serde(default)]
+    runtime_version: String,
+    #[serde(default)]
+    model_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1653,7 +1659,7 @@ async fn open_output_root(app: AppHandle) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 struct RunCredentials {
-    mimo: String,
+    mimo: Option<String>,
     deepseek: Option<String>,
 }
 
@@ -1681,14 +1687,22 @@ fn missing_api_key(key: CredentialKey) -> BackendError {
 fn resolve_run_credentials<S: CredentialStore>(
     store: &S,
     output_mode: &str,
+    asr_provider: &str,
     runtime_mode: RuntimeMode,
     mimo_session: Option<&str>,
     deepseek_session: Option<&str>,
     environment: &EnvironmentValues,
 ) -> Result<RunCredentials, BackendError> {
-    let mimo_key = CredentialKey::MimoApiKey;
-    let mimo = resolve_credential(store, mimo_key, mimo_session, runtime_mode, environment)?
-        .ok_or_else(|| missing_api_key(mimo_key))?;
+    let mimo = if asr_provider == DEFAULT_ASR_PROVIDER {
+        let key = CredentialKey::MimoApiKey;
+        Some(
+            resolve_credential(store, key, mimo_session, runtime_mode, environment)?
+                .ok_or_else(|| missing_api_key(key))?
+                .value,
+        )
+    } else {
+        None
+    };
 
     let should_resolve_deepseek = output_mode == "minutes"
         || output_mode == "transcript_and_generate"
@@ -1705,10 +1719,7 @@ fn resolve_run_credentials<S: CredentialStore>(
         None
     };
 
-    Ok(RunCredentials {
-        mimo: mimo.value,
-        deepseek,
-    })
+    Ok(RunCredentials { mimo, deepseek })
 }
 
 fn parse_credential_key(value: &str) -> Result<CredentialKey, String> {
@@ -2253,6 +2264,7 @@ fn build_python_command(
     // the runtime-specific resolution policy.
     cmd.env_remove("MIMO_API_KEY");
     cmd.env_remove("DEEPSEEK_API_KEY");
+    cmd.env_remove("VOXLY_SENSEVOICE_WRAPPER");
     if let Some(key) = mimo_key {
         if !key.is_empty() {
             cmd.env("MIMO_API_KEY", key);
@@ -2485,12 +2497,6 @@ fn run_meeting_asr_blocking(
         load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
             .map_err(String::from)?;
     validate_asr_selection(&asr_config).map_err(String::from)?;
-    if asr_config.provider_id == LOCAL_ASR_PROVIDER {
-        return Err(String::from(BackendError::InvalidInput {
-            message: "The local speech runtime is not available yet. No Task was created."
-                .to_string(),
-        }));
-    }
     if asr_config != desktop_settings.asr {
         return Err(String::from(BackendError::InvalidInput {
             message: "Speech-recognition settings changed. Refresh and try again.".to_string(),
@@ -2514,6 +2520,11 @@ fn run_meeting_asr_blocking(
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
         backend_output_mode,
+        if backend_kind == BackendKind::Python {
+            DEFAULT_ASR_PROVIDER
+        } else {
+            &providers.asr.provider_id
+        },
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -2528,7 +2539,7 @@ fn run_meeting_asr_blocking(
             &abs_audio_str,
             backend_output_mode,
             &out_dir,
-            Some(&credentials.mimo),
+            credentials.mimo.as_deref(),
             credentials.deepseek.as_deref(),
             Some(&providers.llm.model_id),
             runtime_mode,
@@ -2537,7 +2548,7 @@ fn run_meeting_asr_blocking(
             &abs_audio_str,
             &output_mode,
             &out_dir,
-            Some(&credentials.mimo),
+            credentials.mimo.as_deref(),
             credentials.deepseek.as_deref(),
             &providers,
             env_file.as_ref(),
@@ -2550,10 +2561,15 @@ fn run_meeting_asr_blocking(
     if backend_kind == BackendKind::Go {
         cmd.arg("--templates-file")
             .arg(custom_templates_path(&app).map_err(String::from)?);
+        cmd.arg("--app-data-root")
+            .arg(model_app_data_root(&app).map_err(String::from)?);
     }
 
-    let secrets = std::iter::once(credentials.mimo.clone())
-        .chain(credentials.deepseek.iter().cloned())
+    let secrets = credentials
+        .mimo
+        .iter()
+        .chain(credentials.deepseek.iter())
+        .cloned()
         .collect::<Vec<_>>();
     run_and_check(&app, &active, cmd, &output_mode, &abs_out, &secrets)
 }
@@ -2725,6 +2741,11 @@ fn resume_meeting_asr_blocking(
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
         &effective_mode,
+        if backend_kind == BackendKind::Python {
+            DEFAULT_ASR_PROVIDER
+        } else {
+            &desktop_settings.asr.provider_id
+        },
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -2749,7 +2770,10 @@ fn resume_meeting_asr_blocking(
             }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
-            c.env("MIMO_API_KEY", &credentials.mimo);
+            c.env_remove("VOXLY_SENSEVOICE_WRAPPER");
+            if let Some(key) = credentials.mimo.as_deref() {
+                c.env("MIMO_API_KEY", key);
+            }
             if let Some(key) = credentials.deepseek.as_deref() {
                 c.env("DEEPSEEK_API_KEY", key);
             }
@@ -2767,6 +2791,8 @@ fn resume_meeting_asr_blocking(
             c.arg("resume").arg(abs_task_dir.as_os_str());
             c.arg("--templates-file")
                 .arg(custom_templates_path(&app).map_err(String::from)?);
+            c.arg("--app-data-root")
+                .arg(model_app_data_root(&app).map_err(String::from)?);
             c.arg("--asr-provider")
                 .arg(&desktop_settings.asr.provider_id)
                 .arg("--asr-model")
@@ -2793,7 +2819,9 @@ fn resume_meeting_asr_blocking(
             }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
-            c.env("MIMO_API_KEY", &credentials.mimo);
+            if let Some(key) = credentials.mimo.as_deref() {
+                c.env("MIMO_API_KEY", key);
+            }
             if let Some(key) = credentials.deepseek.as_deref() {
                 c.env("DEEPSEEK_API_KEY", key);
             }
@@ -2801,8 +2829,11 @@ fn resume_meeting_asr_blocking(
         }
     };
 
-    let secrets = std::iter::once(credentials.mimo.clone())
-        .chain(credentials.deepseek.iter().cloned())
+    let secrets = credentials
+        .mimo
+        .iter()
+        .chain(credentials.deepseek.iter())
+        .cloned()
         .collect::<Vec<_>>();
 
     run_and_check(&app, &active, cmd, &effective_mode, &output_root, &secrets)
@@ -4634,6 +4665,7 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "notes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4641,7 +4673,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(credentials.mimo, "mimo-secret");
+        assert_eq!(credentials.mimo.as_deref(), Some("mimo-secret"));
         assert!(credentials.deepseek.is_none());
     }
 
@@ -4655,6 +4687,7 @@ mod tests {
         let missing = match resolve_run_credentials(
             &store,
             "minutes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4677,6 +4710,7 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "minutes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4703,14 +4737,48 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "transcript_and_generate",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
             &environment,
         )
         .unwrap();
-        assert_eq!(credentials.mimo, "mimo");
+        assert_eq!(credentials.mimo.as_deref(), Some("mimo"));
         assert_eq!(credentials.deepseek.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn test_local_asr_credentials_do_not_require_or_resolve_mimo() {
+        let store = TestCredentialStore::default();
+        let credentials = resolve_run_credentials(
+            &store,
+            "transcript_only",
+            LOCAL_ASR_PROVIDER,
+            RuntimeMode::Development,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        )
+        .unwrap();
+        assert!(credentials.mimo.is_none());
+        assert!(credentials.deepseek.is_none());
+
+        store
+            .save(CredentialKey::DeepseekApiKey, "deepseek-secret")
+            .unwrap();
+        let generated = resolve_run_credentials(
+            &store,
+            "transcript_and_generate",
+            LOCAL_ASR_PROVIDER,
+            RuntimeMode::Development,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        )
+        .unwrap();
+        assert!(generated.mimo.is_none());
+        assert_eq!(generated.deepseek.as_deref(), Some("deepseek-secret"));
     }
 
     #[test]
@@ -5927,6 +5995,9 @@ mod tests {
                     retryable: None,
                     provider: String::new(),
                     model: String::new(),
+                    runtime: String::new(),
+                    runtime_version: String::new(),
+                    model_version: String::new(),
                 }],
                 has_partial_errors: false,
                 task_folder: task_folder.to_string(),
@@ -5956,6 +6027,9 @@ mod tests {
             retryable: None,
             provider: "mimo".to_string(),
             model: "mimo-v2.5-asr".to_string(),
+            runtime: String::new(),
+            runtime_version: String::new(),
+            model_version: String::new(),
         });
         assert_eq!(
             resolve_generation_task(&root, &discovery, "task").unwrap(),

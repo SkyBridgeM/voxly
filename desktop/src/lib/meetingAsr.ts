@@ -141,6 +141,9 @@ export interface ArtifactSummary {
   retryable: boolean | null;
   provider: string;
   model: string;
+  runtime?: string;
+  runtime_version?: string;
+  model_version?: string;
 }
 
 export interface GenerationSummary {

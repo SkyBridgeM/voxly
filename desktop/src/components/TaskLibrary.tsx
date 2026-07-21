@@ -189,9 +189,10 @@ function ArtifactItem({
         )}
         <span>
           {artifact.provider
-            ? `${artifact.provider === "mimo" ? labels.speechRecognitionProvider : labels.generatedWithProvider}: ${artifact.provider === "mimo" ? "Mimo" : artifact.provider === "deepseek" ? "DeepSeek" : labels.providerUnknown} · ${artifact.model || labels.providerUnknown}`
+            ? `${artifact.provider === "mimo" || artifact.provider === "local-sensevoice" ? labels.speechRecognitionProvider : labels.generatedWithProvider}: ${artifact.provider === "mimo" ? "Mimo" : artifact.provider === "local-sensevoice" ? "SenseVoiceSmall INT8" : artifact.provider === "deepseek" ? "DeepSeek" : labels.providerUnknown} · ${artifact.model_version || artifact.model || labels.providerUnknown}`
             : labels.providerUnknown}
         </span>
+        {artifact.runtime && <span>{artifact.runtime} · {artifact.runtime_version || labels.providerUnknown}</span>}
         {metadata.map((item) => <span key={item}>{item}</span>)}
       </div>
       {available && artifact.reference && (

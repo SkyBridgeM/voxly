@@ -18,6 +18,7 @@ type ASRProviderCapabilities struct {
 	MaximumSourceDurationMS int64
 	MaximumSourceFileBytes  int64
 	AcceptedSourceFormats   []string
+	PreferredChunkFormat    string
 	SupportsUnchunkedInput  bool
 	AlwaysRequiresChunking  bool
 	RecommendedChunkMS      int64
@@ -36,11 +37,21 @@ func MimoCapabilities(model string) ASRProviderCapabilities {
 		ProviderID:             "mimo",
 		ModelID:                model,
 		AcceptedSourceFormats:  []string{"m4a", "mp3", "wav"},
+		PreferredChunkFormat:   "source",
 		SupportsUnchunkedInput: true,
 		RecommendedChunkMS:     int64(defaultChunkMinutes) * 60 * 1000,
 		RecommendedOverlapMS:   0,
 		MaximumConcurrency:     1,
 		RecommendedConcurrency: 1,
+	}
+}
+
+func SenseVoiceCapabilities(model string) ASRProviderCapabilities {
+	return ASRProviderCapabilities{
+		ContractVersion: asrCapabilityContractVersion, ProviderID: string(ASRProviderLocalSenseVoice), ModelID: model,
+		AcceptedSourceFormats: []string{"m4a", "mp3", "wav"}, PreferredChunkFormat: "wav",
+		SupportsUnchunkedInput: true, RecommendedChunkMS: int64(defaultChunkMinutes) * 60 * 1000,
+		MaximumChunkMS: 30 * 60 * 1000, MaximumConcurrency: 1, RecommendedConcurrency: 1,
 	}
 }
 
@@ -59,6 +70,9 @@ func (capabilities ASRProviderCapabilities) Validate() error {
 	}
 	if len(capabilities.AcceptedSourceFormats) == 0 {
 		return fmt.Errorf("ASR accepted source formats are required")
+	}
+	if capabilities.PreferredChunkFormat != "source" && capabilities.PreferredChunkFormat != "wav" {
+		return fmt.Errorf("invalid ASR preferred chunk format")
 	}
 	if capabilities.AlwaysRequiresChunking && capabilities.SupportsUnchunkedInput {
 		return fmt.Errorf("ASR capabilities cannot both require chunking and support unchunked input")

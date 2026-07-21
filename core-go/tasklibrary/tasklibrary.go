@@ -45,13 +45,16 @@ type TaskSummary struct {
 
 // ArtifactSummary contains only information useful for output presentation.
 type ArtifactSummary struct {
-	Kind      string `json:"kind"`
-	Status    string `json:"status"`
-	Reference string `json:"reference,omitempty"`
-	HasError  bool   `json:"has_error"`
-	Retryable *bool  `json:"retryable,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
+	Kind           string `json:"kind"`
+	Status         string `json:"status"`
+	Reference      string `json:"reference,omitempty"`
+	HasError       bool   `json:"has_error"`
+	Retryable      *bool  `json:"retryable,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Runtime        string `json:"runtime,omitempty"`
+	RuntimeVersion string `json:"runtime_version,omitempty"`
+	ModelVersion   string `json:"model_version,omitempty"`
 }
 
 type GenerationGroup struct {
@@ -186,6 +189,11 @@ func canonicalTranscriptSummary(taskDir string, manifest *taskmanifest.TaskManif
 		artifact.Reference = safeRelativeReference(taskDir, manifest.CanonicalTranscript.ArtifactReference)
 		artifact.Provider = manifest.CanonicalTranscript.ASRProvider
 		artifact.Model = manifest.CanonicalTranscript.ASRModel
+	}
+	if manifest.ASRRuntime != nil {
+		artifact.Runtime = manifest.ASRRuntime.EngineRuntime
+		artifact.RuntimeVersion = manifest.ASRRuntime.RuntimeVersion
+		artifact.ModelVersion = manifest.ASRRuntime.ModelVersion
 	}
 	if artifact.Status == "completed" && (artifact.Reference == "" || !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(artifact.Reference)))) {
 		artifact.Status = "unavailable"

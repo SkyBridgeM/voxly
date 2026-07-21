@@ -16,6 +16,13 @@ output/
 core-go/meeting-asr-go
 core-go/core-go
 core-go/*.test
+core-go/voxly-sensevoice-wrapper
+core-go/voxly-sensevoice-wrapper.exe
+core-go/sensevoice-runtime/
 
 # Generated Tauri sidecar binaries
 desktop/src-tauri/binaries/meeting-asr-go-*
+.runtime-build/
+desktop/src-tauri/binaries/voxly-sensevoice-wrapper-*
+desktop/src-tauri/resources/sensevoice/*
+!desktop/src-tauri/resources/sensevoice/.gitkeep

@@ -62,6 +62,20 @@ type TaskManifest struct {
 	CheckpointUnknownFields map[string]json.RawMessage `json:"-"`
 	CanonicalTranscript     *CanonicalTranscript       `json:"-"`
 	Generations             []GenerationRecord         `json:"-"`
+	ASRRuntime              *ASRRuntimeSnapshot        `json:"-"`
+}
+
+type ASRRuntimeSnapshot struct {
+	ProviderID        string                     `json:"provider_id"`
+	ModelID           string                     `json:"model_id"`
+	ExecutionLocation string                     `json:"execution_location"`
+	RuntimeKind       string                     `json:"runtime_kind"`
+	RuntimeVersion    string                     `json:"runtime_version"`
+	ModelVersion      string                     `json:"model_version"`
+	ModelSHA256       string                     `json:"model_sha256"`
+	Engine            string                     `json:"engine"`
+	EngineRuntime     string                     `json:"engine_runtime"`
+	UnknownFields     map[string]json.RawMessage `json:"-"`
 }
 
 // CanonicalTranscript identifies the immutable transcript revision used by
@@ -163,6 +177,7 @@ type ExecutionMetadata struct {
 	Attempt       int                        `json:"attempt,omitempty"`
 	CompletedAt   *string                    `json:"completed_at,omitempty"`
 	ErrorSummary  *ArtifactError             `json:"error_summary,omitempty"`
+	ASRRuntime    *ASRRuntimeSnapshot        `json:"asr_runtime,omitempty"`
 	UnknownFields map[string]json.RawMessage `json:"-"`
 }
 
@@ -273,10 +288,17 @@ func (manifest *TaskManifest) ValidateManifest() error {
 		Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
 		TemplateID: manifest.RequestedTemplateID,
 		Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
-		CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
+		CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(), ASRRuntime: manifest.ASRRuntime,
 	}
 	if err := execution.validate(); err != nil {
 		return err
+	}
+	if snapshot := manifest.ASRRuntime; snapshot != nil {
+		for name, value := range map[string]string{"provider_id": snapshot.ProviderID, "model_id": snapshot.ModelID, "execution_location": snapshot.ExecutionLocation, "runtime_kind": snapshot.RuntimeKind, "runtime_version": snapshot.RuntimeVersion, "model_version": snapshot.ModelVersion, "model_sha256": snapshot.ModelSHA256, "engine": snapshot.Engine, "engine_runtime": snapshot.EngineRuntime} {
+			if strings.TrimSpace(value) == "" || strings.ContainsAny(value, `/\\`) {
+				return fmt.Errorf("task manifest has invalid asr_runtime.%s", name)
+			}
+		}
 	}
 	if strings.TrimSpace(manifest.Source.Path) == "" {
 		return errors.New("task manifest missing input.source_reference")
@@ -619,6 +641,7 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	manifest.Attempt = wire.Execution.Attempt
 	manifest.CompletedAt = wire.Execution.CompletedAt
 	manifest.ExecutionUnknownFields = wire.Execution.UnknownFields
+	manifest.ASRRuntime = wire.Execution.ASRRuntime
 	if wire.Execution.ErrorSummary != nil {
 		retryable := wire.Execution.ErrorSummary.Retryable != nil && *wire.Execution.ErrorSummary.Retryable
 		manifest.LastError = &ErrorInfo{Stage: wire.Execution.ErrorSummary.Code, Message: wire.Execution.ErrorSummary.Message, Retryable: retryable, At: wire.UpdatedAt, UnknownFields: wire.Execution.ErrorSummary.UnknownFields}
@@ -662,6 +685,7 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 			TemplateID: manifest.RequestedTemplateID,
 			Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
 			CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
+			ASRRuntime:    manifest.ASRRuntime,
 			UnknownFields: manifest.ExecutionUnknownFields,
 		},
 		Input: InputMetadata{
@@ -711,7 +735,7 @@ func (manifest *TaskManifest) CountCompletedChunks() int {
 
 func (metadata *ExecutionMetadata) UnmarshalJSON(data []byte) error {
 	type plain ExecutionMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "template_id", "status", "stage", "attempt", "completed_at", "error_summary")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "template_id", "status", "stage", "attempt", "completed_at", "error_summary", "asr_runtime")
 	metadata.UnknownFields = unknown
 	return err
 }
@@ -719,6 +743,20 @@ func (metadata *ExecutionMetadata) UnmarshalJSON(data []byte) error {
 func (metadata ExecutionMetadata) MarshalJSON() ([]byte, error) {
 	type plain ExecutionMetadata
 	return marshalWithUnknown(plain(metadata), metadata.UnknownFields)
+}
+
+func (snapshot *ASRRuntimeSnapshot) UnmarshalJSON(data []byte) error {
+	type plain ASRRuntimeSnapshot
+	unknown, err := unmarshalWithUnknown(data, (*plain)(snapshot), "provider_id", "model_id", "execution_location", "runtime_kind", "runtime_version", "model_version", "model_sha256", "engine", "engine_runtime")
+	if err == nil {
+		snapshot.UnknownFields = unknown
+	}
+	return err
+}
+
+func (snapshot ASRRuntimeSnapshot) MarshalJSON() ([]byte, error) {
+	type plain ASRRuntimeSnapshot
+	return marshalWithUnknown(plain(snapshot), snapshot.UnknownFields)
 }
 
 func (metadata *InputMetadata) UnmarshalJSON(data []byte) error {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"github.com/yudi/meet-asr/core-go/localruntime"
 )
 
 type ASRProviderID string
@@ -149,7 +151,7 @@ func ResolveASRCapabilities(config ASRProviderConfig) (ASRProviderCapabilities, 
 	if config.ProviderID == ASRProviderMimo {
 		return MimoCapabilities(string(config.ModelID)), nil
 	}
-	return ASRProviderCapabilities{}, &ASRExecutionError{Code: "runtime_not_implemented", Message: "The local speech runtime is not available yet."}
+	return SenseVoiceCapabilities(string(config.ModelID)), nil
 }
 
 func ResolveLLMContentGenerator(config LLMProviderConfig) (ContentGenerator, error) {
@@ -201,7 +203,10 @@ type ASRExecutionError struct{ Code, Message string }
 func (e *ASRExecutionError) Error() string { return e.Code + ": " + e.Message }
 
 type ASRRequest struct{ AudioPath, Language string }
-type ASRResult struct{ Text string }
+type ASRResult struct {
+	Text     string
+	Segments []localruntime.Segment
+}
 type ASRProvider interface {
 	Transcribe(context.Context, ASRRequest) (ASRResult, error)
 }
@@ -211,15 +216,10 @@ func ResolveASRProvider(config ASRProviderConfig, settings *Settings, apiKey str
 		return nil, err
 	}
 	if config.ProviderID == ASRProviderLocalSenseVoice {
-		return unavailableLocalASRProvider{}, nil
+		provider, _, err := prepareLocalSenseVoice(settings)
+		return provider, err
 	}
 	return mimoASRProvider{settings: settings, apiKey: apiKey}, nil
-}
-
-type unavailableLocalASRProvider struct{}
-
-func (unavailableLocalASRProvider) Transcribe(context.Context, ASRRequest) (ASRResult, error) {
-	return ASRResult{}, &ASRExecutionError{Code: "runtime_not_implemented", Message: "The local speech runtime is not available yet."}
 }
 
 func EvaluateLLMReadiness(config LLMProviderConfig, credentialAvailable bool) ProviderReadiness {
