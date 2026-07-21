@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "wrapper": {
+    "name": "voxly-sensevoice-wrapper",
+    "version": "1.0.0",
+    "protocol_version": "1.0"
+  },
+  "engine": {
+    "repository": "https://github.com/k2-fsa/sherpa-onnx",
+    "tag": "v1.13.4",
+    "commit": "142807252687d81b40d6315f23470a1512a00de3",
+    "version": "1.13.4",
+    "license": "Apache-2.0",
+    "macos_arm64_sdk_asset": "sherpa-onnx-v1.13.4-osx-arm64-shared-no-tts-lib.tar.bz2",
+    "macos_arm64_sdk_sha256": "c003242369046d3c2adc6b48c3c96e0ff129e76738b7f3aa5342828ec8ba410d",
+    "onnxruntime_version": "1.27.0",
+    "windows_onnxruntime_asset": "onnxruntime-win-x64-static_lib-MT-Release-1.27.0.tar.bz2",
+    "windows_onnxruntime_sha256": "6db0cdd3bcb208911758b7336820d19ecff0359a7003e0ec65895be701741288",
+    "windows_linkage": "static",
+    "windows_crt": "static",
+    "windows_cpu_baseline": "x86_64-default-no-avx2-requirement"
+  },
+  "supported_models": ["sensevoice-small-int8"],
+  "supported_targets": ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+}

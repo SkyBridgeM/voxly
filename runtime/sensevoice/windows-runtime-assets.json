@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "target": "x86_64-pc-windows-msvc",
+  "runtime_directory": ".runtime-build/windows-x86_64/runtime",
+  "engine": {
+    "name": "sherpa-onnx",
+    "version": "1.13.4",
+    "revision": "142807252687d81b40d6315f23470a1512a00de3",
+    "onnxruntime_version": "1.27.0",
+    "onnxruntime_asset": "onnxruntime-win-x64-static_lib-MT-Release-1.27.0.tar.bz2",
+    "onnxruntime_sha256": "6db0cdd3bcb208911758b7336820d19ecff0359a7003e0ec65895be701741288",
+    "linkage": "static",
+    "cpu_baseline": "MSVC x64 default (SSE2); no /arch:AVX or /arch:AVX2"
+  },
+  "files": [
+    {
+      "path": "voxly-sensevoice-wrapper.exe",
+      "role": "runtime_executable",
+      "origin": "built_from_pinned_source",
+      "bundle_destination": "application_directory/voxly-sensevoice-wrapper.exe",
+      "hash": "generated_in_build_summary"
+    },
+    {
+      "path": "runtime-manifest.json",
+      "role": "runtime_metadata",
+      "origin": "runtime/sensevoice/runtime-manifest.json",
+      "bundle_destination": "resources/sensevoice/runtime-manifest.json",
+      "hash": "generated_in_build_summary"
+    },
+    {
+      "path": "licenses/LICENSE.sherpa-onnx",
+      "role": "license",
+      "origin": "sherpa-onnx LICENSE at pinned revision",
+      "bundle_destination": "resources/sensevoice/LICENSE.sherpa-onnx",
+      "hash": "generated_in_build_summary"
+    },
+    {
+      "path": "licenses/THIRD_PARTY_NOTICES.md",
+      "role": "notices",
+      "origin": "runtime/sensevoice/THIRD_PARTY_NOTICES.md",
+      "bundle_destination": "resources/sensevoice/THIRD_PARTY_NOTICES.md",
+      "hash": "generated_in_build_summary"
+    }
+  ],
+  "non_system_dlls": [],
+  "notes": "sherpa-onnx and ONNX Runtime are linked statically. dumpbin must confirm that no non-system DLL dependency is missing before Windows support is accepted."
+}

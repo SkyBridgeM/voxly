@@ -60,7 +60,7 @@ func SplitAudioWithCapabilities(inputPath, chunksDir string, chunkMinutes int, m
 	}
 
 	inputFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(inputPath)), ".")
-	chunkFormat := chunkAudioFormat(inputFormat)
+	chunkFormat := chunkAudioFormat(inputFormat, capabilities.PreferredChunkFormat)
 	requestedChunkDurationMS, err := chunkMinutesToMilliseconds(chunkMinutes)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func SplitAudioWithCapabilities(inputPath, chunksDir string, chunkMinutes int, m
 		if err := clearChunks(chunksDir, chunkFormat); err != nil {
 			return nil, err
 		}
-		if err := splitOnce(inputPath, chunksDir, inputFormat, chunkSeconds); err != nil {
+		if err := splitOnce(inputPath, chunksDir, inputFormat, chunkFormat, chunkSeconds); err != nil {
 			return nil, err
 		}
 
@@ -136,8 +136,8 @@ func chunkMinutesToMilliseconds(minutes int) (int64, error) {
 	return int64(minutes) * millisecondsPerMinute, nil
 }
 
-func chunkAudioFormat(inputFormat string) string {
-	if inputFormat == "m4a" {
+func chunkAudioFormat(inputFormat, preferred string) string {
+	if preferred == "wav" || inputFormat == "m4a" {
 		return "wav"
 	}
 	return inputFormat
@@ -163,12 +163,11 @@ func clearChunks(chunksDir, format string) error {
 	return nil
 }
 
-func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error {
-	chunkFmt := chunkAudioFormat(inputFormat)
+func splitOnce(inputPath, chunksDir, inputFormat, chunkFmt string, chunkSeconds int) error {
 	outputPattern := filepath.Join(chunksDir, fmt.Sprintf("part_%%03d.%s", chunkFmt))
 
 	var args []string
-	if inputFormat == "m4a" {
+	if chunkFmt == "wav" {
 		args = []string{
 			"-hide_banner", "-loglevel", "error", "-y",
 			"-i", inputPath,

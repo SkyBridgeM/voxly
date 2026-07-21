@@ -328,6 +328,10 @@ func TestRuntimeReadinessComposesAfterModelVerification(t *testing.T) {
 	if missing.State != "runtime_missing" {
 		t.Fatalf("missing state = %s", missing.State)
 	}
+	invalid := StatusWithRuntime(root, "r", model, RuntimeReadiness{RuntimeID: "fixture-runtime", State: RuntimeInvalid})
+	if invalid.State != "runtime_invalid" {
+		t.Fatalf("invalid state = %s", invalid.State)
+	}
 	ready := StatusWithRuntime(root, "r", model, RuntimeReadiness{RuntimeID: "fixture-runtime", Version: "test-only", State: RuntimeReady})
 	if ready.State != "ready" || ready.RuntimeVersion != "test-only" {
 		t.Fatalf("ready = %#v", ready)

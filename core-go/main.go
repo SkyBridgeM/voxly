@@ -205,7 +205,11 @@ func runModelCommand(command string, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	if command == "model-status" {
-		return json.NewEncoder(stdout).Encode(modelcatalog.Status(*root, catalog.CatalogRevision, model))
+		status, statusErr := localRuntimeStatus(*root)
+		if statusErr != nil {
+			return statusErr
+		}
+		return json.NewEncoder(stdout).Encode(status)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -228,6 +232,12 @@ func runModelCommand(command string, args []string, stdout, stderr io.Writer) er
 	}
 	if err != nil {
 		return err
+	}
+	if command == "download-model" || command == "import-model" || command == "delete-model" {
+		result, err = localRuntimeStatus(*root)
+		if err != nil {
+			return err
+		}
 	}
 	return json.NewEncoder(stdout).Encode(result)
 }
@@ -515,6 +525,7 @@ func runTranscribe(args []string) error {
 	asrModel := fs.String("asr-model", string(ASRModelMimoV25), "Speech-recognition model")
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
+	appDataRoot := fs.String("app-data-root", "", "Voxly app data root for managed local models")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
@@ -605,6 +616,10 @@ func runTranscribe(args []string) error {
 	settings.MimoModel = *asrModel
 	settings.LLMProvider = *llmProvider
 	settings.DeepSeekModel = *llmModel
+	settings.AppDataRoot = *appDataRoot
+	if settings.ASRConfig().ProviderID == ASRProviderLocalSenseVoice && !filepath.IsAbs(settings.AppDataRoot) {
+		return fmt.Errorf("--app-data-root must be absolute for local speech recognition")
+	}
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return err
 	}
@@ -671,6 +686,13 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if err != nil {
 		return err
 	}
+	if settings.ASRConfig().ProviderID == ASRProviderLocalSenseVoice {
+		fmt.Println("Status: Preparing local runtime")
+	}
+	runtimeSnapshot, err := ensureASRReady(settings)
+	if err != nil {
+		return err
+	}
 	// 1. Create task directory.
 	audioStem := filepath.Base(audioPath)
 	audioStem = audioStem[:len(audioStem)-len(filepath.Ext(audioStem))]
@@ -688,6 +710,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 	// 3. Create manifest.
 	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, settings.ASRProvider, settings.MimoModel)
+	manifest.ASRRuntime = runtimeSnapshot
 	if outputMode == "transcript_and_generate" && len(selectedTemplate) > 0 {
 		manifest.RequestedTemplateID = selectedTemplate[0]
 	}
@@ -779,7 +802,11 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		return fmt.Errorf("saving transcript artifact state: %w", err)
 	}
-	fmt.Println("Status: Merging transcript")
+	if settings.ASRConfig().ProviderID == ASRProviderLocalSenseVoice {
+		fmt.Println("Status: Finalizing transcript")
+	} else {
+		fmt.Println("Status: Merging transcript")
+	}
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
 		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, IsRetryableError(err))

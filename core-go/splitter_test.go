@@ -63,7 +63,7 @@ func TestChunkAudioFormat(t *testing.T) {
 		{"m4a", "wav"},
 	}
 	for _, tt := range tests {
-		got := chunkAudioFormat(tt.input)
+		got := chunkAudioFormat(tt.input, "source")
 		if got != tt.want {
 			t.Errorf("chunkAudioFormat(%q) = %q, want %q", tt.input, got, tt.want)
 		}

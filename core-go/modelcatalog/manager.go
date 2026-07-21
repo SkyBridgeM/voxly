@@ -142,6 +142,7 @@ type RuntimeState string
 
 const (
 	RuntimeMissing RuntimeState = "missing"
+	RuntimeInvalid RuntimeState = "invalid"
 	RuntimeReady   RuntimeState = "ready"
 )
 
@@ -216,9 +217,42 @@ func StatusWithRuntime(root, catalogRevision string, model Model, runtimeStatus 
 		status.RuntimeVersion = runtimeStatus.Version
 		return status
 	}
+	if runtimeStatus.State == RuntimeInvalid && runtimeStatus.RuntimeID == model.EngineRuntime {
+		status.State = "runtime_invalid"
+		status.Message = "Model installed; the bundled local speech runtime is invalid."
+		return status
+	}
 	status.State = "runtime_missing"
 	status.Message = "Model installed; the local speech runtime will arrive in the next implementation stage."
 	return status
+}
+
+type VerifiedModelFiles struct {
+	Directory string
+	Model     string
+	Tokens    string
+}
+
+// ResolveVerifiedModelFiles returns catalog-owned canonical paths only after
+// receipt and installed-file identity verification succeeds.
+func ResolveVerifiedModelFiles(root, catalogRevision string, model Model) (VerifiedModelFiles, error) {
+	probe := RuntimeReadiness{RuntimeID: model.EngineRuntime, State: RuntimeReady}
+	if status := StatusWithRuntime(root, catalogRevision, model, probe); status.State != "ready" {
+		return VerifiedModelFiles{}, modelError("model_invalid", "The installed model is unavailable or invalid.", false)
+	}
+	paths, err := NewPaths(root)
+	if err != nil {
+		return VerifiedModelFiles{}, err
+	}
+	directory, err := filepath.EvalSymlinks(paths.modelDirectory(model))
+	if err != nil {
+		return VerifiedModelFiles{}, modelError("model_invalid", "The installed model path is invalid.", false)
+	}
+	return VerifiedModelFiles{
+		Directory: directory,
+		Model:     filepath.Join(directory, "model.int8.onnx"),
+		Tokens:    filepath.Join(directory, "tokens.txt"),
+	}, nil
 }
 
 func sameFileIdentities(left, right []FileIdentity) bool {

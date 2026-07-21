@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,6 +28,7 @@ func RunResume(args []string) error {
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
+	appDataRoot := fs.String("app-data-root", "", "Voxly app data root for managed local models")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
@@ -112,6 +114,7 @@ func RunResume(args []string) error {
 	settings.ASRProvider, settings.MimoModel = *asrProvider, *asrModel
 	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
 	settings.TemplateStorePath = *templatesFile
+	settings.AppDataRoot = *appDataRoot
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return err
 	}
@@ -360,9 +363,24 @@ func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error 
 
 	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(pendingPaths))
 
-	apiKey, err := settings.RequireMimoAPIKey()
+	apiKey := ""
+	if settings.ASRConfig().ProviderID == ASRProviderMimo {
+		var err error
+		apiKey, err = settings.RequireMimoAPIKey()
+		if err != nil {
+			return err
+		}
+	}
+	provider, err := ResolveASRProvider(settings.ASRConfig(), settings, apiKey)
 	if err != nil {
 		return err
+	}
+	if settings.ASRConfig().ProviderID == ASRProviderLocalSenseVoice && m.ASRRuntime == nil {
+		_, snapshot, err := prepareLocalSenseVoice(settings)
+		if err != nil {
+			return err
+		}
+		m.ASRRuntime = snapshot
 	}
 
 	for _, chunkPath := range pendingPaths {
@@ -380,7 +398,7 @@ func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error 
 		}
 
 		fmt.Printf("Transcribing %s...\n", filepath.Base(chunkPath))
-		text, err := transcribeAudioFile(chunkPath, settings, apiKey)
+		result, err := provider.Transcribe(context.Background(), ASRRequest{AudioPath: chunkPath, Language: "auto"})
 		if err != nil {
 			chunk.State = ChunkFailed
 			msg := err.Error()
@@ -391,7 +409,7 @@ func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error 
 
 		// Write transcript atomically.
 		transcriptPath := filepath.Join(transcriptsDir, chunkID+".txt")
-		if err := WriteFileAtomically(transcriptPath, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
+		if err := WriteFileAtomically(transcriptPath, []byte(strings.TrimSpace(result.Text)+"\n"), 0600); err != nil {
 			chunk.State = ChunkFailed
 			msg := err.Error()
 			chunk.LastError = &msg

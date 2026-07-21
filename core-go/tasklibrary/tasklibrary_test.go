@@ -335,6 +335,31 @@ func TestDiscoverV2GroupsGeneratedVersionsAndPreservesFailures(t *testing.T) {
 	}
 }
 
+func TestCanonicalTranscriptIncludesSafeLocalRuntimeProvenance(t *testing.T) {
+	root := t.TempDir()
+	m := manifestFor("task-local", "completed", "2026-07-16T01:00:00Z", "transcript_only")
+	m.SchemaVersion = taskmanifest.LatestSchemaVersion
+	m.Provider = "local-sensevoice"
+	m.CanonicalTranscript = &taskmanifest.CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "hash", HashContractVersion: 1, CreatedAt: "2026-07-16T01:00:00Z", ASRProvider: "local-sensevoice", ASRModel: "sensevoice-small-int8", Status: "completed"}
+	m.ASRRuntime = &taskmanifest.ASRRuntimeSnapshot{ProviderID: "local-sensevoice", ModelID: "sensevoice-small-int8", ExecutionLocation: "local", RuntimeKind: "bundled_sidecar", RuntimeVersion: "1.13.4", ModelVersion: "2024-07-17", ModelSHA256: strings.Repeat("a", 64), Engine: "sensevoice", EngineRuntime: "sherpa-onnx"}
+	taskDir := filepath.Join(root, "task-local")
+	if err := os.MkdirAll(taskDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "transcript.md"), []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeTask(t, root, "task-local", m)
+	result, err := Discover(root)
+	if err != nil || len(result.Tasks) != 1 || result.Tasks[0].CanonicalTranscript == nil {
+		t.Fatalf("discover = %#v, %v", result, err)
+	}
+	artifact := result.Tasks[0].CanonicalTranscript
+	if artifact.Runtime != "sherpa-onnx" || artifact.RuntimeVersion != "1.13.4" || artifact.ModelVersion != "2024-07-17" {
+		t.Fatalf("runtime provenance = %#v", artifact)
+	}
+}
+
 func manifestFor(taskID, status, updatedAt, outputMode string) *taskmanifest.TaskManifest {
 	return &taskmanifest.TaskManifest{
 		SchemaVersion:   taskmanifest.LegacySchemaVersion,

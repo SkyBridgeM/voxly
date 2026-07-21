@@ -8,7 +8,7 @@
       "display_name": {"en": "SenseVoiceSmall INT8", "zh": "SenseVoiceSmall INT8"},
       "engine": "sensevoice",
       "engine_runtime": "sherpa-onnx",
-      "runtime_version": null,
+      "runtime_version": "1.13.4",
       "model_version": "2024-07-17",
       "platforms": ["darwin-arm64", "windows-amd64"],
       "source": {
