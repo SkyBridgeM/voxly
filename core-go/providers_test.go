@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,8 +12,12 @@ import (
 
 func TestBuiltInProviderCatalog(t *testing.T) {
 	catalog := BuiltInProviderCatalog()
-	if got := providerDescriptorIDs(catalog.ASR); !reflect.DeepEqual(got, []string{"mimo"}) {
+	if got := providerDescriptorIDs(catalog.ASR); !reflect.DeepEqual(got, []string{"local-sensevoice", "mimo"}) {
 		t.Fatalf("ASR providers = %v", got)
+	}
+	local := catalog.ASR[1]
+	if local.ExecutionLocation != "local" || local.RequiresCredentials || !local.SupportsModelInstallation || !local.SupportsManualImport || local.Privacy.SendsAudioOffDevice {
+		t.Fatalf("invalid local provider metadata: %#v", local)
 	}
 	if got := providerDescriptorIDs(catalog.LLM); !reflect.DeepEqual(got, []string{"deepseek"}) {
 		t.Fatalf("LLM providers = %v", got)
@@ -22,6 +30,61 @@ func TestBuiltInProviderCatalog(t *testing.T) {
 		if strings.Contains(strings.ToLower(encoded), "api_key") || strings.Contains(strings.ToLower(encoded), "secret") {
 			t.Fatalf("descriptor contains credential metadata: %#v", descriptor)
 		}
+	}
+}
+
+func TestPrivacyStateCombinations(t *testing.T) {
+	localASR := ProviderDescriptor{RequiresCredentials: false}
+	cloudASR := ProviderDescriptor{RequiresCredentials: true, Privacy: ProviderPrivacyFacts{SendsAudioOffDevice: true}}
+	localLLM := ProviderDescriptor{RequiresCredentials: false}
+	cloudLLM := ProviderDescriptor{RequiresCredentials: true, Privacy: ProviderPrivacyFacts{SendsTextOffDevice: true}}
+	tests := []struct {
+		asr, llm     ProviderDescriptor
+		kind, zh, en string
+	}{
+		{localASR, localLLM, "local_local", "音频和转写文本均留在本机", "Audio and transcript text stay"},
+		{localASR, cloudLLM, "local_cloud", "音频留在本机", "Audio stays on this device"},
+		{cloudASR, localLLM, "cloud_local", "音频会发送", "Audio is sent"},
+		{cloudASR, cloudLLM, "cloud_cloud", "转写文本会发送", "transcript text is sent"},
+	}
+	for _, test := range tests {
+		state := CalculatePrivacyState(test.asr, test.llm)
+		if state.Kind != test.kind || !strings.Contains(state.Description["zh"], test.zh) || !strings.Contains(state.Description["en"], test.en) {
+			t.Fatalf("privacy state = %#v", state)
+		}
+	}
+}
+
+func TestLocalASRExecutionFailsExplicitly(t *testing.T) {
+	settings := DefaultSettings()
+	provider, err := ResolveASRProvider(ASRProviderConfig{ProviderID: ASRProviderLocalSenseVoice, ModelID: ASRModelSenseVoiceSmallINT8}, settings, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Transcribe(context.Background(), ASRRequest{AudioPath: "unused.wav"})
+	var executionError *ASRExecutionError
+	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLocalRuntimeMissingDoesNotCreateTaskOrFallback(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "output")
+	audio := filepath.Join(root, "audio.wav")
+	if err := os.WriteFile(audio, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings := DefaultSettings()
+	settings.ASRProvider = string(ASRProviderLocalSenseVoice)
+	settings.MimoModel = string(ASRModelSenseVoiceSmallINT8)
+	err := runWorkflow(audio, output, settings, "transcript_only")
+	var executionError *ASRExecutionError
+	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked local run created output: %v", err)
 	}
 }
 

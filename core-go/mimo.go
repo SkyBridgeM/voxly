@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,10 +20,22 @@ type ProgressFunc func(action string, index, total int)
 
 // TranscribeChunks transcribes all chunks, skipping already-completed transcripts.
 func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings, progressFn ProgressFunc) ([]string, error) {
+	return TranscribeChunksContext(context.Background(), chunks, transcriptsDir, settings, progressFn)
+}
+
+func TranscribeChunksContext(ctx context.Context, chunks []string, transcriptsDir string, settings *Settings, progressFn ProgressFunc) ([]string, error) {
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return nil, err
 	}
-	apiKey, err := settings.RequireMimoAPIKey()
+	apiKey := ""
+	if settings.ASRConfig().ProviderID == ASRProviderMimo {
+		var err error
+		apiKey, err = settings.RequireMimoAPIKey()
+		if err != nil {
+			return nil, err
+		}
+	}
+	provider, err := ResolveASRProvider(settings.ASRConfig(), settings, apiKey)
 	if err != nil {
 		return nil, err
 	}
@@ -51,12 +64,12 @@ func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings
 		}
 		fmt.Printf("Transcribing %s...\n", filepath.Base(chunk))
 
-		text, err := transcribeAudioFile(chunk, settings, apiKey)
+		result, err := provider.Transcribe(ctx, ASRRequest{AudioPath: chunk, Language: "auto"})
 		if err != nil {
 			return nil, fmt.Errorf("transcribing %s: %w", filepath.Base(chunk), err)
 		}
 
-		if err := os.WriteFile(transcriptPath, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
+		if err := os.WriteFile(transcriptPath, []byte(strings.TrimSpace(result.Text)+"\n"), 0600); err != nil {
 			return nil, err
 		}
 
@@ -69,7 +82,21 @@ func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings
 	return outputs, nil
 }
 
+type mimoASRProvider struct {
+	settings *Settings
+	apiKey   string
+}
+
+func (provider mimoASRProvider) Transcribe(ctx context.Context, request ASRRequest) (ASRResult, error) {
+	text, err := transcribeAudioFileContext(ctx, request.AudioPath, provider.settings, provider.apiKey)
+	return ASRResult{Text: text}, err
+}
+
 func transcribeAudioFile(audioPath string, settings *Settings, apiKey string) (string, error) {
+	return transcribeAudioFileContext(context.Background(), audioPath, settings, apiKey)
+}
+
+func transcribeAudioFileContext(ctx context.Context, audioPath string, settings *Settings, apiKey string) (string, error) {
 	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(audioPath)), ".")
 	if format != "mp3" && format != "wav" {
 		return "", fmt.Errorf("MiMo ASR only supports mp3 and wav, got %q (convert to wav first)", format)
@@ -89,7 +116,7 @@ func transcribeAudioFile(audioPath string, settings *Settings, apiKey string) (s
 
 	var lastErr error
 	for attempt := 1; attempt <= settings.RetryCount; attempt++ {
-		text, err := callMimoAPI(apiKey, settings.MimoEndpoint, body, settings.TimeoutSeconds)
+		text, err := callMimoAPIContext(ctx, apiKey, settings.MimoEndpoint, body, settings.TimeoutSeconds)
 		if err == nil {
 			return text, nil
 		}
@@ -102,7 +129,13 @@ func transcribeAudioFile(audioPath string, settings *Settings, apiKey string) (s
 
 		if attempt < settings.RetryCount {
 			backoff := retryBackoff(err, attempt)
-			time.Sleep(backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return "", ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 
@@ -110,7 +143,11 @@ func transcribeAudioFile(audioPath string, settings *Settings, apiKey string) (s
 }
 
 func callMimoAPI(apiKey, endpoint string, body []byte, timeoutSeconds int) (string, error) {
-	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	return callMimoAPIContext(context.Background(), apiKey, endpoint, body, timeoutSeconds)
+}
+
+func callMimoAPIContext(ctx context.Context, apiKey, endpoint string, body []byte, timeoutSeconds int) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

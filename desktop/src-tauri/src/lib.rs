@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,6 +36,13 @@ struct ProgressEvent {
     status: String,
     current: u32,
     total: u32,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ModelProgressEvent {
+    state: String,
+    completed: u64,
+    total: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +518,20 @@ struct ProviderDescriptor {
     credential_key: String,
     allow_custom_model: bool,
     built_in: bool,
+    execution_location: String,
+    runtime_kind: String,
+    requires_credentials: bool,
+    requires_external_service: bool,
+    model_source: String,
+    supports_model_installation: bool,
+    supports_manual_import: bool,
+    privacy: ProviderPrivacyFacts,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ProviderPrivacyFacts {
+    sends_audio_off_device: bool,
+    sends_text_off_device: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -672,6 +694,8 @@ struct RuntimePreflight {
 
 const DEFAULT_ASR_PROVIDER: &str = "mimo";
 const DEFAULT_ASR_MODEL: &str = "mimo-v2.5-asr";
+const LOCAL_ASR_PROVIDER: &str = "local-sensevoice";
+const LOCAL_ASR_MODEL: &str = "sensevoice-small-int8";
 const DEFAULT_LLM_PROVIDER: &str = "deepseek";
 const DEFAULT_LLM_MODEL: &str = "deepseek-v4-flash";
 
@@ -714,14 +738,12 @@ struct ProviderReadiness {
 }
 
 fn validate_asr_selection(selection: &ProviderSelection) -> Result<(), BackendError> {
-    if selection.provider_id != DEFAULT_ASR_PROVIDER {
+    let valid = (selection.provider_id == DEFAULT_ASR_PROVIDER
+        && selection.model_id == DEFAULT_ASR_MODEL)
+        || (selection.provider_id == LOCAL_ASR_PROVIDER && selection.model_id == LOCAL_ASR_MODEL);
+    if !valid {
         return Err(BackendError::InvalidInput {
-            message: "Unknown speech-recognition provider.".to_string(),
-        });
-    }
-    if selection.model_id != DEFAULT_ASR_MODEL {
-        return Err(BackendError::InvalidInput {
-            message: "The selected speech-recognition model is not supported by Mimo.".to_string(),
+            message: "Unknown speech-recognition provider or model.".to_string(),
         });
     }
     Ok(())
@@ -746,6 +768,7 @@ fn provider_readiness(
     selection: &ProviderSelection,
     credential_ready: bool,
     asr: bool,
+    local_model_status: Option<&LocalModelStatus>,
 ) -> ProviderReadiness {
     let validation = if asr {
         validate_asr_selection(selection)
@@ -759,7 +782,13 @@ fn provider_readiness(
             _ => "Provider configuration is invalid.".to_string(),
         });
     }
-    if !credential_ready {
+    if asr && selection.provider_id == LOCAL_ASR_PROVIDER {
+        match local_model_status {
+            Some(status) if status.state == "ready" => {}
+            Some(status) => blocking_reasons.push(status.message.clone()),
+            None => blocking_reasons.push("Local model readiness is unavailable.".to_string()),
+        }
+    } else if !credential_ready {
         blocking_reasons.push(
             if asr {
                 "Speech-recognition credential is not configured."
@@ -1035,6 +1064,7 @@ fn runtime_preflight_for(
         mimo_api_key,
         deepseek_api_key,
         settings,
+        None,
     )
 }
 
@@ -1048,9 +1078,20 @@ fn runtime_preflight_for_configs(
     mimo_api_key: CredentialPreflight,
     deepseek_api_key: CredentialPreflight,
     settings: ProviderSettingsInfo,
+    local_model_status: Option<LocalModelStatus>,
 ) -> RuntimePreflight {
-    let asr_provider = provider_readiness(&settings.asr, mimo_api_key.status.configured, true);
-    let llm_provider = provider_readiness(&settings.llm, deepseek_api_key.status.configured, false);
+    let asr_provider = provider_readiness(
+        &settings.asr,
+        mimo_api_key.status.configured,
+        true,
+        local_model_status.as_ref(),
+    );
+    let llm_provider = provider_readiness(
+        &settings.llm,
+        deepseek_api_key.status.configured,
+        false,
+        None,
+    );
     let ready = sidecar.ready && ffmpeg.ready && output_root.ready && asr_provider.ready;
     RuntimePreflight {
         runtime_mode,
@@ -1067,8 +1108,7 @@ fn runtime_preflight_for_configs(
     }
 }
 
-#[tauri::command]
-fn get_runtime_preflight(
+fn get_runtime_preflight_blocking(
     app: AppHandle,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
@@ -1098,6 +1138,11 @@ fn get_runtime_preflight(
 
     let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
         .map_err(String::from)?;
+    let local_model_status = if settings.asr.provider_id == LOCAL_ASR_PROVIDER {
+        Some(run_model_read(&app, "model-status", true).map_err(String::from)?)
+    } else {
+        None
+    };
     Ok(runtime_preflight_for_configs(
         runtime_mode,
         backend,
@@ -1110,7 +1155,27 @@ fn get_runtime_preflight(
             asr: settings.asr,
             llm: settings.llm,
         },
+        local_model_status,
     ))
+}
+
+#[tauri::command]
+async fn get_runtime_preflight(
+    app: AppHandle,
+    mimo_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
+    backend: Option<String>,
+) -> Result<RuntimePreflight, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_runtime_preflight_blocking(app, mimo_api_key, deepseek_api_key, backend)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Runtime preflight worker failed.".to_string(),
+            code: None,
+        })
+    })?
 }
 
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
@@ -1128,6 +1193,7 @@ struct DesktopSettings {
     asr: ProviderSelection,
     llm: ProviderSelection,
     development_backend: Option<BackendKind>,
+    huggingface_endpoint: Option<String>,
 }
 
 impl Default for DesktopSettings {
@@ -1139,6 +1205,7 @@ impl Default for DesktopSettings {
             asr: ProviderSelection::default_asr(),
             llm: ProviderSelection::default_llm(),
             development_backend: None,
+            huggingface_endpoint: None,
         }
     }
 }
@@ -1154,6 +1221,7 @@ struct DesktopSettingsWire {
     // One-release read migration for settings written before provider ownership.
     deepseek_model: Option<String>,
     development_backend: Option<BackendKind>,
+    huggingface_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -1230,6 +1298,7 @@ fn load_desktop_settings(path: &Path) -> Result<DesktopSettings, BackendError> {
         asr,
         llm,
         development_backend: wire.development_backend,
+        huggingface_endpoint: wire.huggingface_endpoint,
     })
 }
 
@@ -1909,6 +1978,7 @@ fn find_env_file() -> Option<PathBuf> {
 #[derive(Clone, Default)]
 struct ActiveProcess {
     child: Arc<Mutex<Option<Child>>>,
+    model_operation: Arc<AtomicBool>,
 }
 
 impl ActiveProcess {
@@ -1925,6 +1995,19 @@ impl ActiveProcess {
                 let _ = child.kill();
             }
         }
+    }
+
+    fn cancel_model_operation(&self) {
+        if self.model_operation.load(Ordering::Acquire) {
+            self.terminate();
+        }
+    }
+}
+
+struct ModelOperationGuard(Arc<AtomicBool>);
+impl Drop for ModelOperationGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -2070,6 +2153,22 @@ fn spawn_and_watch(
             match line {
                 Ok(text) => {
                     let safe_text = redact_secrets(&text, &stderr_secrets);
+                    if let Some(value) = safe_text.trim().strip_prefix("Model-Progress: ") {
+                        let parts = value.split_whitespace().collect::<Vec<_>>();
+                        if parts.len() == 3 {
+                            if let (Ok(completed), Ok(total)) = (parts[1].parse(), parts[2].parse())
+                            {
+                                let _ = app_stderr.emit(
+                                    "model-progress",
+                                    ModelProgressEvent {
+                                        state: parts[0].to_string(),
+                                        completed,
+                                        total,
+                                    },
+                                );
+                            }
+                        }
+                    }
                     let _ = app_stderr.emit(
                         "log-line",
                         LogEvent {
@@ -2386,6 +2485,12 @@ fn run_meeting_asr_blocking(
         load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
             .map_err(String::from)?;
     validate_asr_selection(&asr_config).map_err(String::from)?;
+    if asr_config.provider_id == LOCAL_ASR_PROVIDER {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "The local speech runtime is not available yet. No Task was created."
+                .to_string(),
+        }));
+    }
     if asr_config != desktop_settings.asr {
         return Err(String::from(BackendError::InvalidInput {
             message: "Speech-recognition settings changed. Refresh and try again.".to_string(),
@@ -3229,6 +3334,338 @@ async fn list_providers() -> Result<ProviderCatalog, String> {
         })?
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ModelCatalog {
+    schema_version: String,
+    catalog_revision: String,
+    models: Vec<ManagedModel>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedModel {
+    model_id: String,
+    display_mode: String,
+    display_name: std::collections::HashMap<String, String>,
+    engine: String,
+    engine_runtime: String,
+    runtime_version: Option<String>,
+    model_version: String,
+    platforms: Vec<String>,
+    source: ManagedModelSource,
+    archive: ManagedArchive,
+    installed_files: Vec<ManagedFile>,
+    license: ManagedLicense,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedModelSource {
+    kind: String,
+    repository: String,
+    revision: String,
+    url: String,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedArchive {
+    filename: String,
+    #[serde(rename = "type")]
+    archive_type: String,
+    size_bytes: u64,
+    sha256: String,
+    root_directory: String,
+    entries: Vec<ManagedArchiveEntry>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedArchiveEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    size_bytes: u64,
+    sha256: String,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedFile {
+    path: String,
+    size_bytes: u64,
+    sha256: String,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ManagedLicense {
+    notice_id: String,
+    redistribution_review_required: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct LocalModelStatus {
+    model_id: String,
+    model_version: String,
+    state: String,
+    message: String,
+    installed_size_bytes: u64,
+    runtime_id: Option<String>,
+    runtime_version: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ModelDownloadSettings {
+    huggingface_endpoint: String,
+}
+
+fn model_app_data_root(app: &AppHandle) -> Result<PathBuf, BackendError> {
+    app.path()
+        .app_data_dir()
+        .map_err(|_| BackendError::InvalidInput {
+            message: "Local model storage is unavailable.".to_string(),
+        })
+}
+
+fn decode_model_output<T: serde::de::DeserializeOwned>(
+    output: std::process::Output,
+) -> Result<T, BackendError> {
+    if !output.status.success() {
+        return Err(BackendError::ProcessFailed {
+            message: "Local model operation failed safely.".to_string(),
+            code: output.status.code(),
+        });
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| BackendError::ProcessFailed {
+        message: "Local model sidecar returned invalid JSON.".to_string(),
+        code: output.status.code(),
+    })
+}
+
+fn run_model_read<T: serde::de::DeserializeOwned>(
+    app: &AppHandle,
+    command: &str,
+    with_root: bool,
+) -> Result<T, BackendError> {
+    let mut process = Command::new(go_sidecar_binary()?);
+    process
+        .arg(command)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stderr(Stdio::null());
+    if with_root {
+        process
+            .arg("--app-data-root")
+            .arg(model_app_data_root(app)?)
+            .arg("--model-id")
+            .arg(LOCAL_ASR_MODEL);
+    }
+    let output = process
+        .output()
+        .map_err(|_| BackendError::BackendNotFound {
+            message: "Go sidecar is unavailable for local model management.".to_string(),
+        })?;
+    decode_model_output(output)
+}
+
+#[tauri::command]
+async fn get_local_model_catalog(app: AppHandle) -> Result<ModelCatalog, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_model_read(&app, "model-catalog", false).map_err(String::from)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Model catalog worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+#[tauri::command]
+async fn get_local_model_status(app: AppHandle) -> Result<LocalModelStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_model_read(&app, "model-status", true).map_err(String::from)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Model status worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+fn run_model_mutation(
+    app: AppHandle,
+    active: ActiveProcess,
+    command: &str,
+    source: Option<String>,
+) -> Result<LocalModelStatus, String> {
+    if active
+        .model_operation
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(String::from(BackendError::ProcessFailed {
+            message: "Another local model operation is already running.".to_string(),
+            code: None,
+        }));
+    }
+    let _operation = ModelOperationGuard(active.model_operation.clone());
+    let mut process = Command::new(go_sidecar_binary().map_err(String::from)?);
+    process
+        .arg(command)
+        .arg("--app-data-root")
+        .arg(model_app_data_root(&app).map_err(String::from)?)
+        .arg("--model-id")
+        .arg(LOCAL_ASR_MODEL)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY");
+    if let Some(source) = source {
+        process.arg("--source-archive").arg(source);
+    }
+    let runner = spawn_and_watch(&app, &active, process, &[]).map_err(String::from)?;
+    let (code, stdout, _) = runner.wait().map_err(String::from)?;
+    if code != Some(0) {
+        return Err(String::from(BackendError::ProcessFailed {
+            message: "Local model operation failed safely.".to_string(),
+            code,
+        }));
+    }
+    serde_json::from_slice(stdout.join("\n").as_bytes()).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Local model sidecar returned invalid JSON.".to_string(),
+            code,
+        })
+    })
+}
+
+async fn model_mutation_command(
+    app: AppHandle,
+    active: ActiveProcess,
+    command: &'static str,
+    source: Option<String>,
+) -> Result<LocalModelStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || run_model_mutation(app, active, command, source))
+        .await
+        .map_err(|_| {
+            String::from(BackendError::ProcessFailed {
+                message: "Local model worker failed.".to_string(),
+                code: None,
+            })
+        })?
+}
+
+#[tauri::command]
+async fn start_model_download(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+) -> Result<LocalModelStatus, String> {
+    model_mutation_command(app, active.inner().clone(), "download-model", None).await
+}
+#[tauri::command]
+async fn import_local_model(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    source_archive: String,
+) -> Result<LocalModelStatus, String> {
+    model_mutation_command(
+        app,
+        active.inner().clone(),
+        "import-model",
+        Some(source_archive),
+    )
+    .await
+}
+#[tauri::command]
+async fn delete_local_model(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+) -> Result<LocalModelStatus, String> {
+    model_mutation_command(app, active.inner().clone(), "delete-model", None).await
+}
+#[tauri::command]
+fn cancel_model_download(active: State<'_, ActiveProcess>) {
+    active.cancel_model_operation();
+}
+
+#[tauri::command]
+fn get_model_download_settings(app: AppHandle) -> Result<ModelDownloadSettings, String> {
+    let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+        .map_err(String::from)?;
+    Ok(ModelDownloadSettings {
+        huggingface_endpoint: settings
+            .huggingface_endpoint
+            .unwrap_or_else(|| "https://huggingface.co".to_string()),
+    })
+}
+
+fn normalize_hf_endpoint(endpoint: String) -> Result<String, BackendError> {
+    let output = Command::new(go_sidecar_binary()?)
+        .arg("normalize-hf-endpoint")
+        .arg("--endpoint")
+        .arg(endpoint)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|_| BackendError::BackendNotFound {
+            message: "Go sidecar is unavailable for endpoint validation.".to_string(),
+        })?;
+    let value: serde_json::Value = decode_model_output(output)?;
+    value
+        .get("endpoint")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| BackendError::ProcessFailed {
+            message: "Endpoint validator returned invalid JSON.".to_string(),
+            code: Some(0),
+        })
+}
+
+#[tauri::command]
+async fn update_model_download_settings(
+    app: AppHandle,
+    endpoint: String,
+) -> Result<ModelDownloadSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let normalized = normalize_hf_endpoint(endpoint).map_err(String::from)?;
+        let path = desktop_settings_path(&app).map_err(String::from)?;
+        let mut settings = load_desktop_settings(&path).map_err(String::from)?;
+        settings.huggingface_endpoint = Some(normalized.clone());
+        save_desktop_settings(&path, &settings).map_err(String::from)?;
+        Ok(ModelDownloadSettings {
+            huggingface_endpoint: normalized,
+        })
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Endpoint settings worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+#[tauri::command]
+async fn test_huggingface_endpoint(endpoint: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = Command::new(go_sidecar_binary().map_err(String::from)?)
+            .arg("test-hf-endpoint")
+            .arg("--endpoint")
+            .arg(endpoint)
+            .env_remove("MIMO_API_KEY")
+            .env_remove("DEEPSEEK_API_KEY")
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|_| {
+                String::from(BackendError::BackendNotFound {
+                    message: "Go sidecar is unavailable for endpoint testing.".to_string(),
+                })
+            })?;
+        decode_model_output(output).map_err(String::from)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Endpoint test worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
 #[derive(Clone, serde::Serialize)]
 struct GenerateContentResult {
     generation_id: String,
@@ -3865,6 +4302,15 @@ pub fn run() {
             update_custom_template,
             delete_custom_template,
             list_providers,
+            get_local_model_catalog,
+            get_local_model_status,
+            start_model_download,
+            cancel_model_download,
+            import_local_model,
+            delete_local_model,
+            get_model_download_settings,
+            update_model_download_settings,
+            test_huggingface_endpoint,
             generate_task_content,
             open_task_artifact,
             reveal_task_artifact,
@@ -4627,9 +5073,9 @@ mod tests {
 
     #[test]
     fn test_provider_readiness_is_local_safe_and_provider_specific() {
-        let ready_asr = provider_readiness(&ProviderSelection::default_asr(), true, true);
+        let ready_asr = provider_readiness(&ProviderSelection::default_asr(), true, true, None);
         assert!(ready_asr.ready && ready_asr.blocking_reasons.is_empty());
-        let missing_llm = provider_readiness(&ProviderSelection::default_llm(), false, false);
+        let missing_llm = provider_readiness(&ProviderSelection::default_llm(), false, false, None);
         assert!(!missing_llm.ready);
         assert!(missing_llm
             .blocking_reasons
@@ -4642,10 +5088,71 @@ mod tests {
             },
             true,
             true,
+            None,
         );
         assert!(!invalid.ready);
         let json = serde_json::to_string(&invalid).unwrap();
         assert!(!json.contains("API_KEY") && !json.contains("secret"));
+        let local = ProviderSelection {
+            provider_id: LOCAL_ASR_PROVIDER.to_string(),
+            model_id: LOCAL_ASR_MODEL.to_string(),
+        };
+        assert!(validate_asr_selection(&local).is_ok());
+        let local_status = LocalModelStatus {
+            model_id: LOCAL_ASR_MODEL.to_string(),
+            model_version: "2024-07-17".to_string(),
+            state: "runtime_missing".to_string(),
+            message: "Model installed; runtime missing.".to_string(),
+            installed_size_bytes: 1,
+            runtime_id: Some("sherpa-onnx".to_string()),
+            runtime_version: None,
+        };
+        let readiness = provider_readiness(&local, false, true, Some(&local_status));
+        assert!(!readiness.ready);
+        assert!(readiness
+            .blocking_reasons
+            .iter()
+            .any(|reason| reason.contains("runtime")));
+        assert!(!readiness
+            .blocking_reasons
+            .iter()
+            .any(|reason| reason.contains("credential")));
+        let ready_status = LocalModelStatus {
+            state: "ready".to_string(),
+            runtime_version: Some("test".to_string()),
+            ..local_status
+        };
+        assert!(provider_readiness(&local, false, true, Some(&ready_status)).ready);
+    }
+
+    #[test]
+    fn test_local_model_transport_decodes_runtime_missing_without_paths() {
+        let status: LocalModelStatus = serde_json::from_str(r#"{"model_id":"sensevoice-small-int8","model_version":"2024-07-17","state":"runtime_missing","message":"Model installed; runtime pending.","installed_size_bytes":239549910}"#).unwrap();
+        assert_eq!(status.state, "runtime_missing");
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("/Users/") && !serialized.contains("source_archive"));
+    }
+
+    #[test]
+    fn test_huggingface_endpoint_setting_round_trips_without_readiness_or_source_path() {
+        let base = test_dir("voxly-model-endpoint-settings");
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join(DESKTOP_SETTINGS_FILE);
+        let mut settings = DesktopSettings::default();
+        settings.huggingface_endpoint = Some("https://hf.example".to_string());
+        save_desktop_settings(&path, &settings).unwrap();
+        let loaded = load_desktop_settings(&path).unwrap();
+        assert_eq!(
+            loaded.huggingface_endpoint.as_deref(),
+            Some("https://hf.example")
+        );
+        let json = fs::read_to_string(&path).unwrap();
+        assert!(
+            !json.contains("readiness")
+                && !json.contains("source_archive")
+                && !json.contains("partial")
+        );
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]
