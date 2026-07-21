@@ -1921,6 +1921,9 @@ button:disabled {
 .provider-settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .privacy-summary { margin: 12px 0 0; color: var(--text-secondary); font-size: 0.84rem; }
 .local-model-card { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); }
+.model-network-settings-card { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.model-network-settings-card h4, .model-network-settings-card p { margin: 0; }
+.model-network-settings-card p { margin-top: 5px; color: var(--text-secondary); font-size: .82rem; }
 .local-model-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
 .local-model-heading h4, .local-model-heading p { margin: 0; }
 .local-model-heading p { margin-top: 4px; color: var(--text-secondary); font-size: .86rem; }

@@ -204,6 +204,7 @@ export interface Translations {
 	localDownload: string; localImport: string; localCancel: string; localDelete: string; localSource: string; localSize: string;
 	localAdvanced: string; localEndpoint: string; localTestEndpoint: string; localEndpointReachable: string;
 	localOperationFailed: string; localConfirmDelete: string; localPrivacyTitle: string; localPrivacyBody: string;
+	localEndpointScope: string;
   settingsProvidersDesc: string;
   settingsTemplates: string;
   settingsTemplatesDesc: string;
@@ -437,6 +438,7 @@ export const translations: Record<Locale, Translations> = {
 	localNotInstalled: "未安装", localRuntimeMissing: "模型已安装，运行时待提供", localModelInvalid: "模型无效，请重新安装", localUnsupported: "当前平台暂不支持",
 	localDownload: "下载模型", localImport: "导入官方模型", localCancel: "取消", localDelete: "删除模型", localSource: "官方来源", localSize: "下载大小",
 	localAdvanced: "高级下载设置", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "测试连接", localEndpointReachable: "连接可用", localOperationFailed: "本地模型操作失败，现有模型未被修改。", localConfirmDelete: "删除已安装的 SenseVoice 模型？任务和历史记录不会被删除。", localPrivacyTitle: "隐私：", localPrivacyBody: "选择本地语音识别时，原始音频不会发送到云端。若使用云端内容生成，转写文本仍会发送给所选服务。",
+	localEndpointScope: "仅适用于未来由 Hugging Face 托管且目录声明兼容的模型。当前 SenseVoice 固定从 k2-fsa GitHub Release 下载；此设置和连接测试不会改变或测试 SenseVoice 下载源。",
     settingsProvidersDesc: "选择语音识别和生成内容使用的内置服务商与模型。密钥仍单独安全保存。",
     settingsTemplates: "内容模板",
     settingsTemplatesDesc: "管理本机自定义提示词模板；内置模板保持只读。",
@@ -668,6 +670,7 @@ export const translations: Record<Locale, Translations> = {
 	localNotInstalled: "Not installed", localRuntimeMissing: "Model installed; runtime pending", localModelInvalid: "Model invalid; reinstall required", localUnsupported: "Unsupported on this platform",
 	localDownload: "Download model", localImport: "Import official model", localCancel: "Cancel", localDelete: "Delete model", localSource: "Official source", localSize: "Download size",
 	localAdvanced: "Advanced download settings", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "Test connection", localEndpointReachable: "Endpoint is reachable", localOperationFailed: "The local model operation failed. Existing model data was not changed.", localConfirmDelete: "Delete the installed SenseVoice model? Tasks and history will remain unchanged.", localPrivacyTitle: "Privacy:", localPrivacyBody: "With local speech recognition, original audio is not sent to the cloud. If cloud content generation is selected, transcript text is still sent to that service.",
+	localEndpointScope: "Applies only to future Hugging Face-hosted models explicitly marked compatible by the catalog. The current SenseVoice model is pinned to the k2-fsa GitHub Release; this setting and connection test neither change nor test its download source.",
     settingsProvidersDesc: "Choose the built-in providers and models used for speech recognition and generated content. Credentials remain stored separately.",
     settingsTemplates: "Content templates",
     settingsTemplatesDesc: "Manage local custom prompt templates. Built-in templates remain read-only.",

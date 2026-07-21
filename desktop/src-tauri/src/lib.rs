@@ -768,6 +768,7 @@ fn provider_readiness(
     selection: &ProviderSelection,
     credential_ready: bool,
     asr: bool,
+    local_model_status: Option<&LocalModelStatus>,
 ) -> ProviderReadiness {
     let validation = if asr {
         validate_asr_selection(selection)
@@ -782,7 +783,11 @@ fn provider_readiness(
         });
     }
     if asr && selection.provider_id == LOCAL_ASR_PROVIDER {
-        blocking_reasons.push("The local model runtime is not available yet.".to_string());
+        match local_model_status {
+            Some(status) if status.state == "ready" => {}
+            Some(status) => blocking_reasons.push(status.message.clone()),
+            None => blocking_reasons.push("Local model readiness is unavailable.".to_string()),
+        }
     } else if !credential_ready {
         blocking_reasons.push(
             if asr {
@@ -1059,6 +1064,7 @@ fn runtime_preflight_for(
         mimo_api_key,
         deepseek_api_key,
         settings,
+        None,
     )
 }
 
@@ -1072,9 +1078,20 @@ fn runtime_preflight_for_configs(
     mimo_api_key: CredentialPreflight,
     deepseek_api_key: CredentialPreflight,
     settings: ProviderSettingsInfo,
+    local_model_status: Option<LocalModelStatus>,
 ) -> RuntimePreflight {
-    let asr_provider = provider_readiness(&settings.asr, mimo_api_key.status.configured, true);
-    let llm_provider = provider_readiness(&settings.llm, deepseek_api_key.status.configured, false);
+    let asr_provider = provider_readiness(
+        &settings.asr,
+        mimo_api_key.status.configured,
+        true,
+        local_model_status.as_ref(),
+    );
+    let llm_provider = provider_readiness(
+        &settings.llm,
+        deepseek_api_key.status.configured,
+        false,
+        None,
+    );
     let ready = sidecar.ready && ffmpeg.ready && output_root.ready && asr_provider.ready;
     RuntimePreflight {
         runtime_mode,
@@ -1091,8 +1108,7 @@ fn runtime_preflight_for_configs(
     }
 }
 
-#[tauri::command]
-fn get_runtime_preflight(
+fn get_runtime_preflight_blocking(
     app: AppHandle,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
@@ -1122,6 +1138,11 @@ fn get_runtime_preflight(
 
     let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
         .map_err(String::from)?;
+    let local_model_status = if settings.asr.provider_id == LOCAL_ASR_PROVIDER {
+        Some(run_model_read(&app, "model-status", true).map_err(String::from)?)
+    } else {
+        None
+    };
     Ok(runtime_preflight_for_configs(
         runtime_mode,
         backend,
@@ -1134,7 +1155,27 @@ fn get_runtime_preflight(
             asr: settings.asr,
             llm: settings.llm,
         },
+        local_model_status,
     ))
+}
+
+#[tauri::command]
+async fn get_runtime_preflight(
+    app: AppHandle,
+    mimo_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
+    backend: Option<String>,
+) -> Result<RuntimePreflight, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_runtime_preflight_blocking(app, mimo_api_key, deepseek_api_key, backend)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Runtime preflight worker failed.".to_string(),
+            code: None,
+        })
+    })?
 }
 
 const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
@@ -3360,6 +3401,8 @@ struct LocalModelStatus {
     state: String,
     message: String,
     installed_size_bytes: u64,
+    runtime_id: Option<String>,
+    runtime_version: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -5030,9 +5073,9 @@ mod tests {
 
     #[test]
     fn test_provider_readiness_is_local_safe_and_provider_specific() {
-        let ready_asr = provider_readiness(&ProviderSelection::default_asr(), true, true);
+        let ready_asr = provider_readiness(&ProviderSelection::default_asr(), true, true, None);
         assert!(ready_asr.ready && ready_asr.blocking_reasons.is_empty());
-        let missing_llm = provider_readiness(&ProviderSelection::default_llm(), false, false);
+        let missing_llm = provider_readiness(&ProviderSelection::default_llm(), false, false, None);
         assert!(!missing_llm.ready);
         assert!(missing_llm
             .blocking_reasons
@@ -5045,6 +5088,7 @@ mod tests {
             },
             true,
             true,
+            None,
         );
         assert!(!invalid.ready);
         let json = serde_json::to_string(&invalid).unwrap();
@@ -5054,7 +5098,16 @@ mod tests {
             model_id: LOCAL_ASR_MODEL.to_string(),
         };
         assert!(validate_asr_selection(&local).is_ok());
-        let readiness = provider_readiness(&local, false, true);
+        let local_status = LocalModelStatus {
+            model_id: LOCAL_ASR_MODEL.to_string(),
+            model_version: "2024-07-17".to_string(),
+            state: "runtime_missing".to_string(),
+            message: "Model installed; runtime missing.".to_string(),
+            installed_size_bytes: 1,
+            runtime_id: Some("sherpa-onnx".to_string()),
+            runtime_version: None,
+        };
+        let readiness = provider_readiness(&local, false, true, Some(&local_status));
         assert!(!readiness.ready);
         assert!(readiness
             .blocking_reasons
@@ -5064,6 +5117,12 @@ mod tests {
             .blocking_reasons
             .iter()
             .any(|reason| reason.contains("credential")));
+        let ready_status = LocalModelStatus {
+            state: "ready".to_string(),
+            runtime_version: Some("test".to_string()),
+            ..local_status
+        };
+        assert!(provider_readiness(&local, false, true, Some(&ready_status)).ready);
     }
 
     #[test]

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -63,6 +65,26 @@ func TestLocalASRExecutionFailsExplicitly(t *testing.T) {
 	var executionError *ASRExecutionError
 	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLocalRuntimeMissingDoesNotCreateTaskOrFallback(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "output")
+	audio := filepath.Join(root, "audio.wav")
+	if err := os.WriteFile(audio, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings := DefaultSettings()
+	settings.ASRProvider = string(ASRProviderLocalSenseVoice)
+	settings.MimoModel = string(ASRModelSenseVoiceSmallINT8)
+	err := runWorkflow(audio, output, settings, "transcript_only")
+	var executionError *ASRExecutionError
+	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocked local run created output: %v", err)
 	}
 }
 

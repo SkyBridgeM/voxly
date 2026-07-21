@@ -16,6 +16,7 @@ import (
 var embeddedCatalog []byte
 
 const DefaultHuggingFaceEndpoint = "https://huggingface.co"
+const maxRelativePathBytes = 512
 
 type Catalog struct {
 	SchemaVersion   string  `json:"schema_version"`
@@ -100,8 +101,20 @@ func (catalog Catalog) Validate() error {
 			return fmt.Errorf("model_catalog_invalid: unpinned source")
 		}
 		u, err := url.Parse(model.Source.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return fmt.Errorf("model_catalog_invalid: unsafe source")
+		}
+		switch model.Source.Kind {
+		case "github_release":
+			if strings.ToLower(u.Hostname()) != "github.com" {
+				return fmt.Errorf("model_catalog_invalid: source kind does not match host")
+			}
+		case "huggingface":
+			if strings.ToLower(u.Hostname()) != "huggingface.co" {
+				return fmt.Errorf("model_catalog_invalid: source kind does not match host")
+			}
+		default:
+			return fmt.Errorf("model_catalog_invalid: unsupported source kind")
 		}
 		if model.Archive.Type != "tar.bz2" || model.Archive.SizeBytes <= 0 || !validSHA(model.Archive.SHA256) || !safePathSegment(model.Archive.RootDirectory) || !safePathSegment(model.Archive.Filename) {
 			return fmt.Errorf("model_catalog_invalid: invalid archive identity")
@@ -193,7 +206,7 @@ func RewriteHuggingFaceOrigin(sourceURL, endpoint string) (string, error) {
 }
 
 func safeRelative(value string) bool {
-	return value != "" && !strings.Contains(value, "\\") && path.Clean(value) == value && value != "." && !strings.HasPrefix(value, "../") && !strings.HasPrefix(value, "/")
+	return value != "" && len(value) <= maxRelativePathBytes && !strings.Contains(value, "\\") && path.Clean(value) == value && value != "." && !strings.HasPrefix(value, "../") && !strings.HasPrefix(value, "/")
 }
 
 func validSHA(value string) bool {

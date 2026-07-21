@@ -129,7 +129,7 @@ export interface ManagedModel {
 	archive: { filename: string; type: string; size_bytes: number; sha256: string; root_directory: string };
 }
 
-export interface LocalModelStatus { model_id: string; model_version: string; state: string; message: string; installed_size_bytes: number }
+export interface LocalModelStatus { model_id: string; model_version: string; state: string; message: string; installed_size_bytes: number; runtime_id?: string; runtime_version?: string }
 export interface ModelProgressEvent { state: string; completed: number; total: number }
 export interface ModelDownloadSettings { huggingface_endpoint: string }
 

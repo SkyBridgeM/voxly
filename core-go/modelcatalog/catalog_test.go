@@ -20,6 +20,12 @@ func TestEmbeddedCatalogIdentity(t *testing.T) {
 	if strings.Contains(strings.ToLower(model.Source.URL), "latest") {
 		t.Fatal("catalog URL is not pinned")
 	}
+	if model.Source.Kind != "github_release" || model.Source.Repository != "k2-fsa/sherpa-onnx" || model.Source.Revision != "asr-models" {
+		t.Fatalf("unexpected source: %#v", model.Source)
+	}
+	if model.Source.URL != "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2" {
+		t.Fatalf("unexpected URL: %s", model.Source.URL)
+	}
 }
 
 func TestEndpointNormalization(t *testing.T) {
@@ -38,6 +44,26 @@ func TestEndpointNormalization(t *testing.T) {
 		if !test.valid && err == nil {
 			t.Fatalf("Normalize(%q) accepted", test.input)
 		}
+	}
+}
+
+func TestHuggingFaceEndpointDoesNotRewriteGitHubAndPreservesCompatiblePath(t *testing.T) {
+	github := "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/model.tar.bz2"
+	if got, err := RewriteHuggingFaceOrigin(github, "https://hf.example"); err != nil || got != github {
+		t.Fatalf("GitHub source changed: %q, %v", got, err)
+	}
+	source := "https://huggingface.co/fixed/repo/resolve/fixed-revision/model.bin"
+	got, err := RewriteHuggingFaceOrigin(source, "https://HF.Example/")
+	if err != nil || got != "https://hf.example/fixed/repo/resolve/fixed-revision/model.bin" {
+		t.Fatalf("rewrite = %q, %v", got, err)
+	}
+}
+
+func TestCatalogRejectsExcessivelyLongPath(t *testing.T) {
+	catalog, _ := Load()
+	catalog.Models[0].Archive.Entries[0].Path = strings.Repeat("a", maxRelativePathBytes+1)
+	if err := catalog.Validate(); err == nil {
+		t.Fatal("excessively long path accepted")
 	}
 }
 

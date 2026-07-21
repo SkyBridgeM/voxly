@@ -176,9 +176,13 @@ func runModelCommand(command string, args []string, stdout, stderr io.Writer) er
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, normalized, nil)
 		client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(request *http.Request, via []*http.Request) error {
-			if len(via) >= 4 { return fmt.Errorf("too many redirects") }
+			if len(via) >= 4 {
+				return fmt.Errorf("too many redirects")
+			}
 			redirect, normalizeErr := modelcatalog.NormalizeHuggingFaceEndpoint(request.URL.String())
-			if normalizeErr != nil || redirect != normalized { return fmt.Errorf("unsafe endpoint redirect") }
+			if normalizeErr != nil || redirect != normalized {
+				return fmt.Errorf("unsafe endpoint redirect")
+			}
 			return nil
 		}}
 		response, err := client.Do(req)

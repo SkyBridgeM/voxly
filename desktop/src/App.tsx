@@ -608,9 +608,9 @@ function App() {
       ? t.productionCredentialPlaceholder
       : t.developmentCredentialPlaceholder;
 
-	const preflightReadyForMode = providerSettings.asr.provider_id === "local-sensevoice"
-		? false
-		: outputMode === "transcript_and_generate" ? preflight?.ready_for_minutes : preflight?.ready;
+	const asrPreflightMatchesSelection = preflight?.asr_provider.provider_id === providerSettings.asr.provider_id && preflight.asr_provider.model_id === providerSettings.asr.model_id;
+	const llmPreflightMatchesSelection = preflight?.llm_provider.provider_id === providerSettings.llm.provider_id && preflight.llm_provider.model_id === providerSettings.llm.model_id;
+	const preflightReadyForMode = Boolean(asrPreflightMatchesSelection && (outputMode === "transcript_and_generate" ? llmPreflightMatchesSelection && preflight?.ready_for_minutes : preflight?.ready));
 
   const asrDescriptor = providerCatalog?.asr.find((provider) => provider.id === providerSettings.asr.provider_id);
   const llmDescriptor = providerCatalog?.llm.find((provider) => provider.id === providerSettings.llm.provider_id);
@@ -1237,7 +1237,7 @@ function App() {
                     <h4>{t.speechRecognition}</h4>
                     <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
                     <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
-                    <p className={providerSettings.asr.provider_id !== "local-sensevoice" && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{providerSettings.asr.provider_id !== "local-sensevoice" && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
                   </div>
                   <div className="provider-settings-card">
                     <h4>{t.generatedContentProvider}</h4>
@@ -1247,7 +1247,7 @@ function App() {
                   </div>
                 </div>
                 <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
-				<LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody }} />
+                <LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} />
               </section>
 
               <section className="settings-section">

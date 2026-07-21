@@ -30,7 +30,9 @@ The human-reviewable catalog is [`core-go/modelcatalog/models.v1.json`](../../co
 - Archive size: `163002883` bytes
 - Archive SHA-256: `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`
 
-The catalog pins every accepted archive entry and every installed file by relative path, size and SHA-256. Production download and manual import are enabled because those identities were verified against the official k2-fsa GitHub release. There is no `latest` URL, built-in mirror, GitHub proxy, automatic download or download resume.
+The archive SHA-256 is a Voxly-computed and Voxly-pinned integrity checksum for that fixed official GitHub Release asset. It was independently rechecked by downloading the same pinned asset and comparing a second local SHA-256 calculation with GitHub's release-asset API digest. It verifies byte-for-byte integrity against the reviewed asset, but it is not an upstream digital signature and does not claim authenticity beyond matching that pinned archive.
+
+The exact source URL is constructed only from the embedded catalog value: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2`. HTTPS redirects are bounded and restricted to `github.com` or GitHub-owned `*.githubusercontent.com` asset hosts; every downloaded byte must still match the fixed archive size and checksum. The catalog pins every accepted archive entry and every installed file by relative path, size and SHA-256. Production download and manual import are enabled because those identities were verified against the official k2-fsa GitHub release. There is no `latest` URL, built-in mirror, GitHub proxy, automatic download or download resume.
 
 ## Storage, receipt and atomicity
 
@@ -53,18 +55,18 @@ The per-model lock contains a random owner token, PID and creation time. A live 
 
 ## Source and endpoint policy
 
-The current SenseVoice package is hosted on GitHub Releases, so the Hugging Face endpoint setting does not rewrite or proxy this download. The setting exists for future catalog entries whose fixed source host is `huggingface.co`. It accepts only an HTTPS origin with no userinfo, path, query or fragment, is normalized before persistence, and can replace only that origin; repository, revision and file path remain catalog-owned. Connection testing uses a bounded HEAD request and never downloads a model payload.
+The current SenseVoice package is hosted on GitHub Releases, so the Hugging Face endpoint setting does not rewrite or proxy this download. Settings presents this as a separate future-compatible network setting and explicitly says that neither the setting nor its connection test changes or tests the current SenseVoice source. The setting exists for future catalog entries whose fixed source host is `huggingface.co`. It accepts only an HTTPS origin with no userinfo, path, query or fragment, is normalized before persistence, and can replace only that origin; repository, revision and file path remain catalog-owned. Connection testing uses a bounded HEAD request and never downloads a model payload.
 
 Manual import accepts one user-selected official archive, preserves the source file and never accepts a directory or user-selected destination. The source path is used only for the command invocation and is not persisted or returned to the normal UI.
 
 ## Readiness and privacy
 
-Computed model states are `not_installed`, `downloading`, `verifying`, `installing`, `model_invalid`, `storage_unavailable`, `unsupported_platform`, `runtime_missing`, `ready`, and `error`; the type vocabulary reserves future external-service states without exposing them in the current UI. Transient progress is emitted by the sidecar and is not persisted. In this PR a valid installed model is always `runtime_missing`, never `ready`. New Task therefore cannot start local ASR and does not create a Task or fall back to Mimo.
+Computed model states are `not_installed`, `downloading`, `verifying`, `installing`, `model_invalid`, `storage_unavailable`, `unsupported_platform`, `runtime_missing`, `ready`, and `error`; the type vocabulary reserves future external-service states without exposing them in the current UI. Model verification and typed runtime readiness are separate inputs to `StatusWithRuntime`. The default PR #48 probe is `MissingRuntime`; a test-only matching runtime can exercise the composed `ready` path only after all receipt and installed-file verification succeeds. Transient progress is emitted by the sidecar and is not persisted. In production in this PR a valid installed model is always `runtime_missing`, never `ready`. New Task therefore cannot start local ASR and does not create a Task or fall back to Mimo.
 
 Privacy state is provider-derived. Local SenseVoice requires no credential and does not send audio off-device. DeepSeek is cloud generation and sends transcript text off-device. The UI states that distinction and does not use a misleading “fully local” label when a cloud LLM is selected.
 
 ## Current limitations and next stage
 
-PR #49 must add the Voxly-owned sherpa-onnx runtime and real SenseVoice adapter, then change valid model-plus-runtime readiness from `runtime_missing` to `ready`. It must preserve this catalog/receipt boundary and snapshot actual runtime/model identity when a real local Task is created. This PR includes no model executable, inference, Whisper, Ollama, VAD, recording, packaging or release changes.
+PR #49 must add the Voxly-owned sherpa-onnx runtime and real SenseVoice adapter, then pass its typed runtime probe result to `StatusWithRuntime`; downloader, import, receipt, model verification and deletion do not need redesign. It must preserve this catalog/receipt boundary and snapshot actual runtime/model identity when a real local Task is created. This PR includes no model executable, inference, Whisper, Ollama, VAD, recording, packaging or release changes.
 
 Unicode normalization collisions are rejected where exact byte and case-fold identity detects them; Go's standard library does not provide cross-platform Unicode normalization. Future open/runtime code must continue canonical containment checks at its own filesystem boundary.

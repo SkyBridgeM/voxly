@@ -28,6 +28,15 @@ const (
 	maxRedirects         = 4
 )
 
+type ExtractionLimits struct {
+	MaxEntries   int
+	MaxTotal     int64
+	MaxFile      int64
+	MaxPathBytes int
+}
+
+var productionExtractionLimits = ExtractionLimits{MaxEntries: maxArchiveEntries, MaxTotal: maxExtractedBytes, MaxFile: maxExtractedBytes, MaxPathBytes: maxRelativePathBytes}
+
 type Error struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
@@ -79,6 +88,35 @@ func (paths Paths) modelDirectory(model Model) string {
 	return filepath.Join(paths.Models, model.ModelID, model.ModelVersion)
 }
 
+func (paths Paths) inspectModelParent(model Model, create bool) (bool, error) {
+	parent := filepath.Join(paths.Models, model.ModelID)
+	if create {
+		if err := os.Mkdir(parent, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return false, modelError("storage_unavailable", "Model directory could not be prepared.", true)
+		}
+	}
+	info, err := os.Lstat(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, modelError("storage_unavailable", "Model directory could not be inspected.", true)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, modelError("model_invalid", "Installed model parent directory is unsafe.", false)
+	}
+	modelsRoot, rootErr := filepath.EvalSymlinks(paths.Models)
+	canonicalParent, parentErr := filepath.EvalSymlinks(parent)
+	if rootErr != nil || parentErr != nil {
+		return false, modelError("storage_unavailable", "Model directory containment could not be verified.", true)
+	}
+	relative, relErr := filepath.Rel(modelsRoot, canonicalParent)
+	if relErr != nil || relative != model.ModelID {
+		return false, modelError("model_invalid", "Installed model directory escaped app storage.", false)
+	}
+	return true, nil
+}
+
 type Receipt struct {
 	SchemaVersion   string         `json:"schema_version"`
 	ModelID         string         `json:"model_id"`
@@ -91,14 +129,37 @@ type Receipt struct {
 }
 
 type Readiness struct {
-	ModelID       string `json:"model_id"`
-	ModelVersion  string `json:"model_version"`
-	State         string `json:"state"`
-	Message       string `json:"message"`
-	InstalledSize int64  `json:"installed_size_bytes"`
+	ModelID        string `json:"model_id"`
+	ModelVersion   string `json:"model_version"`
+	State          string `json:"state"`
+	Message        string `json:"message"`
+	InstalledSize  int64  `json:"installed_size_bytes"`
+	RuntimeID      string `json:"runtime_id,omitempty"`
+	RuntimeVersion string `json:"runtime_version,omitempty"`
+}
+
+type RuntimeState string
+
+const (
+	RuntimeMissing RuntimeState = "missing"
+	RuntimeReady   RuntimeState = "ready"
+)
+
+type RuntimeReadiness struct {
+	RuntimeID string
+	Version   string
+	State     RuntimeState
+}
+
+func MissingRuntime(model Model) RuntimeReadiness {
+	return RuntimeReadiness{RuntimeID: model.EngineRuntime, State: RuntimeMissing}
 }
 
 func Status(root, catalogRevision string, model Model) Readiness {
+	return StatusWithRuntime(root, catalogRevision, model, MissingRuntime(model))
+}
+
+func StatusWithRuntime(root, catalogRevision string, model Model, runtimeStatus RuntimeReadiness) Readiness {
 	status := Readiness{ModelID: model.ModelID, ModelVersion: model.ModelVersion, State: "not_installed", Message: "Model is not installed."}
 	if !SupportsCurrentPlatform(model) {
 		status.State, status.Message = "unsupported_platform", "This model is not supported on this platform."
@@ -110,6 +171,14 @@ func Status(root, catalogRevision string, model Model) Readiness {
 		return status
 	}
 	directory := paths.modelDirectory(model)
+	parentExists, parentErr := paths.inspectModelParent(model, false)
+	if parentErr != nil {
+		status.State, status.Message = "model_invalid", "Installed model parent directory is invalid."
+		return status
+	}
+	if !parentExists {
+		return status
+	}
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return status
@@ -139,6 +208,13 @@ func Status(root, catalogRevision string, model Model) Readiness {
 			return status
 		}
 		status.InstalledSize += actual
+	}
+	status.RuntimeID = model.EngineRuntime
+	if runtimeStatus.State == RuntimeReady && runtimeStatus.RuntimeID == model.EngineRuntime {
+		status.State = "ready"
+		status.Message = "Model and local speech runtime are ready."
+		status.RuntimeVersion = runtimeStatus.Version
+		return status
 	}
 	status.State = "runtime_missing"
 	status.Message = "Model installed; the local speech runtime will arrive in the next implementation stage."
@@ -393,8 +469,8 @@ func installArchiveLocked(ctx context.Context, paths Paths, catalogRevision stri
 		return Readiness{}, modelError("storage_unavailable", "Model receipt could not be saved.", true)
 	}
 	final := paths.modelDirectory(model)
-	if err := os.MkdirAll(filepath.Dir(final), 0700); err != nil {
-		return Readiness{}, modelError("storage_unavailable", "Model directory could not be prepared.", true)
+	if _, err := paths.inspectModelParent(model, true); err != nil {
+		return Readiness{}, err
 	}
 	if _, err := os.Lstat(final); err == nil {
 		return Readiness{}, modelError("model_invalid", "An invalid installation already occupies the model directory.", false)
@@ -421,6 +497,10 @@ func extractVerified(ctx context.Context, archivePath, staging string, model Mod
 }
 
 func extractTarVerified(ctx context.Context, reader *tar.Reader, staging string, model Model, progress ProgressFunc) error {
+	return extractTarVerifiedWithLimits(ctx, reader, staging, model, progress, productionExtractionLimits)
+}
+
+func extractTarVerifiedWithLimits(ctx context.Context, reader *tar.Reader, staging string, model Model, progress ProgressFunc, limits ExtractionLimits) error {
 	expected := map[string]ArchiveEntry{}
 	installed := map[string]FileIdentity{}
 	for _, entry := range model.Archive.Entries {
@@ -444,10 +524,13 @@ func extractTarVerified(ctx context.Context, reader *tar.Reader, staging string,
 			return modelError("archive_invalid", "The model archive is malformed.", false)
 		}
 		entryCount++
-		if entryCount > maxArchiveEntries {
+		if entryCount > limits.MaxEntries {
 			return modelError("archive_unsafe", "The model archive contains too many entries.", false)
 		}
 		name := strings.TrimSuffix(filepath.ToSlash(header.Name), "/")
+		if len(name) > limits.MaxPathBytes {
+			return modelError("archive_unsafe", "The model archive contains an excessively long path.", false)
+		}
 		if name == model.Archive.RootDirectory && header.Typeflag == tar.TypeDir {
 			continue
 		}
@@ -473,11 +556,11 @@ func extractTarVerified(ctx context.Context, reader *tar.Reader, staging string,
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			return modelError("archive_unsafe", "The model archive contains a link or special file.", false)
 		}
-		if header.Size != identity.SizeBytes || header.Size < 0 || header.Size > maxExtractedBytes {
+		if header.Size != identity.SizeBytes || header.Size < 0 || header.Size > limits.MaxFile {
 			return modelError("size_mismatch", "A model archive entry has an unexpected size.", false)
 		}
 		totalSize += header.Size
-		if totalSize > maxExtractedBytes {
+		if totalSize > limits.MaxTotal {
 			return modelError("archive_unsafe", "The model archive expands beyond the safe limit.", false)
 		}
 		hash := sha256.New()
@@ -532,6 +615,13 @@ func Delete(root, catalogRevision string, model Model) (Readiness, error) {
 	}
 	defer lock.release()
 	final := paths.modelDirectory(model)
+	parentExists, parentErr := paths.inspectModelParent(model, false)
+	if parentErr != nil {
+		return Readiness{}, parentErr
+	}
+	if !parentExists {
+		return Status(root, catalogRevision, model), nil
+	}
 	info, err := os.Lstat(final)
 	if errors.Is(err, os.ErrNotExist) {
 		return Status(root, catalogRevision, model), nil
