@@ -89,8 +89,12 @@ type Error struct {
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 
 func executableName() string {
+	return executableNameFor(runtime.GOOS)
+}
+
+func executableNameFor(goos string) string {
 	name := "voxly-sensevoice-wrapper"
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		name += ".exe"
 	}
 	return name
@@ -103,7 +107,11 @@ func Resolve() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return verifiedExecutable(filepath.Join(filepath.Dir(executable), executableName()))
+	return verifiedExecutable(runtimeCandidatePath(executable, runtime.GOOS))
+}
+
+func runtimeCandidatePath(sidecarPath, goos string) string {
+	return filepath.Join(filepath.Dir(sidecarPath), executableNameFor(goos))
 }
 
 func verifiedExecutable(path string) (string, error) {

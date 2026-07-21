@@ -11,6 +11,28 @@ import (
 	"time"
 )
 
+func TestTargetExecutableNamesAndUnicodeRequestSerialization(t *testing.T) {
+	if got := executableNameFor("windows"); got != "voxly-sensevoice-wrapper.exe" {
+		t.Fatalf("windows executable = %q", got)
+	}
+	if got := executableNameFor("darwin"); got != "voxly-sensevoice-wrapper" {
+		t.Fatalf("darwin executable = %q", got)
+	}
+	windowsSidecar := filepath.Join("C:\\", "Users", "Test User", "Desktop", "语音 测试", "meeting-asr-go.exe")
+	if got := runtimeCandidatePath(windowsSidecar, "windows"); filepath.Base(got) != "voxly-sensevoice-wrapper.exe" || filepath.Dir(got) != filepath.Dir(windowsSidecar) {
+		t.Fatalf("windows runtime candidate = %q", got)
+	}
+	request := Request{ProtocolVersion: ProtocolVersion, RequestID: "windows-unicode", AudioPath: `C:\Users\Test User\Desktop\语音 测试\会议录音 01.wav`, ModelPath: `C:\Users\Test User\AppData\Local\Voxly\模型\model.int8.onnx`, TokensPath: `C:\Users\Test User\AppData\Local\Voxly\模型\tokens.txt`, LanguageMode: "chinese_first"}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Request
+	if err := json.Unmarshal(data, &decoded); err != nil || decoded != request {
+		t.Fatalf("unicode request round trip = %#v, %v", decoded, err)
+	}
+}
+
 func fakeRuntime(t *testing.T, mode string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {

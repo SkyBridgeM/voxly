@@ -127,12 +127,14 @@ the wrapper and dylibs together.
 
 Windows x64 source and parent-lifecycle code are present, the runtime filename
 is `voxly-sensevoice-wrapper.exe`, and the build is designed for native MSVC
-plus pinned sherpa-onnx. This macOS host cannot produce or execute the MSVC
-artifact, so Windows packaging remains an explicit blocker: build the wrapper
-and required DLL set on a Windows x64 builder, verify non-ASCII paths and
-process cleanup, then place the target-suffixed binary at the Tauri externalBin
-boundary. Until that artifact exists, Windows truthfully reports
-`runtime_missing`; it must never report fake readiness.
+plus pinned sherpa-onnx. The Windows build freezes static sherpa-onnx, static
+ONNX Runtime 1.27.0 and the static MSVC CRT, so no non-system runtime DLL is
+expected. The authoritative asset manifest and native PowerShell workflow are
+documented in `docs/windows/sensevoice-runtime-validation.md`. This macOS host
+cannot produce or execute the MSVC artifact, so native build, `dumpbin`,
+Unicode-path, process cleanup, development and packaged transcription remain
+explicit Windows acceptance blockers. Until that artifact exists, Windows
+truthfully reports `runtime_missing`; it must never report fake readiness.
 
 ## Included and excluded
 
