@@ -774,7 +774,7 @@ function App() {
               ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
               : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
           >
-            <SidebarSimple aria-hidden="true" weight="regular" />
+            <SidebarSimple aria-hidden="true" weight="bold" />
           </button>
 
           <nav
@@ -793,7 +793,7 @@ function App() {
               onClick={showWorkflow}
               title={t.newTask}
             >
-              <Plus aria-hidden="true" weight="regular" />
+              <Plus aria-hidden="true" weight="bold" />
               <span>{t.newTask}</span>
             </button>
             <button
@@ -806,7 +806,7 @@ function App() {
               onClick={showLibrary}
               title={t.taskLibraryTitle}
             >
-              <Books aria-hidden="true" weight="regular" />
+              <Books aria-hidden="true" weight="bold" />
               <span>{t.taskLibraryTitle}</span>
             </button>
             <button
@@ -819,7 +819,7 @@ function App() {
               onClick={showModels}
               title={t.settingsProviders}
             >
-              <HardDrives aria-hidden="true" weight="regular" />
+              <HardDrives aria-hidden="true" weight="bold" />
               <span>{t.settingsProviders}</span>
             </button>
             <button
@@ -832,7 +832,7 @@ function App() {
               onClick={showTemplates}
               title={locale === "zh" ? "模板" : "Templates"}
             >
-              <FileText aria-hidden="true" weight="regular" />
+              <FileText aria-hidden="true" weight="bold" />
               <span>{locale === "zh" ? "模板" : "Templates"}</span>
             </button>
           </nav>
@@ -850,7 +850,7 @@ function App() {
               aria-expanded={showSettings}
               aria-controls="settings-dialog"
             >
-              <GearSix aria-hidden="true" weight="regular" />
+              <GearSix aria-hidden="true" weight="bold" />
               <span>{t.settingsTitle}</span>
             </button>
           </div>
@@ -885,12 +885,12 @@ function App() {
                   <>
                   <div className="input-choice-grid">
                     <button className="input-choice-card primary" onClick={() => setInputChoice("record")} disabled={isRunning}>
-                      <span className="input-choice-icon record-icon" aria-hidden="true"><Microphone weight="regular" /></span>
+                      <span className="input-choice-icon record-icon" aria-hidden="true"><Microphone weight="bold" /></span>
                       <strong>{locale === "zh" ? "开始录音" : "Start recording"}</strong>
                       <small>{locale === "zh" ? "使用麦克风采集语音，停止后再确认处理。" : "Capture voice with your microphone, then choose how to process it."}</small>
                     </button>
                     <button className="input-choice-card" onClick={() => setInputChoice("import")} disabled={isRunning}>
-                      <span className="input-choice-icon" aria-hidden="true"><UploadSimple weight="regular" /></span>
+                      <span className="input-choice-icon" aria-hidden="true"><UploadSimple weight="bold" /></span>
                       <strong>{locale === "zh" ? "导入音频" : "Import audio"}</strong>
                       <small>{locale === "zh" ? "处理已有的 MP3、WAV 或 M4A 文件。" : "Process an existing MP3, WAV, or M4A file."}</small>
                     </button>

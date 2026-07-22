@@ -146,7 +146,7 @@ fn write_checkpoints(
 ) -> Result<(), String> {
     for samples in receiver {
         if samples.is_empty() {
-            continue;
+            break;
         }
         let index = control.checkpoints.fetch_add(1, Ordering::SeqCst) + 1;
         let path = directory.join(format!("checkpoint_{index:04}.wav"));
@@ -276,6 +276,11 @@ fn finish_capture(
             let _ = sender.send(std::mem::take(&mut *buffer));
         }
     }
+    // CoreAudio may retain callback-owned sender clones briefly after the stream
+    // is paused. End the writer explicitly instead of waiting for disconnect.
+    sender
+        .send(Vec::new())
+        .map_err(|_| "Recording writer is unavailable.".to_string())?;
     drop(sender);
     writer
         .join()
@@ -787,5 +792,57 @@ pub async fn recover_recording(
 pub fn interrupt_active_recording(app: &AppHandle) {
     if let Some(manager) = app.try_state::<RecordingManager>() {
         let _ = finish(manager.inner(), "interrupted");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn checkpoint_writer_finishes_while_a_sender_clone_is_still_alive() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be valid")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "voxly-recording-writer-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("checkpoint directory should be created");
+
+        let control = Arc::new(CaptureControl {
+            paused: AtomicBool::new(false),
+            samples: AtomicU64::new(0),
+            checkpoints: AtomicUsize::new(0),
+            last_emit_samples: AtomicU64::new(0),
+            buffer: Mutex::new(Vec::new()),
+        });
+        let (sender, receiver) = mpsc::channel();
+        let lingering_callback_sender = sender.clone();
+        let writer_directory = directory.clone();
+        let writer_control = control.clone();
+        let writer = std::thread::spawn(move || {
+            write_checkpoints(receiver, writer_directory, 16_000, writer_control)
+        });
+
+        sender
+            .send(vec![1_i16, -1, 2, -2])
+            .expect("samples should be sent");
+        sender
+            .send(Vec::new())
+            .expect("finish signal should be sent");
+        drop(sender);
+
+        writer
+            .join()
+            .expect("writer should not panic")
+            .expect("writer should finish without waiting for every sender clone");
+        assert!(directory.join("checkpoint_0001.wav").is_file());
+        assert_eq!(control.checkpoints.load(Ordering::SeqCst), 1);
+
+        drop(lingering_callback_sender);
+        fs::remove_dir_all(directory).expect("checkpoint directory should be removed");
     }
 }
