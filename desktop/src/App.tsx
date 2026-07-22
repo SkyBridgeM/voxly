@@ -101,11 +101,13 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
-  const [activeArea, setActiveArea] = useState<"workflow" | "library">("workflow");
+  const [activeArea, setActiveArea] = useState<"workflow" | "library" | "models" | "templates">("workflow");
   const [libraryOpened, setLibraryOpened] = useState(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const workflowTabRef = useRef<HTMLButtonElement>(null);
   const libraryTabRef = useRef<HTMLButtonElement>(null);
+  const modelsTabRef = useRef<HTMLButtonElement>(null);
+  const templatesTabRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
@@ -441,15 +443,29 @@ function App() {
     void refreshPreflight();
   };
 
+  const showModels = () => {
+    setActiveArea("models");
+    void refreshPreflight();
+  };
+
+  const showTemplates = () => {
+    setActiveArea("templates");
+    void refreshTemplates();
+  };
+
   const handleWorkspaceTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault();
-    if (activeArea === "workflow") {
-      showLibrary();
-      requestAnimationFrame(() => libraryTabRef.current?.focus());
-    } else {
-      showWorkflow();
-    }
+    const areas = ["workflow", "library", "models", "templates"] as const;
+    const refs = [workflowTabRef, libraryTabRef, modelsTabRef, templatesTabRef];
+    const current = areas.indexOf(activeArea);
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    const next = (current + (forward ? 1 : areas.length - 1)) % areas.length;
+    if (areas[next] === "workflow") showWorkflow();
+    if (areas[next] === "library") showLibrary();
+    if (areas[next] === "models") showModels();
+    if (areas[next] === "templates") showTemplates();
+    requestAnimationFrame(() => refs[next].current?.focus());
   };
 
   const handleOpenFolder = useCallback(async () => {
@@ -744,6 +760,30 @@ function App() {
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM7 3.5h10M8 10h8M8 14h5" /></svg>
               <span>{t.taskLibraryTitle}</span>
             </button>
+            <button
+              ref={modelsTabRef}
+              id="models-tab"
+              role="tab"
+              aria-selected={activeArea === "models"}
+              aria-controls="models-panel"
+              tabIndex={activeArea === "models" ? 0 : -1}
+              onClick={showModels}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7c0-2 3.1-3.5 7-3.5S19 5 19 7s-3.1 3.5-7 3.5S5 9 5 7Zm0 0v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5V7M5 12v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5v-5" /></svg>
+              <span>{locale === "zh" ? "模型" : "Models"}</span>
+            </button>
+            <button
+              ref={templatesTabRef}
+              id="templates-tab"
+              role="tab"
+              aria-selected={activeArea === "templates"}
+              aria-controls="templates-panel"
+              tabIndex={activeArea === "templates" ? 0 : -1}
+              onClick={showTemplates}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l3 3V20.5H6zM15 3.5v4h3M9 12h6M9 16h6" /></svg>
+              <span>{locale === "zh" ? "模板" : "Templates"}</span>
+            </button>
           </nav>
 
           <div className="sidebar-footer">
@@ -980,6 +1020,39 @@ function App() {
               />
             </div>
           )}
+
+          <div
+            id="models-panel"
+            role="tabpanel"
+            aria-labelledby="models-tab"
+            hidden={activeArea !== "models"}
+          >
+            <section className="management-page">
+              <header className="management-page-heading">
+                <span className="section-kicker">{locale === "zh" ? "本地运行时" : "Local runtime"}</span>
+                <h2>{locale === "zh" ? "模型" : "Models"}</h2>
+                <p>{locale === "zh" ? "管理 Voxly 使用的本地处理模型与运行资产。" : "Manage local processing models and runtime assets used by Voxly."}</p>
+              </header>
+              <div className="management-surface"><LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} /></div>
+            </section>
+          </div>
+
+          <div
+            id="templates-panel"
+            role="tabpanel"
+            aria-labelledby="templates-tab"
+            hidden={activeArea !== "templates"}
+          >
+            <section className="management-page">
+              <header className="management-page-heading">
+                <span className="section-kicker">{locale === "zh" ? "内容生成" : "Content generation"}</span>
+                <h2>{t.settingsTemplates}</h2>
+                <p>{t.settingsTemplatesDesc}</p>
+              </header>
+              {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
+              <div className="management-surface"><TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, technicalDetails: t.technicalDetails, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} /></div>
+            </section>
+          </div>
         </main>
       </div>
 
@@ -1348,19 +1421,12 @@ function App() {
                   </div>
                 </div>
                 <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
-                <LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} />
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header"><div className="settings-section-title"><span>06</span><div><h3>{t.settingsTemplates}</h3><p>{t.settingsTemplatesDesc}</p></div></div></div>
-                {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
-                <TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, technicalDetails: t.technicalDetails, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} />
               </section>
 
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
-                    <span>07</span>
+                    <span>06</span>
                     <div>
                       <h3>{t.settingsOutputLocation}</h3>
                       <p>{t.settingsOutputLocationDesc}</p>
