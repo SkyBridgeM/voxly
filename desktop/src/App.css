@@ -753,14 +753,31 @@ button {
   font-weight: 700;
 }
 
-.library-card-content-summary > span {
+.library-card-content-summary > svg {
   margin-left: auto;
-  font-size: 1rem;
+  width: 16px;
+  height: 16px;
   transition: transform 160ms ease;
 }
 
-.library-card-open:hover .library-card-content-summary > span {
+.library-card-open:hover .library-card-content-summary > svg {
   transform: translateX(3px);
+}
+
+.library-back,
+.library-quick-tags .btn-secondary,
+.library-tag-suggestions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.library-title-icon svg,
+.library-card-edit svg,
+.library-title-edit-mark svg,
+.library-tags button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .library-task-header,
@@ -2532,6 +2549,40 @@ button:disabled {
   margin-bottom: 15px;
 }
 
+.settings-diagnostics > summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-diagnostics > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-diagnostics > summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.settings-diagnostics[open] > summary {
+  margin-bottom: 15px;
+}
+
+.settings-diagnostics[open] > summary::after {
+  content: "−";
+}
+
+.settings-diagnostics .preflight-refresh {
+  margin-bottom: 12px;
+}
+
 .settings-section-header-action {
   display: flex;
   align-items: flex-start;
@@ -2585,7 +2636,7 @@ button:disabled {
   background: var(--surface-muted);
 }
 
-.provider-settings-card { padding: 16px; background: var(--surface); }
+.provider-settings-card { padding: 16px; background: transparent; }
 .provider-settings-card h4 { margin: 0 0 14px; font-size: .92rem; }
 .provider-settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .provider-credential { display: grid; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
@@ -2598,14 +2649,15 @@ button:disabled {
 .provider-credential small { color: var(--text-muted); font-size: .68rem; line-height: 1.45; }
 .privacy-summary { margin: 12px 0 0; color: var(--text-secondary); font-size: 0.84rem; }
 .local-model-card { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); }
-.model-network-settings-card { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.model-network-settings-card h4, .model-network-settings-card p { margin: 0; }
-.model-network-settings-card p { margin-top: 5px; color: var(--text-secondary); font-size: .82rem; }
+.model-network-settings-card { margin-top: 12px; padding: 14px 16px; border-top: 1px solid var(--border); }
+.model-network-settings-card > summary { display: grid; gap: 3px; cursor: pointer; }
+.model-network-settings-card > summary span { color: var(--text-secondary); font-size: var(--font-supporting); font-weight: 400; }
+.model-network-settings-card > .form-group { margin-top: 14px; }
 .local-model-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
 .local-model-heading h4, .local-model-heading p { margin: 0; }
 .local-model-heading p { margin-top: 4px; color: var(--text-secondary); font-size: .86rem; }
 .privacy-chip { white-space: nowrap; padding: 4px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .76rem; font-weight: 650; }
-.local-model-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.local-model-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
 .local-model-facts div { min-width: 0; padding: 9px; border-radius: 9px; background: var(--surface); }
 .local-model-facts dt { color: var(--text-secondary); font-size: .72rem; }
 .local-model-facts dd { margin: 3px 0 0; font-size: .82rem; overflow-wrap: anywhere; }
@@ -2613,6 +2665,9 @@ button:disabled {
 .local-model-privacy { color: var(--text-secondary); font-size: .82rem; }
 .local-model-card details { margin-top: 12px; }
 .local-model-card details code { display: block; overflow-wrap: anywhere; color: var(--text-secondary); font-size: .7rem; }
+.local-model-technical { margin: 8px 0; color: var(--text-secondary); font-size: var(--font-caption); }
+.local-model-technical dt { font-weight: 650; }
+.local-model-technical dd { margin-top: 2px; }
 .model-progress { position: relative; min-height: 32px; overflow: hidden; border-radius: 8px; background: var(--surface); }
 .model-progress > div { position: absolute; inset: 0 auto 0 0; background: var(--accent-soft); transition: width .15s ease; }
 .model-progress > span { position: relative; display: block; padding: 7px 10px; font-size: .78rem; }
@@ -2626,10 +2681,12 @@ button:disabled {
 }
 
 .template-manager-group {
-  padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  padding: 4px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.template-manager-group:last-of-type {
+  border-bottom: 0;
 }
 
 .template-manager-heading,
@@ -3629,6 +3686,66 @@ textarea:focus-visible,
 .save-temporary-prompt .form-action-row {
   justify-self: end;
   width: min(100%, 320px);
+}
+
+/* Readability floor for supporting UI copy across normal and narrow windows. */
+.modal-eyebrow,
+.library-heading-actions label,
+.library-artifact-actions button,
+.library-artifact-error,
+.library-title-form button,
+.library-task-time,
+.library-task-details > summary,
+.library-tag-suggestions,
+.library-tag-suggestions button,
+.library-status,
+.markdown-reader-header-actions button,
+.markdown-generation-heading span,
+.markdown-reader-progress,
+.library-artifacts h4,
+.library-artifact-meta,
+.file-caption,
+.mode-index,
+.mode-copy small,
+.results-header > div > span,
+.generated-results h3,
+.result-label,
+.result-copy code,
+.result-note,
+.task-folder-detail code,
+.preflight-refresh,
+.preflight-label,
+.preflight-value,
+.preflight-detail,
+.preflight-error,
+.preflight-empty,
+.form-group label,
+.credential-status-item,
+.credential-status-item strong,
+.btn-save-key,
+.save-status,
+.output-location-card code,
+.output-location-card p,
+.output-location-actions button,
+.generation-input-meta small,
+.generation-input-meta output {
+  font-size: var(--font-caption);
+}
+
+.input-back,
+.reader-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.input-back svg,
+.reader-back svg,
+.generation-panel-close svg,
+.button-arrow,
+.mode-selected svg {
+  width: 16px;
+  height: 16px;
 }
 
 @media (max-width: 520px) {
