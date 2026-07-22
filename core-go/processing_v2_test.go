@@ -121,6 +121,56 @@ func TestGenerateContentAppendsVersionsWithoutOverwrite(t *testing.T) {
 	}
 }
 
+func TestTemporaryPromptGenerationSnapshotsPromptAndUsesReservedPath(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	prompt := "Extract decisions and unresolved risks."
+	record, err := GenerateContentWithPrompt(taskDir, m, prompt, DefaultSettings(), fakeContentGenerator{text: "result"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.TemplateID != temporaryPromptTemplateID || record.TemplateRevision != 1 || record.TemplateInstructions != prompt {
+		t.Fatalf("temporary prompt snapshot = %#v", record)
+	}
+	wantPrefix := "generated/temporary-prompt/"
+	if !strings.HasPrefix(record.ArtifactReference, wantPrefix) || !strings.HasSuffix(record.ArtifactReference, ".md") {
+		t.Fatalf("artifact reference = %q", record.ArtifactReference)
+	}
+	if _, err := os.Stat(filepath.Join(taskDir, filepath.FromSlash(record.ArtifactReference))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTemporaryPromptValidation(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	for _, prompt := range []string{"", "   ", strings.Repeat("x", maxTemplateInstructions+1)} {
+		if _, err := GenerateContentWithPrompt(taskDir, m, prompt, DefaultSettings(), fakeContentGenerator{text: "no"}); err == nil {
+			t.Fatalf("prompt %q was accepted", prompt)
+		}
+	}
+}
+
+func TestResumeTemporaryPromptUsesManifestAndGenerationSnapshots(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	m.OutputMode = "transcript_and_generate"
+	m.RequestedTemplateID = ""
+	m.RequestedPrompt = "Summarize the evidence."
+	if err := ResumeOrGenerateContent(taskDir, m, DefaultSettings(), fakeContentGenerator{text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Generations) != 1 || m.Generations[0].TemplateInstructions != m.RequestedPrompt {
+		t.Fatalf("generation = %#v", m.Generations)
+	}
+	m.Generations[0].Status = "processing"
+	m.Generations[0].Attempts[0].Status = "processing"
+	m.RequestedPrompt = "A different prompt must not replace the snapshot."
+	if err := ResumeOrGenerateContent(taskDir, m, DefaultSettings(), fakeContentGenerator{text: "resumed"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.Generations[0].TemplateInstructions != "Summarize the evidence." || len(m.Generations[0].Attempts) != 2 {
+		t.Fatalf("resume changed snapshot: %#v", m.Generations[0])
+	}
+}
+
 func TestGenerationSnapshotsEffectiveProviderConfiguration(t *testing.T) {
 	taskDir, m := completedV2Manifest(t)
 	settings := DefaultSettings()

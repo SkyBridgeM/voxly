@@ -49,6 +49,7 @@ type Settings struct {
 	MinutesPromptPath    string
 	ObsidianTemplatePath string
 	TemplateStorePath    string
+	TemporaryPrompt      string
 	AppDataRoot          string
 	// EnvBase is the directory containing the .env file, used to resolve relative paths.
 	EnvBase string

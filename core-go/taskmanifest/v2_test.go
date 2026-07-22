@@ -33,6 +33,35 @@ func TestV2ManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTemporaryPromptExecutionRoundTripAndMutualExclusion(t *testing.T) {
+	m := &TaskManifest{
+		SchemaVersion: CurrentSchemaVersion, TaskID: "task-prompt",
+		CreatedAt: "2026-07-16T00:00:00Z", UpdatedAt: "2026-07-16T00:01:00Z",
+		Backend: "go", Provider: "mimo", OutputMode: "transcript_and_generate",
+		RequestedPrompt: "Create a concise research brief.", Status: "pending",
+		Source: SourceInfo{Path: "audio/source.wav"}, SourceOwnership: "task_copy", InputFormat: "wav",
+		Artifacts: Artifacts{Transcript: Artifact{State: "pending"}, NotesInput: Artifact{State: "unavailable"}, Minutes: Artifact{State: "unavailable"}},
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"prompt_instructions":"Create a concise research brief."`) {
+		t.Fatalf("manifest JSON = %s", data)
+	}
+	var loaded TaskManifest
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RequestedPrompt != m.RequestedPrompt || loaded.RequestedTemplateID != "" {
+		t.Fatalf("round trip = %#v", loaded)
+	}
+	loaded.RequestedTemplateID = "structured-notes"
+	if err := WriteManifest(filepath.Join(t.TempDir(), ManifestFilename), &loaded); err == nil {
+		t.Fatal("manifest accepted template and temporary prompt together")
+	}
+}
+
 func TestASRRuntimeSnapshotRoundTripPreservesCompatibleUnknownFields(t *testing.T) {
 	m := TaskManifest{SchemaVersion: CurrentSchemaVersion, TaskID: "task-local", CreatedAt: "2026-07-16T00:00:00Z", UpdatedAt: "2026-07-16T00:01:00Z", Backend: "go", Provider: "local-sensevoice", OutputMode: "transcript_only", Status: "completed", Source: SourceInfo{Path: "audio/source.wav"}, SourceOwnership: "task_copy", InputFormat: "wav", Artifacts: Artifacts{Transcript: Artifact{State: "completed", Path: "transcript.md"}, NotesInput: Artifact{State: "unavailable"}, Minutes: Artifact{State: "unavailable"}}, CanonicalTranscript: &CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "abc", HashContractVersion: 1, CreatedAt: "2026-07-16T00:00:30Z", ASRProvider: "local-sensevoice", ASRModel: "sensevoice-small-int8", Status: "completed"}}
 	m.ASRRuntime = &ASRRuntimeSnapshot{ProviderID: "local-sensevoice", ModelID: "sensevoice-small-int8", ExecutionLocation: "local", RuntimeKind: "bundled_sidecar", RuntimeVersion: "1.13.4", ModelVersion: "2024-07-17", ModelSHA256: strings.Repeat("a", 64), Engine: "sensevoice", EngineRuntime: "sherpa-onnx"}

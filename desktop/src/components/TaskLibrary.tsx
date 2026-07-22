@@ -11,8 +11,10 @@ import {
   type PromptTemplateSummary,
   type ProviderSelection,
   type TaskMetadataUpdate,
+  type GenerationInput,
 } from "../lib/meetingAsr";
 import { TaskMarkdownReader } from "./TaskMarkdownReader";
+import { GenerationInputControl, generationInputIsValid, SaveTemporaryPromptPanel } from "./GenerationInputControl";
 
 export interface TaskLibraryLabels {
   taskLibraryTitle: string;
@@ -125,6 +127,7 @@ interface TaskLibraryProps {
   llmModelLabel: string;
   llmConfig: ProviderSelection;
   onOpenSettings: () => void;
+  onTemplatesChanged: () => Promise<void>;
 }
 
 function formatDate(value: string, locale: "zh" | "en", fallback: string) {
@@ -246,7 +249,7 @@ function ArtifactItem({
 
 function GenerationGroupView({ group, task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction }: { group: TaskSummary["generated_content"][number]; task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void }) {
   const snapshotName = group.display_name.trim();
-  const registryName = templates.find((template) => template.built_in && template.id === group.template_id)?.display_name[locale];
+  const registryName = group.template_id === "temporary-prompt" ? (locale === "zh" ? "临时提示词" : "Temporary prompt") : templates.find((template) => template.built_in && template.id === group.template_id)?.display_name[locale];
   const visibleVersions = group.latest ? [group.latest] : group.versions;
   const versionName = (version: TaskSummary["generated_content"][number]["versions"][number]) => registryName || version.template_display_name.trim() || snapshotName || group.template_id || labels.generatedContent;
   const versionMetadata = (version: TaskSummary["generated_content"][number]["versions"][number]) => [`${labels.createdAt}: ${formatDate(version.created_at, locale, labels.invalidDate)}`];
@@ -346,7 +349,7 @@ function TaskCard({
   );
 }
 
-function TaskDetails({ task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction, generationPending, generationError, onGenerate, llmReady, llmProviderLabel, llmModelLabel, onOpenSettings, metadataPending, metadataError, onUpdateMetadata, tagSuggestions, onBack }: { task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void; generationPending: boolean; generationError: string | null; onGenerate: (task: TaskSummary, templateId: string) => void; llmReady: boolean; llmProviderLabel: string; llmModelLabel: string; onOpenSettings: () => void; metadataPending: boolean; metadataError: string | null; onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>; tagSuggestions: readonly string[]; onBack: () => void }) {
+function TaskDetails({ task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction, generationPending, generationError, onGenerate, promptOffer, onDismissPromptOffer, onTemplatesChanged, llmReady, llmProviderLabel, llmModelLabel, onOpenSettings, metadataPending, metadataError, onUpdateMetadata, tagSuggestions, onBack }: { task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void; generationPending: boolean; generationError: string | null; onGenerate: (task: TaskSummary, input: GenerationInput) => void; promptOffer: string | null; onDismissPromptOffer: () => void; onTemplatesChanged: () => Promise<void>; llmReady: boolean; llmProviderLabel: string; llmModelLabel: string; onOpenSettings: () => void; metadataPending: boolean; metadataError: string | null; onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>; tagSuggestions: readonly string[]; onBack: () => void }) {
   const [description, setDescription] = useState(task.description);
   const [tags, setTags] = useState<string[]>(task.tags);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -354,7 +357,7 @@ function TaskDetails({ task, locale, labels, templates, pendingActions, actionEr
   const [tagInput, setTagInput] = useState("");
   const [tagPanelOpen, setTagPanelOpen] = useState(false);
   const [generationOpen, setGenerationOpen] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
+  const [generationInput, setGenerationInput] = useState<GenerationInput>({ kind: "template", templateId: "structured-notes" });
   const transcript = task.canonical_transcript ?? task.primary_artifacts.find((artifact) => artifact.kind === "transcript") ?? null;
   const sourceAudio = task.primary_artifacts.find((artifact) => artifact.kind === "audio") ?? null;
   const suggestions = tagSuggestions.filter((tag) => !tags.includes(tag)).filter((tag) => !tagInput.trim() || tag.toLocaleLowerCase().includes(tagInput.trim().toLocaleLowerCase())).slice(0, 8);
@@ -383,7 +386,8 @@ function TaskDetails({ task, locale, labels, templates, pendingActions, actionEr
     <section className="library-quick-tags" aria-label={labels.tags}><div className="library-tags">{tags.map((tag) => <span key={tag}>{tag}<button type="button" onClick={() => void persistTags(tags.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button></span>)}</div>{!tagPanelOpen && <button type="button" className="btn-secondary" onClick={() => setTagPanelOpen(true)} disabled={metadataPending || tags.length >= 20}>+ {labels.addTag}</button>}{tagPanelOpen && <form className="library-tag-panel" onSubmit={(event) => { event.preventDefault(); void addTag(); }}>{suggestions.length > 0 && <div className="library-tag-suggestions"><span>{labels.existingTags}</span><div>{suggestions.map((tag) => <button type="button" key={tag} onClick={() => setTagInput(tag)} disabled={metadataPending}>+ {tag}</button>)}</div></div>}<input autoFocus value={tagInput} onChange={(event) => setTagInput(event.target.value)} maxLength={50} placeholder={labels.tagPlaceholder} aria-label={labels.addTag} disabled={metadataPending || tags.length >= 20} /><div className="library-tag-panel-actions form-action-row"><button type="button" className="btn-secondary" onClick={() => { setTagInput(""); setTagPanelOpen(false); }} disabled={metadataPending}>{labels.cancel}</button><button type="submit" className="btn-primary" disabled={metadataPending || !tagInput.trim() || tags.includes(tagInput.trim()) || tags.length >= 20}>{labels.addTag}</button></div></form>}</section>
     {sourceAudio && <section className="library-details-section library-artifacts"><h3>{labels.audioFile}</h3><ul><ArtifactItem artifact={sourceAudio} labels={labels} actionKey={`${task.task_folder}:audio`} pendingAction={pendingActions.get(`${task.task_folder}:audio`) ?? null} actionError={actionErrors.get(`${task.task_folder}:audio`) ?? null} metadata={[formatCompactDuration(task.duration_ms)]} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /></ul></section>}
     <section className="library-details-section library-artifacts"><h3>{labels.canonicalTranscript}</h3><ul>{transcript ? <ArtifactItem artifact={transcript} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={pendingActions.get(`${task.task_folder}:transcript`) ?? null} actionError={actionErrors.get(`${task.task_folder}:transcript`) ?? null} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /> : <ArtifactItem artifact={{ kind: "transcript", status: "unavailable", reference: null, has_error: false, retryable: null, provider: "", model: "" }} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={null} actionError={null} onAction={() => undefined} />}</ul></section>
-    <section className="library-details-section"><div className="library-section-heading"><h3>{labels.generatedContent}</h3>{task.can_generate && !generationOpen && <button className="btn-secondary" onClick={() => setGenerationOpen(true)}>{labels.generateContent}</button>}</div>{generationOpen && <div className="task-generation-action"><p>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</p>{!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}<label htmlFor={`template-${task.task_id}`}>{labels.templateLabel}</label><select id={`template-${task.task_id}`} value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}><optgroup label={labels.builtInTemplates}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>{templates.some((template) => !template.built_in) && <optgroup label={labels.myTemplates}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}</select><div className="library-generation-buttons form-action-row"><button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button><button className="btn-primary" disabled={generationPending || templates.length === 0 || !llmReady} onClick={() => onGenerate(task, selectedTemplate)}>{generationPending ? labels.generatingContent : labels.generateContent}</button></div>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}<div className="library-generated">{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div></section>
+    <section className="library-details-section"><div className="library-section-heading"><h3>{labels.generatedContent}</h3>{task.can_generate && !generationOpen && <button className="btn-secondary" onClick={() => setGenerationOpen(true)}>{labels.generateContent}</button>}</div>{generationOpen && <div className="task-generation-action"><p>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</p>{!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}<GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} /><div className="library-generation-buttons form-action-row"><button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button><button className="btn-primary" disabled={generationPending || !generationInputIsValid(generationInput) || !llmReady} onClick={() => onGenerate(task, generationInput)}>{generationPending ? labels.generatingContent : labels.generateContent}</button></div>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}<div className="library-generated">{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div></section>
+    {promptOffer && <SaveTemporaryPromptPanel prompt={promptOffer} locale={locale} onDismiss={onDismissPromptOffer} onSaved={onTemplatesChanged} />}
     <details className="library-task-information"><summary>{labels.taskInformation}</summary><div className="library-full-time"><span>{labels.createdAt}: {formatDate(task.created_at, locale, labels.invalidDate)}</span><span>{labels.updatedAt}: {formatDate(task.updated_at, locale, labels.invalidDate)}</span></div><form className="library-details-form" onSubmit={(event) => { event.preventDefault(); void saveMetadata(); }}><label><span>{labels.taskDescription}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} placeholder={labels.descriptionPlaceholder} disabled={metadataPending} /></label><div className="library-metadata-actions form-action-row"><button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button></div></form></details>
   </article>;
 }
@@ -400,6 +404,7 @@ export function TaskLibrary({
   llmModelLabel,
   llmConfig,
   onOpenSettings,
+  onTemplatesChanged,
 }: TaskLibraryProps) {
   const [result, setResult] = useState<DiscoveryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -418,6 +423,7 @@ export function TaskLibrary({
   const metadataPendingRef = useRef(new Set<string>());
   const [generationPending, setGenerationPending] = useState(new Set<string>());
   const [generationErrors, setGenerationErrors] = useState(new Map<string, string>());
+  const [temporaryPromptOffers, setTemporaryPromptOffers] = useState(new Map<string, string>());
   const [metadataPending, setMetadataPending] = useState(new Set<string>());
   const [metadataErrors, setMetadataErrors] = useState(new Map<string, string>());
   const [sortMode, setSortMode] = useState<"updated" | "created" | "title">("updated");
@@ -508,13 +514,16 @@ export function TaskLibrary({
     [labels.artifactActionFailed]
   );
 
-  const handleGenerate = useCallback(async (task: TaskSummary, templateId: string) => {
+  const handleGenerate = useCallback(async (task: TaskSummary, input: GenerationInput) => {
     if (generationPendingRef.current.has(task.task_folder)) return;
     generationPendingRef.current.add(task.task_folder);
     setGenerationPending((previous) => new Set(previous).add(task.task_folder));
     setGenerationErrors((previous) => { const next = new Map(previous); next.delete(task.task_folder); return next; });
     try {
-      await generateTaskContent({ taskFolder: task.task_folder, templateId, deepseekApiKey, llmConfig });
+      await generateTaskContent({ taskFolder: task.task_folder, input, deepseekApiKey, llmConfig });
+      if (input.kind === "temporary_prompt" && mountedRef.current) {
+        setTemporaryPromptOffers((current) => new Map(current).set(task.task_folder, input.prompt.trim()));
+      }
       await refresh();
     } catch {
       if (mountedRef.current) setGenerationErrors((previous) => new Map(previous).set(task.task_folder, labels.generationFailed));
@@ -585,6 +594,15 @@ export function TaskLibrary({
   const selectedTask = selectedTaskKey
     ? result?.tasks.find((task) => `${task.task_id}:${task.task_folder}` === selectedTaskKey) ?? null
     : null;
+  const selectedPromptOffer = selectedTask ? temporaryPromptOffers.get(selectedTask.task_folder) ?? null : null;
+  const dismissPromptOffer = () => {
+    if (!selectedTask) return;
+    setTemporaryPromptOffers((current) => {
+      const next = new Map(current);
+      next.delete(selectedTask.task_folder);
+      return next;
+    });
+  };
 
   if (selectedTask) {
     if (selectedTaskView === "reader") {
@@ -600,6 +618,9 @@ export function TaskLibrary({
             generationPending={generationPending.has(selectedTask.task_folder)}
             generationError={generationErrors.get(selectedTask.task_folder) ?? null}
             onGenerate={handleGenerate}
+            promptOffer={selectedPromptOffer}
+            onDismissPromptOffer={dismissPromptOffer}
+            onTemplatesChanged={onTemplatesChanged}
             llmReady={llmReady}
             llmProviderLabel={llmProviderLabel}
             llmModelLabel={llmModelLabel}
@@ -621,6 +642,9 @@ export function TaskLibrary({
           generationPending={generationPending.has(selectedTask.task_folder)}
           generationError={generationErrors.get(selectedTask.task_folder) ?? null}
           onGenerate={handleGenerate}
+          promptOffer={selectedPromptOffer}
+          onDismissPromptOffer={dismissPromptOffer}
+          onTemplatesChanged={onTemplatesChanged}
           llmReady={llmReady}
           llmProviderLabel={llmProviderLabel}
           llmModelLabel={llmModelLabel}

@@ -4,6 +4,9 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 export type BackendKind = "python" | "go";
 export type RuntimeMode = "development" | "production";
 export type OutputMode = "transcript_only" | "transcript_and_generate";
+export type GenerationInput =
+  | { kind: "template"; templateId: string }
+  | { kind: "temporary_prompt"; prompt: string };
 export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
 export type CredentialSource = "session" | "secure_store" | "env" | "missing";
 
@@ -311,8 +314,14 @@ export async function deleteCustomTemplate(templateId: string, expectedCurrentRe
   await invoke("delete_custom_template", { input: { template_id: templateId, expected_current_revision: expectedCurrentRevision } });
 }
 
-export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
-  return invoke("generate_task_content", { taskFolder: options.taskFolder, templateId: options.templateId, deepseekApiKey: options.deepseekApiKey || undefined, llmConfig: options.llmConfig });
+export async function generateTaskContent(options: { taskFolder: string; input: GenerationInput; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
+  return invoke("generate_task_content", {
+    taskFolder: options.taskFolder,
+    templateId: options.input.kind === "template" ? options.input.templateId : undefined,
+    temporaryPrompt: options.input.kind === "temporary_prompt" ? options.input.prompt : undefined,
+    deepseekApiKey: options.deepseekApiKey || undefined,
+    llmConfig: options.llmConfig,
+  });
 }
 
 export async function listProviders(): Promise<ProviderCatalog> {
@@ -407,6 +416,7 @@ export interface RunOptions {
   deepseekApiKey?: string;
   backend?: BackendKind;
   templateId?: string;
+  temporaryPrompt?: string;
   asrConfig: ProviderSelection;
   llmConfig?: ProviderSelection;
 }
@@ -464,6 +474,7 @@ export async function runMeetingAsr(
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
       templateId: options.templateId || undefined,
+      temporaryPrompt: options.temporaryPrompt || undefined,
       asrConfig: options.asrConfig,
       llmConfig: options.llmConfig,
     });
@@ -483,6 +494,7 @@ export async function resumeMeetingAsr(
     mimoApiKey?: string;
     deepseekApiKey?: string;
     templateId?: string;
+    temporaryPrompt?: string;
   },
   callbacks: RunCallbacks
 ): Promise<RunResult> {
@@ -514,6 +526,7 @@ export async function resumeMeetingAsr(
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
       templateId: options.templateId || undefined,
+      temporaryPrompt: options.temporaryPrompt || undefined,
     });
     return result;
   } finally {

@@ -7,8 +7,10 @@ import {
   revealTaskArtifact,
   type PromptTemplateSummary,
   type TaskSummary,
+  type GenerationInput,
 } from "../lib/meetingAsr";
 import type { TaskLibraryLabels } from "./TaskLibrary";
+import { GenerationInputControl, generationInputIsValid, SaveTemporaryPromptPanel } from "./GenerationInputControl";
 
 interface ReadableArtifact {
   key: string;
@@ -32,9 +34,9 @@ function readableArtifacts(
   labels: TaskLibraryLabels
 ) {
   const generated: ReadableArtifact[] = task.generated_content.flatMap((group) => {
-    const registryName = templates.find(
-      (template) => template.built_in && template.id === group.template_id
-    )?.display_name[locale];
+    const registryName = group.template_id === "temporary-prompt"
+      ? (locale === "zh" ? "临时提示词" : "Temporary prompt")
+      : templates.find((template) => template.built_in && template.id === group.template_id)?.display_name[locale];
     return group.versions
       .filter((version) => version.status === "completed" && Boolean(version.reference))
       .map((version) => ({
@@ -79,6 +81,9 @@ export function TaskMarkdownReader({
   generationPending,
   generationError,
   onGenerate,
+  promptOffer,
+  onDismissPromptOffer,
+  onTemplatesChanged,
   llmReady,
   llmProviderLabel,
   llmModelLabel,
@@ -92,7 +97,10 @@ export function TaskMarkdownReader({
   onOpenDetails: () => void;
   generationPending: boolean;
   generationError: string | null;
-  onGenerate: (task: TaskSummary, templateId: string) => void;
+  onGenerate: (task: TaskSummary, input: GenerationInput) => void;
+  promptOffer: string | null;
+  onDismissPromptOffer: () => void;
+  onTemplatesChanged: () => Promise<void>;
   llmReady: boolean;
   llmProviderLabel: string;
   llmModelLabel: string;
@@ -109,7 +117,7 @@ export function TaskMarkdownReader({
   const [retryNonce, setRetryNonce] = useState(0);
   const [actionPending, setActionPending] = useState<"open" | "reveal" | null>(null);
   const [generationOpen, setGenerationOpen] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
+  const [generationInput, setGenerationInput] = useState<GenerationInput>({ kind: "template", templateId: "structured-notes" });
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
   const selected = artifacts.find((artifact) => artifact.key === selectedKey) ?? artifacts[0] ?? null;
@@ -175,25 +183,23 @@ export function TaskMarkdownReader({
 
       {generationOpen && (
         <section className="markdown-generation-panel" aria-label={labels.generateContent}>
-          <div>
-            <strong>{labels.generateContent}</strong>
-            <span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span>
+          <div className="markdown-generation-surface">
+            <header className="markdown-generation-heading">
+              <div><strong>{labels.generateContent}</strong><span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span></div>
+              <button type="button" className="generation-panel-close" onClick={() => setGenerationOpen(false)} disabled={generationPending} aria-label={labels.cancel} title={labels.cancel}>×</button>
+            </header>
+            {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
+            <GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} />
+            <div className="markdown-generation-actions form-action-row">
+              <button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button>
+              <button className="btn-primary" onClick={() => onGenerate(task, generationInput)} disabled={generationPending || !generationInputIsValid(generationInput) || !llmReady}>{generationPending ? labels.generatingContent : labels.generateContent}</button>
+            </div>
+            {generationError && <p className="library-artifact-error" role="status">{generationError}</p>}
           </div>
-          {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
-          <label>
-            <span>{labels.templateLabel}</span>
-            <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}>
-              <optgroup label={labels.builtInTemplates}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>
-              {templates.some((template) => !template.built_in) && <optgroup label={labels.myTemplates}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}
-            </select>
-          </label>
-          <div className="markdown-generation-actions form-action-row">
-            <button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button>
-            <button className="btn-primary" onClick={() => onGenerate(task, selectedTemplate)} disabled={generationPending || templates.length === 0 || !llmReady}>{generationPending ? labels.generatingContent : labels.generateContent}</button>
-          </div>
-          {generationError && <p className="library-artifact-error" role="status">{generationError}</p>}
         </section>
       )}
+
+      {promptOffer && <SaveTemporaryPromptPanel prompt={promptOffer} locale={locale} onDismiss={onDismissPromptOffer} onSaved={onTemplatesChanged} />}
 
       {artifacts.length > 0 ? (
         <div className="markdown-reader-layout">

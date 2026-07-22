@@ -16,6 +16,7 @@ import (
 
 	"github.com/yudi/meet-asr/core-go/modelcatalog"
 	"github.com/yudi/meet-asr/core-go/tasklibrary"
+	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
 const version = "0.2.0-minutes"
@@ -122,7 +123,7 @@ Usage:
 	meeting-asr-go download-model --app-data-root <path> --model-id sensevoice-small-int8
 	meeting-asr-go import-model --app-data-root <path> --model-id sensevoice-small-int8 --source-archive <path>
 	meeting-asr-go delete-model --app-data-root <path> --model-id sensevoice-small-int8
-  meeting-asr-go generate-content --task-dir <path> --template-id <id>
+  meeting-asr-go generate-content --task-dir <path> (--template-id <id> | --temporary-prompt-stdin)
   meeting-asr-go recording-init --output-root <path>
   meeting-asr-go recording-update --task-dir <path> --status <status>
   meeting-asr-go recording-scan --output-root <path>
@@ -130,6 +131,7 @@ Usage:
 Flags:
   --output-mode transcript_only   Output mode: transcript_only or transcript_and_generate
   --template-id id           Built-in template for transcript_and_generate
+  --temporary-prompt-stdin   Read one-time generation instructions from stdin
   --asr-provider mimo        Speech-recognition provider
   --asr-model model          Speech-recognition model
   --llm-provider deepseek    Generated-content provider
@@ -264,6 +266,7 @@ func runGenerateContent(args []string) error {
 	fs.SetOutput(io.Discard)
 	taskDir := fs.String("task-dir", "", "Validated task directory")
 	templateID := fs.String("template-id", "", "Built-in template ID")
+	temporaryPromptStdin := fs.Bool("temporary-prompt-stdin", false, "Read one-time generation instructions from stdin")
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 	envFile := fs.String("env-file", "", "Explicit .env path")
@@ -294,8 +297,19 @@ func runGenerateContent(args []string) error {
 	settings.LLMProvider = *llmProvider
 	settings.DeepSeekModel = *llmModel
 	settings.TemplateStorePath = *templatesFile
-	if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
-		return err
+	temporaryPrompt := ""
+	if *temporaryPromptStdin {
+		if strings.TrimSpace(*templateID) != "" {
+			return fmt.Errorf("choose either --template-id or --temporary-prompt-stdin")
+		}
+		temporaryPrompt, err = readTemporaryPrompt(os.Stdin)
+		if err != nil {
+			return err
+		}
+	} else {
+		if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
+			return err
+		}
 	}
 	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
 		return err
@@ -308,7 +322,12 @@ func runGenerateContent(args []string) error {
 	if err != nil {
 		return err
 	}
-	record, err := GenerateContent(*taskDir, m, *templateID, settings, generator)
+	var record *taskmanifest.GenerationRecord
+	if temporaryPrompt != "" {
+		record, err = GenerateContentWithPrompt(*taskDir, m, temporaryPrompt, settings, generator)
+	} else {
+		record, err = GenerateContent(*taskDir, m, *templateID, settings, generator)
+	}
 	if record != nil {
 		fmt.Printf("Generation ID: %s\n", record.GenerationID)
 	}
@@ -518,9 +537,11 @@ func reorderArgs(args []string) []string {
 }
 
 func runTranscribe(args []string) error {
+	temporaryPrompt := ""
 	fs := flag.NewFlagSet("transcribe", flag.ContinueOnError)
 	outputMode := fs.String("output-mode", "transcript", "Output mode")
 	templateID := fs.String("template-id", "structured-notes", "Built-in generation template")
+	temporaryPromptStdin := fs.Bool("temporary-prompt-stdin", false, "Read one-time generation instructions from stdin")
 	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
 	outputDir := fs.String("output-dir", "output", "Base output directory")
 	chunkMinutes := fs.Int("chunk-minutes", 0, "Chunk length in minutes (0 = use .env or default)")
@@ -540,11 +561,23 @@ func runTranscribe(args []string) error {
 		return err
 	}
 
-	normalizedMode, normalizedTemplate, err := normalizeProcessingSelection(*outputMode, *templateID)
-	if err != nil {
-		return err
+	if *temporaryPromptStdin {
+		prompt, err := readTemporaryPrompt(os.Stdin)
+		if err != nil {
+			return err
+		}
+		if *outputMode != "transcript_and_generate" {
+			return fmt.Errorf("temporary prompt requires --output-mode transcript_and_generate")
+		}
+		temporaryPrompt = prompt
+		*templateID = ""
+	} else {
+		normalizedMode, normalizedTemplate, err := normalizeProcessingSelection(*outputMode, *templateID)
+		if err != nil {
+			return err
+		}
+		*outputMode, *templateID = normalizedMode, normalizedTemplate
 	}
-	*outputMode, *templateID = normalizedMode, normalizedTemplate
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: meeting-asr-go transcribe <audio_path>")
@@ -659,12 +692,27 @@ func runTranscribe(args []string) error {
 
 	settings.TemplateStorePath = *templatesFile
 	if *outputMode == "transcript_and_generate" {
-		if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
-			return err
+		settings.TemporaryPrompt = temporaryPrompt
+		if settings.TemporaryPrompt == "" {
+			if _, err := LookupPromptTemplateWithStore(settings.TemplateStorePath, *templateID); err != nil {
+				return err
+			}
 		}
 	}
 	// Run the workflow.
 	return runWorkflowV2(absAudio, absOutput, settings, *outputMode, *templateID)
+}
+
+func readTemporaryPrompt(reader io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxTemplateInstructions*4+1))
+	if err != nil {
+		return "", fmt.Errorf("read temporary prompt: %w", err)
+	}
+	prompt := strings.TrimSpace(string(data))
+	if prompt == "" || len([]rune(prompt)) > maxTemplateInstructions {
+		return "", fmt.Errorf("invalid_temporary_prompt: prompt is required and must be at most %d characters", maxTemplateInstructions)
+	}
+	return prompt, nil
 }
 
 func normalizeProcessingSelection(mode, templateID string) (string, string, error) {
@@ -719,8 +767,12 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	// 3. Create manifest.
 	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, settings.ASRProvider, settings.MimoModel)
 	manifest.ASRRuntime = runtimeSnapshot
-	if outputMode == "transcript_and_generate" && len(selectedTemplate) > 0 {
-		manifest.RequestedTemplateID = selectedTemplate[0]
+	if outputMode == "transcript_and_generate" {
+		if settings.TemporaryPrompt != "" {
+			manifest.RequestedPrompt = settings.TemporaryPrompt
+		} else if len(selectedTemplate) > 0 {
+			manifest.RequestedTemplateID = selectedTemplate[0]
+		}
 	}
 	if err := SetTaskState(taskDir, manifest, TaskValidatingAudio); err != nil {
 		return fmt.Errorf("creating manifest: %w", err)
@@ -870,7 +922,12 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		if resolveErr != nil {
 			return resolveErr
 		}
-		record, err := GenerateContent(taskDir, manifest, templateID, settings, generator)
+		var record *taskmanifest.GenerationRecord
+		if settings.TemporaryPrompt != "" {
+			record, err = GenerateContentWithPrompt(taskDir, manifest, settings.TemporaryPrompt, settings, generator)
+		} else {
+			record, err = GenerateContent(taskDir, manifest, templateID, settings, generator)
+		}
 		if err != nil {
 			// Transcript remains valid; failed generation metadata is durable.
 			manifest.State = TaskCompleted
