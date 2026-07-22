@@ -1079,7 +1079,7 @@ button {
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
-  padding: 20px 22px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1087,20 +1087,33 @@ button {
   min-width: 0;
 }
 
+.markdown-reader-title-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .markdown-reader-header h2 {
-  margin-top: 8px;
+  overflow: hidden;
+  margin: 0;
   font-family: var(--font-display);
   font-size: clamp(1.25rem, 2.4vw, 1.75rem);
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .markdown-reader-header p {
-  margin-top: 4px;
+  overflow: hidden;
+  margin-top: 2px;
   color: var(--text-muted);
   font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .reader-back {
+  flex: 0 0 auto;
   min-height: 0;
   padding: 0;
   color: var(--text-secondary);
@@ -1119,14 +1132,15 @@ button {
 .markdown-reader-header-actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-  width: min(640px, 100%);
+  gap: 6px;
+  width: min(560px, 100%);
 }
 
 .markdown-reader-header-actions button {
   width: 100%;
-  min-height: 32px;
-  padding: 0 8px;
+  min-height: 34px;
+  padding: 0 6px;
+  font-size: 0.68rem;
   white-space: nowrap;
 }
 
@@ -1234,7 +1248,7 @@ button {
   position: relative;
   width: min(760px, 100%);
   margin: 0 auto;
-  padding: clamp(28px, 5vw, 64px) clamp(24px, 6vw, 72px) 80px;
+  padding: clamp(24px, 4vw, 48px) clamp(24px, 6vw, 72px) 72px;
   color: var(--text-primary);
   font-size: 0.9rem;
   line-height: 1.82;
@@ -3185,6 +3199,16 @@ textarea:focus-visible,
   .markdown-reader-header {
     align-items: flex-start;
     flex-direction: column;
+    gap: 9px;
+    padding: 13px 16px;
+  }
+
+  .markdown-reader-header > div:first-child {
+    width: 100%;
+  }
+
+  .markdown-reader-header h2 {
+    font-size: 1.2rem;
   }
 
   .markdown-reader-header-actions {
@@ -3308,7 +3332,7 @@ textarea:focus-visible,
   }
 
   .markdown-reader-header {
-    padding: 17px;
+    padding: 12px 14px;
   }
 
   .markdown-reader-header-actions {

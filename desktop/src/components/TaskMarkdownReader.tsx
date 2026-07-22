@@ -157,8 +157,10 @@ export function TaskMarkdownReader({
     <article className="markdown-reader">
       <header className="markdown-reader-header">
         <div>
-          <button className="reader-back" onClick={onBack}>← {labels.backToTaskLibrary}</button>
-          <h2>{task.title}</h2>
+          <div className="markdown-reader-title-line">
+            <button className="reader-back" onClick={onBack}>← {labels.backToTaskLibrary}</button>
+            <h2>{task.title}</h2>
+          </div>
           {selected && <p>{selected.title}{selected.provider ? ` · ${selected.provider}${selected.model ? ` / ${selected.model}` : ""}` : ""}</p>}
         </div>
         <div className="markdown-reader-header-actions">
