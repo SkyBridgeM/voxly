@@ -210,7 +210,7 @@ button {
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
   box-shadow: var(--shadow-card);
-  contain: layout paint;
+  contain: layout style;
   transition: padding 180ms cubic-bezier(.2, .8, .2, 1);
 }
 
