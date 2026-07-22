@@ -435,7 +435,7 @@ function App() {
   };
 
   const handleWorkspaceTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault();
     if (activeArea === "workflow") {
       showLibrary();
@@ -672,8 +672,11 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        {locale === "zh" ? "跳到主要内容" : "Skip to main content"}
+      </a>
       <div className="app">
-        <header className="app-header">
+        <aside className="app-sidebar">
           <div className="brand-lockup">
             <img
               className="brand-mark"
@@ -687,7 +690,40 @@ function App() {
               <p className="subtitle">{t.appSubtitle}</p>
             </div>
           </div>
-          <div className="header-actions">
+
+          <nav
+            className="workspace-tabs"
+            role="tablist"
+            aria-label={t.workspaceNavigation}
+            onKeyDown={handleWorkspaceTabKeyDown}
+          >
+            <button
+              ref={workflowTabRef}
+              id="workflow-tab"
+              role="tab"
+              aria-selected={activeArea === "workflow"}
+              aria-controls="workflow-panel"
+              tabIndex={activeArea === "workflow" ? 0 : -1}
+              onClick={showWorkflow}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span>{t.newTask}</span>
+            </button>
+            <button
+              ref={libraryTabRef}
+              id="library-tab"
+              role="tab"
+              aria-selected={activeArea === "library"}
+              aria-controls="library-panel"
+              tabIndex={activeArea === "library" ? 0 : -1}
+              onClick={showLibrary}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM7 3.5h10M8 10h8M8 14h5" /></svg>
+              <span>{t.taskLibraryTitle}</span>
+            </button>
+          </nav>
+
+          <div className="sidebar-footer">
             <span className="runtime-pill">
               <span className="runtime-dot" aria-hidden="true"></span>
               {runtimeMode === "production" ? t.production : t.development}
@@ -700,42 +736,13 @@ function App() {
               aria-expanded={showSettings}
               aria-controls="settings-dialog"
             >
-              {t.settingsTitle}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM19 12l2-1-2-3-2 .5a8 8 0 0 0-2-1.2L14.5 5h-5L9 7.3a8 8 0 0 0-2 1.2L5 8l-2 3 2 1a8 8 0 0 0 0 2l-2 1 2 3 2-.5a8 8 0 0 0 2 1.2l.5 2.3h5l.5-2.3a8 8 0 0 0 2-1.2l2 .5 2-3-2-1a8 8 0 0 0 0-2Z" /></svg>
+              <span>{t.settingsTitle}</span>
             </button>
           </div>
-        </header>
+        </aside>
 
-        <nav
-          className="workspace-tabs"
-          role="tablist"
-          aria-label={t.workspaceNavigation}
-          onKeyDown={handleWorkspaceTabKeyDown}
-        >
-          <button
-            ref={workflowTabRef}
-            id="workflow-tab"
-            role="tab"
-            aria-selected={activeArea === "workflow"}
-            aria-controls="workflow-panel"
-            tabIndex={activeArea === "workflow" ? 0 : -1}
-            onClick={() => setActiveArea("workflow")}
-          >
-            {t.newTask}
-          </button>
-          <button
-            ref={libraryTabRef}
-            id="library-tab"
-            role="tab"
-            aria-selected={activeArea === "library"}
-            aria-controls="library-panel"
-            tabIndex={activeArea === "library" ? 0 : -1}
-            onClick={showLibrary}
-          >
-            {t.taskLibraryTitle}
-          </button>
-        </nav>
-
-        <main className="main-content">
+        <main id="main-content" className="main-content" tabIndex={-1}>
           <div
             id="workflow-panel"
             role="tabpanel"
@@ -764,12 +771,12 @@ function App() {
                   <>
                   <div className="input-choice-grid">
                     <button className="input-choice-card primary" onClick={() => setInputChoice("record")} disabled={isRunning}>
-                      <span className="input-choice-icon record-dot" aria-hidden="true"></span>
+                      <span className="input-choice-icon record-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9 21h6" /></svg></span>
                       <strong>{locale === "zh" ? "开始录音" : "Start recording"}</strong>
                       <small>{locale === "zh" ? "使用麦克风采集语音，停止后再确认处理。" : "Capture voice with your microphone, then choose how to process it."}</small>
                     </button>
                     <button className="input-choice-card" onClick={() => setInputChoice("import")} disabled={isRunning}>
-                      <span className="input-choice-icon">↑</span>
+                      <span className="input-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5" /></svg></span>
                       <strong>{locale === "zh" ? "导入音频" : "Import audio"}</strong>
                       <small>{locale === "zh" ? "处理已有的 MP3、WAV 或 M4A 文件。" : "Process an existing MP3, WAV, or M4A file."}</small>
                     </button>
