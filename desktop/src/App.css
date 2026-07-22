@@ -34,6 +34,8 @@
   --radius-lg: 18px;
   --radius-xl: 24px;
   --form-action-height: 42px;
+  --font-caption: 0.72rem;
+  --font-supporting: 0.78rem;
   --font-sans: "Avenir Next", "SF Pro Text", -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-display: "Avenir Next", "SF Pro Display", -apple-system,
@@ -486,11 +488,7 @@ button {
 }
 
 .management-page-heading {
-  padding: 24px 27px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface-elevated);
-  box-shadow: var(--shadow-card);
+  padding: 12px 4px 10px;
 }
 
 .management-page-heading h2 {
@@ -509,9 +507,8 @@ button {
 .management-surface {
   padding: 22px 24px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   background: var(--surface-elevated);
-  box-shadow: var(--shadow-card);
 }
 
 .library-heading {
@@ -519,11 +516,8 @@ button {
   grid-template-columns: minmax(220px, 1fr) auto;
   align-items: end;
   gap: 20px;
-  padding: 20px 22px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface-elevated);
-  box-shadow: var(--shadow-card);
+  padding: 10px 4px 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .library-heading h2 {
@@ -890,7 +884,7 @@ button {
 
 .library-card-open .library-task-time {
   margin-top: 0;
-  font-size: 0.64rem;
+  font-size: var(--font-caption);
 }
 
 .library-card-open .library-tag-summary {
@@ -900,7 +894,7 @@ button {
 .library-card-open .library-tags > span {
   min-height: 20px;
   padding: 1px 7px;
-  font-size: 0.6rem;
+  font-size: var(--font-caption);
 }
 
 .library-description-preview {
@@ -1251,7 +1245,7 @@ button {
 .markdown-document-list > span {
   padding: 0 8px 7px;
   color: var(--text-muted);
-  font-size: 0.62rem;
+  font-size: var(--font-caption);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1285,13 +1279,13 @@ button {
 }
 
 .markdown-document-list strong {
-  font-size: 0.72rem;
+  font-size: var(--font-supporting);
   line-height: 1.4;
 }
 
 .markdown-document-list small {
   color: var(--text-muted);
-  font-size: 0.59rem;
+  font-size: var(--font-caption);
 }
 
 .markdown-document {
@@ -1765,7 +1759,7 @@ button {
 
 .mode-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2237,7 +2231,7 @@ button:disabled {
 .result-eyebrow {
   margin-bottom: 2px;
   color: var(--success);
-  font-size: 0.6rem;
+  font-size: var(--font-caption);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2552,11 +2546,7 @@ button:disabled {
 }
 
 .settings-section-title > span {
-  padding-top: 2px;
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  font-weight: 700;
+  display: none;
 }
 
 .settings-section-title h3 {
@@ -2569,7 +2559,7 @@ button:disabled {
   max-width: 64ch;
   margin-top: 3px;
   color: var(--text-secondary);
-  font-size: 0.68rem;
+  font-size: var(--font-supporting);
   line-height: 1.45;
   text-wrap: pretty;
 }
