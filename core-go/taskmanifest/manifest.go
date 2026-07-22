@@ -44,6 +44,7 @@ type TaskManifest struct {
 	Provider                string                     `json:"-"`
 	OutputMode              string                     `json:"-"`
 	RequestedTemplateID     string                     `json:"-"`
+	RequestedPrompt         string                     `json:"-"`
 	Status                  string                     `json:"-"`
 	State                   string                     `json:"-"`
 	Attempt                 int                        `json:"-"`
@@ -170,17 +171,18 @@ func (artifacts Artifacts) Get(name string) (Artifact, bool) {
 }
 
 type ExecutionMetadata struct {
-	Backend       string                     `json:"backend"`
-	Provider      string                     `json:"provider"`
-	OutputMode    string                     `json:"output_mode"`
-	TemplateID    string                     `json:"template_id,omitempty"`
-	Status        string                     `json:"status"`
-	Stage         string                     `json:"stage,omitempty"`
-	Attempt       int                        `json:"attempt,omitempty"`
-	CompletedAt   *string                    `json:"completed_at,omitempty"`
-	ErrorSummary  *ArtifactError             `json:"error_summary,omitempty"`
-	ASRRuntime    *ASRRuntimeSnapshot        `json:"asr_runtime,omitempty"`
-	UnknownFields map[string]json.RawMessage `json:"-"`
+	Backend            string                     `json:"backend"`
+	Provider           string                     `json:"provider"`
+	OutputMode         string                     `json:"output_mode"`
+	TemplateID         string                     `json:"template_id,omitempty"`
+	PromptInstructions string                     `json:"prompt_instructions,omitempty"`
+	Status             string                     `json:"status"`
+	Stage              string                     `json:"stage,omitempty"`
+	Attempt            int                        `json:"attempt,omitempty"`
+	CompletedAt        *string                    `json:"completed_at,omitempty"`
+	ErrorSummary       *ArtifactError             `json:"error_summary,omitempty"`
+	ASRRuntime         *ASRRuntimeSnapshot        `json:"asr_runtime,omitempty"`
+	UnknownFields      map[string]json.RawMessage `json:"-"`
 }
 
 type InputMetadata struct {
@@ -305,8 +307,8 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	}
 	execution := ExecutionMetadata{
 		Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
-		TemplateID: manifest.RequestedTemplateID,
-		Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+		TemplateID: manifest.RequestedTemplateID, PromptInstructions: manifest.RequestedPrompt,
+		Status: manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
 		CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(), ASRRuntime: manifest.ASRRuntime,
 	}
 	if err := execution.validate(); err != nil {
@@ -470,8 +472,15 @@ func (execution ExecutionMetadata) validate() error {
 	if strings.TrimSpace(execution.OutputMode) == "" {
 		return errors.New("task manifest missing execution.output_mode")
 	}
-	if execution.OutputMode == "transcript_and_generate" && !safeIDPattern.MatchString(execution.TemplateID) {
-		return errors.New("task manifest missing execution.template_id")
+	if execution.OutputMode == "transcript_and_generate" {
+		hasTemplate := safeIDPattern.MatchString(execution.TemplateID)
+		prompt := strings.TrimSpace(execution.PromptInstructions)
+		hasPrompt := prompt != "" && len([]rune(prompt)) <= 20000
+		if hasTemplate == hasPrompt {
+			return errors.New("task manifest must select exactly one generation input")
+		}
+	} else if strings.TrimSpace(execution.PromptInstructions) != "" {
+		return errors.New("task manifest prompt instructions require generated content")
 	}
 	if _, ok := taskStatuses[execution.Status]; !ok {
 		return fmt.Errorf("task manifest has invalid execution.status %q", execution.Status)
@@ -683,6 +692,7 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	manifest.Provider = wire.Execution.Provider
 	manifest.OutputMode = wire.Execution.OutputMode
 	manifest.RequestedTemplateID = wire.Execution.TemplateID
+	manifest.RequestedPrompt = wire.Execution.PromptInstructions
 	manifest.Status = wire.Execution.Status
 	manifest.State = wire.Execution.Stage
 	manifest.Attempt = wire.Execution.Attempt
@@ -731,8 +741,9 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 		UpdatedAt:     manifest.UpdatedAt,
 		Execution: ExecutionMetadata{
 			Backend: manifest.Backend, Provider: manifest.Provider, OutputMode: manifest.OutputMode,
-			TemplateID: manifest.RequestedTemplateID,
-			Status:     manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
+			TemplateID:         manifest.RequestedTemplateID,
+			PromptInstructions: manifest.RequestedPrompt,
+			Status:             manifest.Status, Stage: manifest.State, Attempt: manifest.Attempt,
 			CompletedAt: manifest.CompletedAt, ErrorSummary: manifest.errorSummary(),
 			ASRRuntime:    manifest.ASRRuntime,
 			UnknownFields: manifest.ExecutionUnknownFields,
@@ -785,7 +796,7 @@ func (manifest *TaskManifest) CountCompletedChunks() int {
 
 func (metadata *ExecutionMetadata) UnmarshalJSON(data []byte) error {
 	type plain ExecutionMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "template_id", "status", "stage", "attempt", "completed_at", "error_summary", "asr_runtime")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "backend", "provider", "output_mode", "template_id", "prompt_instructions", "status", "stage", "attempt", "completed_at", "error_summary", "asr_runtime")
 	metadata.UnknownFields = unknown
 	return err
 }

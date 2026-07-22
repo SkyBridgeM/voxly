@@ -25,6 +25,7 @@ import {
   getProviderSettings,
   setProviderSettings,
   type BackendKind,
+  type GenerationInput,
   type RuntimeMode,
   type RuntimePreflight,
   type LogEntry,
@@ -38,6 +39,7 @@ import {
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
+import { SaveTemporaryPromptPanel } from "./components/GenerationInputControl";
 import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
@@ -82,7 +84,8 @@ function App() {
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript_only");
   const [templates, setTemplates] = useState<PromptTemplateSummary[]>([]);
   const [templateIssues, setTemplateIssues] = useState<string[]>([]);
-  const [templateId, setTemplateId] = useState("structured-notes");
+  const [generationInput, setGenerationInput] = useState<GenerationInput>({ kind: "template", templateId: "structured-notes" });
+  const [temporaryPromptOffer, setTemporaryPromptOffer] = useState<string | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
     resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
@@ -267,7 +270,7 @@ function App() {
     const catalog = await listPromptTemplates();
     setTemplates(catalog.templates);
     setTemplateIssues(catalog.issues.map((issue) => issue.message));
-    setTemplateId((current) => catalog.templates.some((template) => template.id === current) ? current : catalog.templates[0]?.id ?? "");
+    setGenerationInput((current) => current.kind === "temporary_prompt" || catalog.templates.some((template) => template.id === current.templateId) ? current : { kind: "template", templateId: catalog.templates[0]?.id ?? "" });
   }, []);
 
   useEffect(() => { void refreshTemplates().catch(() => { setTemplates([]); setTemplateIssues([t.templateSaveFailed]); }); }, [refreshTemplates]);
@@ -348,18 +351,23 @@ function App() {
     }
     setLogs([]);
     setErrorMessage("");
+    setTemporaryPromptOffer(null);
 
     try {
       const callbacks = { onLog: queueLog, onProgress: (event: ProgressEvent) => setProgress(event), onDone: () => {} };
       const result = recordingTask
         ? await resumeMeetingAsr(recordingTask.task_folder, {
-            outputMode, backend: "go", mimoApiKey, deepseekApiKey, templateId,
+            outputMode, backend: "go", mimoApiKey, deepseekApiKey,
+            templateId: outputMode === "transcript_and_generate" && generationInput.kind === "template" ? generationInput.templateId : undefined,
+            temporaryPrompt: outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt" ? generationInput.prompt : undefined,
           }, callbacks)
         : await runMeetingAsr(
             audioPath,
             outputMode,
             {
-              mimoApiKey, deepseekApiKey, backend, templateId,
+              mimoApiKey, deepseekApiKey, backend,
+              templateId: outputMode === "transcript_and_generate" && generationInput.kind === "template" ? generationInput.templateId : undefined,
+              temporaryPrompt: outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt" ? generationInput.prompt : undefined,
               asrConfig: providerSettings.asr,
               llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
             }, callbacks
@@ -373,6 +381,7 @@ function App() {
 
       setStatus(t.completedSuccessfully);
       setStatusOk(true);
+      if (outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt") setTemporaryPromptOffer(generationInput.prompt.trim());
       if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } catch (e) {
       const error = parseBackendError(String(e));
@@ -394,7 +403,7 @@ function App() {
     deepseekApiKey,
     providerSettings,
     backend,
-    templateId,
+    generationInput,
     t,
     queueLog,
     flushPendingLogs,
@@ -911,8 +920,8 @@ function App() {
                   outputMode={outputMode}
                   onModeChange={setOutputMode}
                   templates={templates}
-                  templateId={templateId}
-                  onTemplateChange={setTemplateId}
+                  generationInput={generationInput}
+                  onGenerationInputChange={setGenerationInput}
                   locale={locale}
                   onStartRun={startRun}
                   isRunning={isRunning}
@@ -939,6 +948,7 @@ function App() {
                     myTemplates: t.myTemplates,
                   }}
                 />
+                {temporaryPromptOffer && <SaveTemporaryPromptPanel prompt={temporaryPromptOffer} locale={locale} onDismiss={() => setTemporaryPromptOffer(null)} onSaved={refreshTemplates} />}
 				<p className="privacy-summary">{privacySummary}</p>
               </div>
               </>}
@@ -1046,6 +1056,7 @@ function App() {
                 llmModelLabel={llmModelLabel}
                 llmConfig={providerSettings.llm}
                 onOpenSettings={handleOpenSettings}
+                onTemplatesChanged={refreshTemplates}
               />
             </div>
           )}

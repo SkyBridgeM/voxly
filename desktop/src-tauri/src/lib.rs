@@ -2072,9 +2072,22 @@ fn redact_lines(lines: &[String], secrets: &[String]) -> Vec<String> {
 fn spawn_and_watch(
     app: &AppHandle,
     active: &ActiveProcess,
-    mut cmd: Command,
+    cmd: Command,
     secrets: &[String],
 ) -> Result<ProcessRunner, BackendError> {
+    spawn_and_watch_with_stdin(app, active, cmd, secrets, None)
+}
+
+fn spawn_and_watch_with_stdin(
+    app: &AppHandle,
+    active: &ActiveProcess,
+    mut cmd: Command,
+    secrets: &[String],
+    stdin_payload: Option<&str>,
+) -> Result<ProcessRunner, BackendError> {
+    if stdin_payload.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2094,6 +2107,7 @@ fn spawn_and_watch(
 
     let stdout_stream = child.stdout.take().unwrap();
     let stderr_stream = child.stderr.take().unwrap();
+    let mut child_stdin = child.stdin.take();
 
     {
         let mut guard = active.child.lock().unwrap();
@@ -2105,6 +2119,31 @@ fn spawn_and_watch(
             });
         }
         *guard = Some(child);
+    }
+
+    if let Some(payload) = stdin_payload {
+        let write_result = child_stdin
+            .as_mut()
+            .ok_or_else(|| BackendError::ProcessFailed {
+                message: "Could not open the generation input channel.".to_string(),
+                code: None,
+            })
+            .and_then(|stdin| {
+                stdin
+                    .write_all(payload.as_bytes())
+                    .map_err(|_| BackendError::ProcessFailed {
+                        message: "Could not send generation instructions.".to_string(),
+                        code: None,
+                    })
+            });
+        drop(child_stdin);
+        if let Err(error) = write_result {
+            if let Some(mut child) = active.child.lock().unwrap().take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            return Err(error);
+        }
     }
 
     let stdout_lines = Arc::new(Mutex::new(Vec::new()));
@@ -2246,6 +2285,18 @@ impl ProcessRunner {
 // Command construction helpers
 // ---------------------------------------------------------------------------
 
+fn append_generation_input_args(
+    cmd: &mut Command,
+    template_id: Option<&str>,
+    uses_temporary_prompt: bool,
+) {
+    if let Some(template_id) = template_id {
+        cmd.arg("--template-id").arg(template_id);
+    } else if uses_temporary_prompt {
+        cmd.arg("--temporary-prompt-stdin");
+    }
+}
+
 fn build_python_command(
     audio_path: &str,
     output_mode: &str,
@@ -2325,6 +2376,7 @@ fn build_go_command(
     runtime_mode: RuntimeMode,
     packaged_executable_dir: Option<&Path>,
     template_id: Option<&str>,
+    uses_temporary_prompt: bool,
 ) -> Result<Command, BackendError> {
     let binary = discover_go_binary(runtime_mode, packaged_executable_dir)?;
     validate_go_binary(&binary)?;
@@ -2336,9 +2388,7 @@ fn build_go_command(
         .arg(output_mode)
         .arg("--output-dir")
         .arg(output_dir);
-    if let Some(template_id) = template_id {
-        cmd.arg("--template-id").arg(template_id);
-    }
+    append_generation_input_args(&mut cmd, template_id, uses_temporary_prompt);
     cmd.arg("--asr-provider")
         .arg(&providers.asr.provider_id)
         .arg("--asr-model")
@@ -2384,15 +2434,17 @@ fn build_go_command(
 // Shared exec-and-check helper
 // ---------------------------------------------------------------------------
 
-fn run_and_check(
+fn run_and_check_with_stdin(
     app: &AppHandle,
     active: &ActiveProcess,
     cmd: Command,
     output_mode: &str,
     expected_task_root: &Path,
     secrets: &[String],
+    stdin_payload: Option<&str>,
 ) -> Result<RunResult, String> {
-    let runner = spawn_and_watch(app, active, cmd, secrets).map_err(String::from)?;
+    let runner = spawn_and_watch_with_stdin(app, active, cmd, secrets, stdin_payload)
+        .map_err(String::from)?;
     let (code, stdout_lines, stderr_lines) = runner.wait()?;
 
     // Always emit process-done so the UI stops its progress view.
@@ -2443,6 +2495,7 @@ fn run_meeting_asr_blocking(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
     asr_config: ProviderSelection,
     llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
@@ -2455,6 +2508,25 @@ fn run_meeting_asr_blocking(
                 "Invalid output_mode: {}. Must be 'transcript_only' or 'transcript_and_generate'.",
                 output_mode
             ),
+        }
+        .into());
+    }
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    let has_template = template_id
+        .as_deref()
+        .is_some_and(|template| !template.trim().is_empty());
+    let has_prompt = temporary_prompt.is_some();
+    if output_mode == "transcript_and_generate" && has_template == has_prompt {
+        return Err(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }
+        .into());
+    }
+    if output_mode == "transcript_only" && (has_template || has_prompt) {
+        return Err(BackendError::InvalidInput {
+            message: "Generated-content input requires generated-content mode.".to_string(),
         }
         .into());
     }
@@ -2477,6 +2549,11 @@ fn run_meeting_asr_blocking(
     // Resolve backend.
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+    if backend_kind == BackendKind::Python && temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompts require the Go backend.".to_string(),
+        }));
+    }
     if backend_kind == BackendKind::Python && output_mode == "transcript_and_generate" {
         return Err(BackendError::InvalidInput { message: "Processing Model V2 generation is unavailable in the deprecated Python development fallback.".to_string() }.into());
     }
@@ -2562,6 +2639,7 @@ fn run_meeting_asr_blocking(
             runtime_mode,
             packaged_executable_dir.as_deref(),
             template_id.as_deref(),
+            has_prompt,
         )
         .map_err(String::from)?,
     };
@@ -2578,7 +2656,15 @@ fn run_meeting_asr_blocking(
         .chain(credentials.deepseek.iter())
         .cloned()
         .collect::<Vec<_>>();
-    run_and_check(&app, &active, cmd, &output_mode, &abs_out, &secrets)
+    run_and_check_with_stdin(
+        &app,
+        &active,
+        cmd,
+        &output_mode,
+        &abs_out,
+        &secrets,
+        temporary_prompt.as_deref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2592,6 +2678,7 @@ async fn run_meeting_asr(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
     asr_config: ProviderSelection,
     llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
@@ -2606,6 +2693,7 @@ async fn run_meeting_asr(
             mimo_api_key,
             deepseek_api_key,
             template_id,
+            temporary_prompt,
             asr_config,
             llm_config,
         )
@@ -2679,10 +2767,33 @@ fn resume_meeting_asr_blocking(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
 ) -> Result<RunResult, String> {
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    if temporary_prompt.is_some() && output_mode.as_deref() != Some("transcript_and_generate") {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompt requires generated-content mode.".to_string(),
+        }));
+    }
+    if temporary_prompt.is_some()
+        && template_id
+            .as_deref()
+            .is_some_and(|template| !template.trim().is_empty())
+    {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }));
+    }
     let runtime_mode = RuntimeMode::current();
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+    if backend_kind == BackendKind::Python && temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompts require the Go backend.".to_string(),
+        }));
+    }
 
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
@@ -2818,6 +2929,11 @@ fn resume_meeting_asr_blocking(
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
+            append_generation_input_args(
+                &mut c,
+                template_id.as_deref(),
+                temporary_prompt.is_some(),
+            );
             if runtime_mode == RuntimeMode::Development {
                 if let Some(env) = env_file.as_ref() {
                     c.arg("--env-file").arg(env);
@@ -2850,7 +2966,15 @@ fn resume_meeting_asr_blocking(
         .cloned()
         .collect::<Vec<_>>();
 
-    run_and_check(&app, &active, cmd, &effective_mode, &output_root, &secrets)
+    run_and_check_with_stdin(
+        &app,
+        &active,
+        cmd,
+        &effective_mode,
+        &output_root,
+        &secrets,
+        temporary_prompt.as_deref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2864,6 +2988,7 @@ async fn resume_meeting_asr(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2876,6 +3001,7 @@ async fn resume_meeting_asr(
             mimo_api_key,
             deepseek_api_key,
             template_id,
+            temporary_prompt,
         )
     })
     .await
@@ -3777,10 +3903,22 @@ fn generate_task_content_blocking(
     app: AppHandle,
     active: ActiveProcess,
     task_folder: String,
-    template_id: String,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
     deepseek_api_key: Option<String>,
     llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    let template_id = template_id
+        .map(|template| template.trim().to_string())
+        .filter(|template| !template.is_empty());
+    if template_id.is_some() == temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }));
+    }
     let output_root = resolve_task_library_output_root(&app)
         .map_err(|_| {
             String::from(BackendError::ArtifactValidationFailed {
@@ -3825,14 +3963,13 @@ fn generate_task_content_blocking(
     cmd.arg("generate-content")
         .arg("--task-dir")
         .arg(&task_dir)
-        .arg("--template-id")
-        .arg(&template_id)
         .arg("--templates-file")
         .arg(custom_templates_path(&app).map_err(String::from)?)
         .arg("--llm-provider")
         .arg(&llm_config.provider_id)
         .arg("--llm-model")
         .arg(&llm_config.model_id);
+    append_generation_input_args(&mut cmd, template_id.as_deref(), temporary_prompt.is_some());
     let isolated = isolated_go_project_root().map_err(String::from)?;
     cmd.arg("--project-root")
         .arg(&isolated)
@@ -3841,7 +3978,9 @@ fn generate_task_content_blocking(
         .env_remove("DEEPSEEK_API_KEY")
         .env("DEEPSEEK_API_KEY", &credential.value);
     let secrets = vec![credential.value];
-    let runner = spawn_and_watch(&app, &active, cmd, &secrets).map_err(String::from)?;
+    let runner =
+        spawn_and_watch_with_stdin(&app, &active, cmd, &secrets, temporary_prompt.as_deref())
+            .map_err(String::from)?;
     let (code, stdout, stderr) = runner.wait()?;
     let _ = app.emit("process-done", DoneEvent { code });
     if code != Some(0) {
@@ -3870,7 +4009,8 @@ async fn generate_task_content(
     app: AppHandle,
     active: State<'_, ActiveProcess>,
     task_folder: String,
-    template_id: String,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
     deepseek_api_key: Option<String>,
     llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
@@ -3881,6 +4021,7 @@ async fn generate_task_content(
             active,
             task_folder,
             template_id,
+            temporary_prompt,
             deepseek_api_key,
             llm_config,
         )
@@ -5595,6 +5736,27 @@ mod tests {
             !args.iter().any(|a| a.to_string_lossy().contains(secret)),
             "credential values must never be passed through argv"
         );
+    }
+
+    #[test]
+    fn test_temporary_prompt_uses_stdin_flag_without_prompt_in_argv() {
+        let prompt = "private one-time generation instructions";
+        let mut cmd = Command::new("meeting-asr-go");
+        append_generation_input_args(&mut cmd, None, true);
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["--temporary-prompt-stdin"]);
+        assert!(!args.iter().any(|arg| arg.contains(prompt)));
+
+        let mut template_cmd = Command::new("meeting-asr-go");
+        append_generation_input_args(&mut template_cmd, Some("structured-notes"), false);
+        let template_args = template_cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(template_args, vec!["--template-id", "structured-notes"]);
     }
 
     // --- misc ---
