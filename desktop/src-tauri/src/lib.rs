@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -3904,6 +3904,13 @@ enum TaskArtifactAction {
     Reveal,
 }
 
+const MAX_MARKDOWN_ARTIFACT_BYTES: u64 = 5 * 1024 * 1024;
+
+#[derive(Clone, serde::Serialize)]
+struct TaskArtifactContent {
+    content: String,
+}
+
 fn validated_relative_hint(
     value: &str,
     label: &str,
@@ -4190,6 +4197,93 @@ async fn reveal_task_artifact(
     .await
 }
 
+fn read_validated_task_markdown(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    artifact_reference: &str,
+) -> Result<TaskArtifactContent, BackendError> {
+    let artifact =
+        resolve_validated_task_artifact(output_root, discovery, task_folder, artifact_reference)?;
+    let is_markdown = artifact
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+    if !is_markdown {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Only Markdown task artifacts can be previewed.".to_string(),
+        });
+    }
+    let metadata = artifact
+        .metadata()
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    if !metadata.is_file() || metadata.len() > MAX_MARKDOWN_ARTIFACT_BYTES {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Markdown artifact is unavailable for preview.".to_string(),
+        });
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    fs::File::open(&artifact)
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact could not be read. Refresh the Task Library.".to_string(),
+        })?
+        .take(MAX_MARKDOWN_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact could not be read. Refresh the Task Library.".to_string(),
+        })?;
+    if bytes.len() as u64 > MAX_MARKDOWN_ARTIFACT_BYTES {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Markdown artifact is unavailable for preview.".to_string(),
+        });
+    }
+    let content = String::from_utf8(bytes).map_err(|_| BackendError::ArtifactValidationFailed {
+        message: "Markdown artifact is not valid UTF-8.".to_string(),
+    })?;
+    Ok(TaskArtifactContent { content })
+}
+
+fn read_task_artifact_blocking(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<TaskArtifactContent, String> {
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(|_| {
+            String::from(BackendError::ArtifactValidationFailed {
+                message: "Task Library output root is unavailable.".to_string(),
+            })
+        })?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty. Refresh the Task Library.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    read_validated_task_markdown(&output_root, &discovery, &task_folder, &artifact_reference)
+        .map_err(String::from)
+}
+
+#[tauri::command]
+async fn read_task_artifact(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<TaskArtifactContent, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_task_artifact_blocking(app, task_folder, artifact_reference)
+    })
+    .await
+    .map_err(|_| task_artifact_worker_error())?
+}
+
 // ---------------------------------------------------------------------------
 // open_task_folder
 // ---------------------------------------------------------------------------
@@ -4369,6 +4463,7 @@ pub fn run() {
             update_model_download_settings,
             test_huggingface_endpoint,
             generate_task_content,
+            read_task_artifact,
             open_task_artifact,
             reveal_task_artifact,
             get_credential_status,
@@ -6107,6 +6202,81 @@ mod tests {
             assert!(called.get());
         }
         fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_read_task_artifact_returns_registered_markdown() {
+        let base = test_dir("voxly-read-task-markdown");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("transcript.md"), "# Transcript\n\nHello.").unwrap();
+
+        let result = read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "transcript.md"),
+            "task",
+            "transcript.md",
+        )
+        .unwrap();
+        assert_eq!(result.content, "# Transcript\n\nHello.");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_read_task_artifact_rejects_non_markdown_large_and_invalid_utf8() {
+        let base = test_dir("voxly-read-task-markdown-invalid");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+
+        fs::write(task.join("artifact.txt"), "text").unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "artifact.txt"),
+            "task",
+            "artifact.txt",
+        )
+        .is_err());
+
+        let large = task.join("large.md");
+        fs::File::create(&large)
+            .unwrap()
+            .set_len(MAX_MARKDOWN_ARTIFACT_BYTES + 1)
+            .unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "large.md"),
+            "task",
+            "large.md",
+        )
+        .is_err());
+
+        fs::write(task.join("invalid.md"), [0xff, 0xfe]).unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "invalid.md"),
+            "task",
+            "invalid.md",
+        )
+        .is_err());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_read_task_artifact_reuses_registration_and_containment_checks() {
+        let base = test_dir("voxly-read-task-markdown-containment");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("listed.md"), "safe").unwrap();
+        fs::write(task.join("other.md"), "not listed").unwrap();
+        let discovery = artifact_discovery("task", "listed.md");
+
+        for reference in ["other.md", "../escape.md", "/tmp/escape.md"] {
+            assert!(read_validated_task_markdown(&root, &discovery, "task", reference).is_err());
+        }
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]

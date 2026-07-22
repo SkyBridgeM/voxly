@@ -159,12 +159,21 @@ export interface Translations {
   taskDetails: string;
   openTaskDetails: string;
   backToTaskLibrary: string;
+  backToContent: string;
   transcriptSummary: string;
   generatedArtifactCount: string;
   saveTitle: string;
   cancelTitleEdit: string;
   taskInformation: string;
   existingTags: string;
+  taskDocuments: string;
+  markdownLoading: string;
+  markdownLoadError: string;
+  markdownEmpty: string;
+  noReadableMarkdown: string;
+  cardGeneratedContent: string;
+  cardTranscriptOnly: string;
+  cardNoContent: string;
   available: string;
   unavailable: string;
   artifactError: string;
@@ -394,12 +403,21 @@ export const translations: Record<Locale, Translations> = {
     taskDetails: "任务详情",
     openTaskDetails: "打开任务详情",
     backToTaskLibrary: "返回任务库",
+    backToContent: "返回内容",
     transcriptSummary: "转写",
     generatedArtifactCount: "生成内容",
     saveTitle: "保存任务名称",
     cancelTitleEdit: "取消编辑任务名称",
     taskInformation: "任务信息",
     existingTags: "已有标签",
+    taskDocuments: "任务文档",
+    markdownLoading: "正在载入文档…",
+    markdownLoadError: "无法载入此文档，请重试。",
+    markdownEmpty: "此文档暂时没有内容。",
+    noReadableMarkdown: "此任务还没有可阅读的 Markdown 内容。",
+    cardGeneratedContent: "查看最新生成内容",
+    cardTranscriptOnly: "查看转写文本",
+    cardNoContent: "查看任务状态",
     available: "可用",
     unavailable: "不可用",
     artifactError: "生成出错",
@@ -626,12 +644,21 @@ export const translations: Record<Locale, Translations> = {
     taskDetails: "Task details",
     openTaskDetails: "Open task details",
     backToTaskLibrary: "Back to Task Library",
+    backToContent: "Back to content",
     transcriptSummary: "Transcript",
     generatedArtifactCount: "Generated artifacts",
     saveTitle: "Save task title",
     cancelTitleEdit: "Cancel title editing",
     taskInformation: "Task information",
     existingTags: "Existing tags",
+    taskDocuments: "Task documents",
+    markdownLoading: "Loading document…",
+    markdownLoadError: "This document could not be loaded. Try again.",
+    markdownEmpty: "This document is empty.",
+    noReadableMarkdown: "This task has no readable Markdown content yet.",
+    cardGeneratedContent: "Read latest generated content",
+    cardTranscriptOnly: "Read transcript",
+    cardNoContent: "View task status",
     available: "Available",
     unavailable: "Unavailable",
     artifactError: "Generation error",
