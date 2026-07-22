@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { createCustomTemplate, type GenerationInput, type PromptTemplateSummary } from "../lib/meetingAsr";
 
 const MAX_PROMPT_LENGTH = 20_000;
@@ -22,31 +22,35 @@ export function GenerationInputControl({
   locale: "zh" | "en";
   disabled?: boolean;
 }) {
+  const fieldId = useId();
+  const lastTemplateRef = useRef(input.kind === "template" ? input.templateId : templates[0]?.id ?? "");
+  const lastPromptRef = useRef(input.kind === "temporary_prompt" ? input.prompt : "");
   const copy = locale === "zh"
     ? { template: "使用模板", temporary: "临时提示词", templateLabel: "内容模板", promptLabel: "这次想生成什么？", promptHint: "仅用于本次生成；成功后可以选择保存为模板。", placeholder: "例如：提取关键结论，并按主题整理成简洁的 Markdown。", builtIn: "内置模板", custom: "我的模板" }
     : { template: "Use template", temporary: "Temporary prompt", templateLabel: "Content template", promptLabel: "What should this generation produce?", promptHint: "Used only this time; after success, you can choose to save it as a template.", placeholder: "For example: Extract the key conclusions and organize them by topic in concise Markdown.", builtIn: "Built-in templates", custom: "My templates" };
-  const firstTemplate = templates[0]?.id ?? "";
+  if (input.kind === "template") lastTemplateRef.current = input.templateId;
+  else lastPromptRef.current = input.prompt;
 
   return (
     <div className="generation-input-control">
       <div className="generation-input-tabs" role="group" aria-label={copy.promptLabel}>
-        <button type="button" className={input.kind === "template" ? "is-active" : ""} onClick={() => onChange({ kind: "template", templateId: firstTemplate })} disabled={disabled}>{copy.template}</button>
-        <button type="button" className={input.kind === "temporary_prompt" ? "is-active" : ""} onClick={() => onChange({ kind: "temporary_prompt", prompt: "" })} disabled={disabled}>{copy.temporary}</button>
+        <button type="button" className={input.kind === "template" ? "is-active" : ""} aria-pressed={input.kind === "template"} onClick={() => onChange({ kind: "template", templateId: lastTemplateRef.current || templates[0]?.id || "" })} disabled={disabled}>{copy.template}</button>
+        <button type="button" className={input.kind === "temporary_prompt" ? "is-active" : ""} aria-pressed={input.kind === "temporary_prompt"} onClick={() => onChange({ kind: "temporary_prompt", prompt: lastPromptRef.current })} disabled={disabled}>{copy.temporary}</button>
       </div>
       {input.kind === "template" ? (
-        <label className="generation-input-field">
-          <span>{copy.templateLabel}</span>
-          <select value={input.templateId} onChange={(event) => onChange({ kind: "template", templateId: event.target.value })} disabled={disabled}>
+        <div className="generation-input-field">
+          <label htmlFor={fieldId}>{copy.templateLabel}</label>
+          <select id={fieldId} value={input.templateId} onChange={(event) => onChange({ kind: "template", templateId: event.target.value })} disabled={disabled}>
             <optgroup label={copy.builtIn}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>
             {templates.some((template) => !template.built_in) && <optgroup label={copy.custom}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}
           </select>
-        </label>
+        </div>
       ) : (
-        <label className="generation-input-field">
-          <span>{copy.promptLabel}</span>
-          <textarea value={input.prompt} maxLength={MAX_PROMPT_LENGTH} rows={5} placeholder={copy.placeholder} onChange={(event) => onChange({ kind: "temporary_prompt", prompt: event.target.value })} disabled={disabled} />
-          <small>{copy.promptHint} · {input.prompt.length.toLocaleString()}/{MAX_PROMPT_LENGTH.toLocaleString()}</small>
-        </label>
+        <div className="generation-input-field">
+          <label htmlFor={fieldId}>{copy.promptLabel}</label>
+          <textarea id={fieldId} value={input.prompt} maxLength={MAX_PROMPT_LENGTH} rows={4} placeholder={copy.placeholder} onChange={(event) => onChange({ kind: "temporary_prompt", prompt: event.target.value })} disabled={disabled} />
+          <div className="generation-input-meta"><small>{copy.promptHint}</small><output>{input.prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</output></div>
+        </div>
       )}
     </div>
   );

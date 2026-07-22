@@ -183,17 +183,19 @@ export function TaskMarkdownReader({
 
       {generationOpen && (
         <section className="markdown-generation-panel" aria-label={labels.generateContent}>
-          <div>
-            <strong>{labels.generateContent}</strong>
-            <span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span>
+          <div className="markdown-generation-surface">
+            <header className="markdown-generation-heading">
+              <div><strong>{labels.generateContent}</strong><span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span></div>
+              <button type="button" className="generation-panel-close" onClick={() => setGenerationOpen(false)} disabled={generationPending} aria-label={labels.cancel} title={labels.cancel}>×</button>
+            </header>
+            {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
+            <GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} />
+            <div className="markdown-generation-actions form-action-row">
+              <button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button>
+              <button className="btn-primary" onClick={() => onGenerate(task, generationInput)} disabled={generationPending || !generationInputIsValid(generationInput) || !llmReady}>{generationPending ? labels.generatingContent : labels.generateContent}</button>
+            </div>
+            {generationError && <p className="library-artifact-error" role="status">{generationError}</p>}
           </div>
-          {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
-          <GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} />
-          <div className="markdown-generation-actions form-action-row">
-            <button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button>
-            <button className="btn-primary" onClick={() => onGenerate(task, generationInput)} disabled={generationPending || !generationInputIsValid(generationInput) || !llmReady}>{generationPending ? labels.generatingContent : labels.generateContent}</button>
-          </div>
-          {generationError && <p className="library-artifact-error" role="status">{generationError}</p>}
         </section>
       )}
 
