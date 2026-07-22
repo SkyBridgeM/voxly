@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 mod app_namespace;
 mod credentials;
+mod recording;
 use app_namespace::{migrate_app_namespace, AppNamespacePaths};
 use credentials::{
     resolve_credential, status_for, CredentialError, CredentialKey, CredentialSource,
@@ -422,6 +423,12 @@ struct TaskSummary {
     generated_content: Vec<GenerationGroup>,
     #[serde(default)]
     can_generate: bool,
+    #[serde(default)]
+    source_kind: String,
+    #[serde(default)]
+    recording_status: String,
+    #[serde(default)]
+    duration_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2635,7 +2642,10 @@ fn find_go_manifest(task_dir: &Path) -> Option<PathBuf> {
 fn read_manifest_output_mode(manifest_path: &Path) -> Option<String> {
     let data = fs::read_to_string(manifest_path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
-    let mode = v.get("output_mode").and_then(|m| m.as_str())?;
+    let mode = v
+        .get("output_mode")
+        .and_then(|m| m.as_str())
+        .or_else(|| v.pointer("/execution/output_mode").and_then(|m| m.as_str()))?;
     match mode {
         "transcript" | "notes" | "minutes" | "transcript_only" | "transcript_and_generate" => {
             Some(mode.to_string())
@@ -2668,6 +2678,7 @@ fn resume_meeting_asr_blocking(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
+    template_id: Option<String>,
 ) -> Result<RunResult, String> {
     let runtime_mode = RuntimeMode::current();
     let backend_kind =
@@ -2768,6 +2779,9 @@ fn resume_meeting_asr_blocking(
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
+            if let Some(ref template) = template_id {
+                c.arg("--template-id").arg(template);
+            }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
             c.env_remove("VOXLY_SENSEVOICE_WRAPPER");
@@ -2849,6 +2863,7 @@ async fn resume_meeting_asr(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
+    template_id: Option<String>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2860,6 +2875,7 @@ async fn resume_meeting_asr(
             backend,
             mimo_api_key,
             deepseek_api_key,
+            template_id,
         )
     })
     .await
@@ -4299,6 +4315,7 @@ fn save_env_key(key: String, value: String) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(ActiveProcess::default())
+        .manage(recording::RecordingManager::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config = app.path().app_config_dir();
@@ -4324,6 +4341,15 @@ pub fn run() {
             open_output_root,
             open_task_folder,
             run_meeting_asr,
+            recording::list_input_devices,
+            recording::start_recording,
+            recording::pause_recording,
+            recording::resume_recording,
+            recording::stop_recording,
+            recording::cancel_recording,
+            recording::get_recording_state,
+            recording::scan_recordings,
+            recording::recover_recording,
             resume_meeting_asr,
             list_tasks,
             get_task_metadata,
@@ -4356,6 +4382,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
             app_handle.state::<ActiveProcess>().terminate();
+            recording::interrupt_active_recording(app_handle);
         }
     });
 }
@@ -6004,6 +6031,9 @@ mod tests {
                 canonical_transcript: None,
                 generated_content: Vec::new(),
                 can_generate: false,
+                source_kind: String::new(),
+                recording_status: String::new(),
+                duration_ms: 0,
             }],
             issues: Vec::new(),
         }

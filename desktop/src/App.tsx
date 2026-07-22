@@ -9,6 +9,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
+  resumeMeetingAsr,
+  scanRecordings,
+  recoverRecording,
   openTaskFolder,
   saveEnvKey,
   getRuntimeInfo,
@@ -31,6 +34,7 @@ import {
   type PromptTemplateSummary,
   type ProviderCatalog,
   type ProviderSettingsInfo,
+  type RecordingTask,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
@@ -39,6 +43,7 @@ import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
 import { TemplateManager } from "./components/TemplateManager";
 import { LocalModelManager } from "./components/LocalModelManager";
+import { RecordingWorkspace } from "./components/RecordingWorkspace";
 import voxlyAppIcon from "./assets/voxly-app-icon.png";
 import "./App.css";
 
@@ -67,6 +72,10 @@ function App() {
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
+  const [inputChoice, setInputChoice] = useState<"home" | "record" | "import">("home");
+  const [recordingTask, setRecordingTask] = useState<RecordingTask | null>(null);
+  const [recoverableRecordings, setRecoverableRecordings] = useState<RecordingTask[]>([]);
+  const [recordingRecoveryPending, setRecordingRecoveryPending] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript_only");
   const [templates, setTemplates] = useState<PromptTemplateSummary[]>([]);
   const [templateIssues, setTemplateIssues] = useState<string[]>([]);
@@ -228,6 +237,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void scanRecordings().then(setRecoverableRecordings).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let active = true;
     Promise.all([listProviders(), getProviderSettings()])
       .then(([catalog, settings]) => {
@@ -328,23 +341,20 @@ function App() {
     setErrorMessage("");
 
     try {
-      const result = await runMeetingAsr(
-        audioPath,
-        outputMode,
-        {
-          mimoApiKey,
-          deepseekApiKey,
-          backend,
-          templateId,
-          asrConfig: providerSettings.asr,
-          llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
-        },
-        {
-          onLog: queueLog,
-          onProgress: (event) => setProgress(event),
-          onDone: () => {},
-        }
-      );
+      const callbacks = { onLog: queueLog, onProgress: (event: ProgressEvent) => setProgress(event), onDone: () => {} };
+      const result = recordingTask
+        ? await resumeMeetingAsr(recordingTask.task_folder, {
+            outputMode, backend: "go", mimoApiKey, deepseekApiKey, templateId,
+          }, callbacks)
+        : await runMeetingAsr(
+            audioPath,
+            outputMode,
+            {
+              mimoApiKey, deepseekApiKey, backend, templateId,
+              asrConfig: providerSettings.asr,
+              llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
+            }, callbacks
+          );
 
       if (result.task_folder) setTaskFolder(result.task_folder);
       if (result.transcript_path) setTranscriptPath(result.transcript_path);
@@ -380,7 +390,38 @@ function App() {
     queueLog,
     flushPendingLogs,
     libraryOpened,
+    recordingTask,
   ]);
+
+  const handleRecordingSaved = useCallback((task: RecordingTask) => {
+    setRecordingTask(task);
+    setAudioPath(task.audio_path);
+    setTaskFolder(task.task_folder);
+    setStatus(locale === "zh" ? "录音已保存。确认处理方式，或稍后从任务库继续。" : "Recording saved. Confirm how to process it, or continue later from the Task Library.");
+    setStatusOk(true);
+    setLibraryRefreshToken((token) => token + 1);
+    setRecoverableRecordings((items) => [task, ...items.filter((item) => item.task_id !== task.task_id)]);
+  }, [locale]);
+
+  const handleRecordingError = useCallback((message: string) => {
+    const parsed = parseBackendError(message).message;
+    setErrorMessage(parsed);
+    setShowError(true);
+  }, []);
+
+  const handleRecoverRecording = useCallback(async (task: RecordingTask) => {
+    setRecordingRecoveryPending(task.task_id);
+    try {
+      const recovered = await recoverRecording(task.task_folder);
+      setRecoverableRecordings((items) => items.filter((item) => item.task_id !== task.task_id));
+      setInputChoice("record");
+      handleRecordingSaved(recovered);
+    } catch (error) {
+      handleRecordingError(String(error));
+    } finally {
+      setRecordingRecoveryPending(null);
+    }
+  }, [handleRecordingError, handleRecordingSaved]);
 
   const showWorkflow = useCallback(() => {
     setActiveArea("workflow");
@@ -719,18 +760,47 @@ function App() {
                   <span>01</span>
                   <h3>{t.inputTitle}</h3>
                 </div>
-                <FilePicker
-                  audioPath={audioPath}
-                  onFileSelected={setAudioPath}
-                  disabled={isRunning}
-                  labels={{
-                    chooseFile: t.chooseFile,
-                    noFileSelected: t.noFileSelected,
-                    audioFile: t.audioFile,
-                  }}
-                />
+                {inputChoice === "home" && (
+                  <>
+                  <div className="input-choice-grid">
+                    <button className="input-choice-card primary" onClick={() => setInputChoice("record")} disabled={isRunning}>
+                      <span className="input-choice-icon record-dot" aria-hidden="true"></span>
+                      <strong>{locale === "zh" ? "开始录音" : "Start recording"}</strong>
+                      <small>{locale === "zh" ? "使用麦克风采集语音，停止后再确认处理。" : "Capture voice with your microphone, then choose how to process it."}</small>
+                    </button>
+                    <button className="input-choice-card" onClick={() => setInputChoice("import")} disabled={isRunning}>
+                      <span className="input-choice-icon">↑</span>
+                      <strong>{locale === "zh" ? "导入音频" : "Import audio"}</strong>
+                      <small>{locale === "zh" ? "处理已有的 MP3、WAV 或 M4A 文件。" : "Process an existing MP3, WAV, or M4A file."}</small>
+                    </button>
+                  </div>
+                  {recoverableRecordings.length > 0 && <div className="recovery-list">
+                    <strong>{locale === "zh" ? "已保存与中断的录音" : "Saved and interrupted recordings"}</strong>
+                    {recoverableRecordings.slice(0, 5).map((task) => <div key={task.task_id}><span>{new Date(task.task_id.slice(0, 8).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")).toLocaleDateString()} · {task.status === "interrupted" ? (locale === "zh" ? "待恢复" : "Interrupted") : `${Math.round(task.duration_ms / 1000)}s`}</span>{task.status === "interrupted" ? <button className="btn-secondary" onClick={() => void handleRecoverRecording(task)} disabled={recordingRecoveryPending !== null || task.checkpoint_count === 0}>{recordingRecoveryPending === task.task_id ? (locale === "zh" ? "恢复中…" : "Recovering…") : (locale === "zh" ? "恢复录音" : "Recover")}</button> : <button className="btn-secondary" onClick={() => { setInputChoice("record"); handleRecordingSaved(task); }}>{locale === "zh" ? "继续处理" : "Continue"}</button>}</div>)}
+                  </div>}
+                  </>
+                )}
+                {inputChoice === "record" && (
+                  <>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}>{locale === "zh" ? "← 返回输入方式" : "← Back to input methods"}</button>
+                    <RecordingWorkspace locale={locale} disabled={isRunning} onSaved={handleRecordingSaved} onError={handleRecordingError} />
+                    {recordingTask?.audio_path && <div className="recording-saved-banner"><strong>{locale === "zh" ? "录音已保存" : "Recording saved"}</strong><span>{Math.round(recordingTask.duration_ms / 1000)}s · {recordingTask.checkpoint_count} {locale === "zh" ? "个安全分段" : "checkpoints"}</span></div>}
+                  </>
+                )}
+                {inputChoice === "import" && (
+                  <>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}>{locale === "zh" ? "← 返回输入方式" : "← Back to input methods"}</button>
+                    <FilePicker
+                      audioPath={audioPath}
+                      onFileSelected={(path) => { setRecordingTask(null); setAudioPath(path); }}
+                      disabled={isRunning}
+                      labels={{ chooseFile: t.chooseFile, noFileSelected: t.noFileSelected, audioFile: t.audioFile }}
+                    />
+                  </>
+                )}
               </div>
 
+              {audioPath && <>
               <div className="workflow-divider"></div>
 
               <div className="workflow-block">
@@ -772,6 +842,7 @@ function App() {
                 />
 				<p className="privacy-summary">{privacySummary}</p>
               </div>
+              </>}
             </div>
           </section>
 

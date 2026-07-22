@@ -52,6 +52,7 @@ export interface TaskLibraryLabels {
   artifactTranscript: string;
   artifactNotes: string;
   artifactMinutes: string;
+  audioFile: string;
   openArtifact: string;
   revealArtifact: string;
   openingArtifact: string;
@@ -126,6 +127,16 @@ function formatDate(value: string, locale: "zh" | "en", fallback: string) {
   }).format(date);
 }
 
+function formatCompactDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+    : `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 function statusLabel(status: string, labels: TaskLibraryLabels) {
   const known: Record<string, string> = {
     running: labels.statusRunning,
@@ -149,6 +160,7 @@ function statusTone(status: string) {
 }
 
 function artifactKindLabel(kind: string, labels: TaskLibraryLabels) {
+  if (kind === "audio") return labels.audioFile;
   if (kind === "transcript") return labels.artifactTranscript;
   if (kind === "notes") return labels.artifactNotes;
   if (kind === "minutes" || kind === "summary") return labels.artifactMinutes;
@@ -187,11 +199,11 @@ function ArtifactItem({
         {artifact.retryable !== null && (
           <span>{artifact.retryable ? labels.retryable : labels.notRetryable}</span>
         )}
-        <span>
+        {artifact.kind !== "audio" && <span>
           {artifact.provider
             ? `${artifact.provider === "mimo" || artifact.provider === "local-sensevoice" ? labels.speechRecognitionProvider : labels.generatedWithProvider}: ${artifact.provider === "mimo" ? "Mimo" : artifact.provider === "local-sensevoice" ? "SenseVoiceSmall INT8" : artifact.provider === "deepseek" ? "DeepSeek" : labels.providerUnknown} · ${artifact.model_version || artifact.model || labels.providerUnknown}`
             : labels.providerUnknown}
-        </span>
+        </span>}
         {artifact.runtime && <span>{artifact.runtime} · {artifact.runtime_version || labels.providerUnknown}</span>}
         {metadata.map((item) => <span key={item}>{item}</span>)}
       </div>
@@ -319,6 +331,9 @@ function TaskCard({
         </div>
       )}
       <div className="library-card-summary">
+        {task.source_kind === "microphone_recording" && (
+          <span>{labels.audioFile}: {formatCompactDuration(task.duration_ms)}</span>
+        )}
         <span>{labels.transcriptSummary}: {transcript ? statusLabel(transcript.status, labels) : labels.unavailable}</span>
         <span>{labels.generatedArtifactCount}: {generatedCount}</span>
         {task.has_partial_errors && <span className="library-partial-error">{labels.partialErrors}</span>}
@@ -338,6 +353,7 @@ function TaskDetails({ task, locale, labels, templates, pendingActions, actionEr
   const [generationOpen, setGenerationOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
   const transcript = task.canonical_transcript ?? task.primary_artifacts.find((artifact) => artifact.kind === "transcript") ?? null;
+  const sourceAudio = task.primary_artifacts.find((artifact) => artifact.kind === "audio") ?? null;
   const suggestions = tagSuggestions.filter((tag) => !tags.includes(tag)).filter((tag) => !tagInput.trim() || tag.toLocaleLowerCase().includes(tagInput.trim().toLocaleLowerCase())).slice(0, 8);
   const saveMetadata = async () => { await onUpdateMetadata(task, { title: task.title_source === "user" ? task.title : "", description, tags }); };
   const beginTitleEditing = () => { setTitleDraft(task.title_source === "user" ? task.title : ""); setEditingTitle(true); };
@@ -362,6 +378,7 @@ function TaskDetails({ task, locale, labels, templates, pendingActions, actionEr
     <header className="library-details-heading"><div className="library-details-title"><span className="section-kicker">{labels.taskDetails}</span>{editingTitle ? <form className="library-title-form" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input id="task-details-title" autoFocus value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelTitleEditing(); } }} maxLength={200} aria-label={labels.taskTitle} placeholder={task.title} disabled={metadataPending} /><button type="submit" className="library-title-icon save" disabled={metadataPending} aria-label={labels.saveTitle} title={labels.saveTitle}>✓</button><button type="button" className="library-title-icon cancel" onClick={cancelTitleEditing} disabled={metadataPending} aria-label={labels.cancelTitleEdit} title={labels.cancelTitleEdit}>×</button></form> : <h2 id="task-details-title"><button className="library-title-button" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`}>{task.title}<span className="library-title-edit-mark" aria-hidden="true">✎</span></button></h2>}</div><span className={`library-status ${statusTone(task.status)}`}>{statusLabel(task.status, labels)}</span></header>
     {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
     <section className="library-quick-tags" aria-label={labels.tags}><div className="library-tags">{tags.map((tag) => <span key={tag}>{tag}<button type="button" onClick={() => void persistTags(tags.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button></span>)}</div>{!tagPanelOpen && <button type="button" className="btn-secondary" onClick={() => setTagPanelOpen(true)} disabled={metadataPending || tags.length >= 20}>+ {labels.addTag}</button>}{tagPanelOpen && <form className="library-tag-panel" onSubmit={(event) => { event.preventDefault(); void addTag(); }}>{suggestions.length > 0 && <div className="library-tag-suggestions"><span>{labels.existingTags}</span><div>{suggestions.map((tag) => <button type="button" key={tag} onClick={() => setTagInput(tag)} disabled={metadataPending}>+ {tag}</button>)}</div></div>}<input autoFocus value={tagInput} onChange={(event) => setTagInput(event.target.value)} maxLength={50} placeholder={labels.tagPlaceholder} aria-label={labels.addTag} disabled={metadataPending || tags.length >= 20} /><div className="library-tag-panel-actions form-action-row"><button type="button" className="btn-secondary" onClick={() => { setTagInput(""); setTagPanelOpen(false); }} disabled={metadataPending}>{labels.cancel}</button><button type="submit" className="btn-primary" disabled={metadataPending || !tagInput.trim() || tags.includes(tagInput.trim()) || tags.length >= 20}>{labels.addTag}</button></div></form>}</section>
+    {sourceAudio && <section className="library-details-section library-artifacts"><h3>{labels.audioFile}</h3><ul><ArtifactItem artifact={sourceAudio} labels={labels} actionKey={`${task.task_folder}:audio`} pendingAction={pendingActions.get(`${task.task_folder}:audio`) ?? null} actionError={actionErrors.get(`${task.task_folder}:audio`) ?? null} metadata={[formatCompactDuration(task.duration_ms)]} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /></ul></section>}
     <section className="library-details-section library-artifacts"><h3>{labels.canonicalTranscript}</h3><ul>{transcript ? <ArtifactItem artifact={transcript} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={pendingActions.get(`${task.task_folder}:transcript`) ?? null} actionError={actionErrors.get(`${task.task_folder}:transcript`) ?? null} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /> : <ArtifactItem artifact={{ kind: "transcript", status: "unavailable", reference: null, has_error: false, retryable: null, provider: "", model: "" }} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={null} actionError={null} onAction={() => undefined} />}</ul></section>
     <section className="library-details-section"><div className="library-section-heading"><h3>{labels.generatedContent}</h3>{task.can_generate && !generationOpen && <button className="btn-secondary" onClick={() => setGenerationOpen(true)}>{labels.generateContent}</button>}</div>{generationOpen && <div className="task-generation-action"><p>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</p>{!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}<label htmlFor={`template-${task.task_id}`}>{labels.templateLabel}</label><select id={`template-${task.task_id}`} value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}><optgroup label={labels.builtInTemplates}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>{templates.some((template) => !template.built_in) && <optgroup label={labels.myTemplates}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}</select><div className="library-generation-buttons form-action-row"><button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button><button className="btn-primary" disabled={generationPending || templates.length === 0 || !llmReady} onClick={() => onGenerate(task, selectedTemplate)}>{generationPending ? labels.generatingContent : labels.generateContent}</button></div>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}<div className="library-generated">{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div></section>
     <details className="library-task-information"><summary>{labels.taskInformation}</summary><div className="library-full-time"><span>{labels.createdAt}: {formatDate(task.created_at, locale, labels.invalidDate)}</span><span>{labels.updatedAt}: {formatDate(task.updated_at, locale, labels.invalidDate)}</span></div><form className="library-details-form" onSubmit={(event) => { event.preventDefault(); void saveMetadata(); }}><label><span>{labels.taskDescription}</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} placeholder={labels.descriptionPlaceholder} disabled={metadataPending} /></label><div className="library-metadata-actions form-action-row"><button type="submit" className="btn-primary" disabled={metadataPending}>{labels.save}</button></div></form></details>

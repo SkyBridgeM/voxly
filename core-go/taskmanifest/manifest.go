@@ -50,6 +50,8 @@ type TaskManifest struct {
 	LastError               *ErrorInfo                 `json:"-"`
 	CompletedAt             *string                    `json:"-"`
 	Source                  SourceInfo                 `json:"-"`
+	SourceKind              string                     `json:"-"`
+	Recording               *RecordingMetadata         `json:"-"`
 	SourceOwnership         string                     `json:"-"`
 	DurationSeconds         *float64                   `json:"-"`
 	InputFormat             string                     `json:"-"`
@@ -184,12 +186,29 @@ type ExecutionMetadata struct {
 type InputMetadata struct {
 	SourceReference string                     `json:"source_reference"`
 	SourceOwnership string                     `json:"source_ownership"`
+	SourceKind      string                     `json:"source_kind,omitempty"`
+	Recording       *RecordingMetadata         `json:"recording,omitempty"`
 	DurationSeconds *float64                   `json:"duration_seconds,omitempty"`
 	Format          string                     `json:"format"`
 	OriginalName    string                     `json:"original_name,omitempty"`
 	SizeBytes       int64                      `json:"size_bytes,omitempty"`
 	SourceMetadata  map[string]json.RawMessage `json:"metadata,omitempty"`
 	UnknownFields   map[string]json.RawMessage `json:"-"`
+}
+
+// RecordingMetadata describes microphone capture without exposing device names.
+// The final audio reference is relative to the containing Task directory.
+type RecordingMetadata struct {
+	Status                   string                     `json:"status"`
+	StartedAt                string                     `json:"started_at"`
+	StoppedAt                string                     `json:"stopped_at,omitempty"`
+	DurationMS               int64                      `json:"duration_ms"`
+	CheckpointCount          int                        `json:"checkpoint_count"`
+	FinalAudioReference      string                     `json:"final_audio_reference,omitempty"`
+	FinalAudioFormat         string                     `json:"final_audio_format,omitempty"`
+	FinalAudioSHA256         string                     `json:"final_audio_sha256,omitempty"`
+	RecoveredCheckpointCount int                        `json:"recovered_checkpoint_count,omitempty"`
+	UnknownFields            map[string]json.RawMessage `json:"-"`
 }
 
 type Artifact struct {
@@ -309,6 +328,17 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	if strings.TrimSpace(manifest.InputFormat) == "" {
 		return errors.New("task manifest missing input.format")
 	}
+	if manifest.SourceKind != "" && manifest.SourceKind != "imported_file" && manifest.SourceKind != "microphone_recording" {
+		return fmt.Errorf("task manifest has invalid input.source_kind %q", manifest.SourceKind)
+	}
+	if manifest.SourceKind == "microphone_recording" {
+		if manifest.Recording == nil {
+			return errors.New("microphone recording task missing input.recording")
+		}
+		if err := manifest.Recording.validate(); err != nil {
+			return err
+		}
+	}
 	for name, artifact := range map[string]Artifact{
 		"transcript": manifest.Artifacts.Transcript,
 		"notes":      manifest.Artifacts.NotesInput,
@@ -342,6 +372,23 @@ func (manifest *TaskManifest) ValidateManifest() error {
 	}
 	if err := rejectSensitiveFields(manifest); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (recording RecordingMetadata) validate() error {
+	valid := map[string]bool{"recording": true, "paused": true, "stopped": true, "interrupted": true, "cancelled": true, "recovered": true}
+	if !valid[recording.Status] || strings.TrimSpace(recording.StartedAt) == "" {
+		return errors.New("recording metadata has invalid status or missing started_at")
+	}
+	if recording.DurationMS < 0 || recording.CheckpointCount < 0 || recording.RecoveredCheckpointCount < 0 {
+		return errors.New("recording metadata has invalid counters")
+	}
+	if recording.FinalAudioReference != "" && !safeRelativeReference(recording.FinalAudioReference) {
+		return errors.New("recording metadata has unsafe final_audio_reference")
+	}
+	if recording.FinalAudioReference != "" && (recording.FinalAudioFormat == "" || recording.FinalAudioSHA256 == "") {
+		return errors.New("recording metadata final audio is missing format or hash")
 	}
 	return nil
 }
@@ -648,6 +695,8 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	}
 	manifest.Source = SourceInfo{Path: wire.Input.SourceReference, OriginalName: wire.Input.OriginalName, SizeBytes: wire.Input.SizeBytes}
 	manifest.SourceOwnership = wire.Input.SourceOwnership
+	manifest.SourceKind = wire.Input.SourceKind
+	manifest.Recording = wire.Input.Recording
 	manifest.DurationSeconds = wire.Input.DurationSeconds
 	manifest.InputFormat = wire.Input.Format
 	manifest.SourceMetadata = wire.Input.SourceMetadata
@@ -690,6 +739,7 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 		},
 		Input: InputMetadata{
 			SourceReference: manifest.Source.Path, SourceOwnership: manifest.SourceOwnership,
+			SourceKind: manifest.SourceKind, Recording: manifest.Recording,
 			DurationSeconds: manifest.DurationSeconds, Format: manifest.InputFormat,
 			OriginalName: manifest.Source.OriginalName, SizeBytes: manifest.Source.SizeBytes,
 			SourceMetadata: manifest.SourceMetadata, UnknownFields: manifest.InputUnknownFields,
@@ -761,9 +811,21 @@ func (snapshot ASRRuntimeSnapshot) MarshalJSON() ([]byte, error) {
 
 func (metadata *InputMetadata) UnmarshalJSON(data []byte) error {
 	type plain InputMetadata
-	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "source_reference", "source_ownership", "duration_seconds", "format", "original_name", "size_bytes", "metadata")
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "source_reference", "source_ownership", "source_kind", "recording", "duration_seconds", "format", "original_name", "size_bytes", "metadata")
 	metadata.UnknownFields = unknown
 	return err
+}
+
+func (metadata *RecordingMetadata) UnmarshalJSON(data []byte) error {
+	type plain RecordingMetadata
+	unknown, err := unmarshalWithUnknown(data, (*plain)(metadata), "status", "started_at", "stopped_at", "duration_ms", "checkpoint_count", "final_audio_reference", "final_audio_format", "final_audio_sha256", "recovered_checkpoint_count")
+	metadata.UnknownFields = unknown
+	return err
+}
+
+func (metadata RecordingMetadata) MarshalJSON() ([]byte, error) {
+	type plain RecordingMetadata
+	return marshalWithUnknown(plain(metadata), metadata.UnknownFields)
 }
 
 func (metadata InputMetadata) MarshalJSON() ([]byte, error) {

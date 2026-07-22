@@ -160,6 +160,7 @@ func CreateManifest(taskDir, sourceAudio, outputMode string, chunkMinutes int, m
 			SizeBytes:    sizeBytes,
 		},
 		SourceOwnership: "task_copy",
+		SourceKind:      "imported_file",
 		InputFormat:     inputFormat(sourceAudio),
 		State:           TaskCreated,
 		Attempt:         1,

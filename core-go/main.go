@@ -87,6 +87,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "recording-init", "recording-update", "recording-scan":
+		if err := runRecordingCommand(os.Args[1], os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("meeting-asr-go %s\n", version)
 	case "help", "--help", "-h":
@@ -118,6 +123,9 @@ Usage:
 	meeting-asr-go import-model --app-data-root <path> --model-id sensevoice-small-int8 --source-archive <path>
 	meeting-asr-go delete-model --app-data-root <path> --model-id sensevoice-small-int8
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
+  meeting-asr-go recording-init --output-root <path>
+  meeting-asr-go recording-update --task-dir <path> --status <status>
+  meeting-asr-go recording-scan --output-root <path>
 
 Flags:
   --output-mode transcript_only   Output mode: transcript_only or transcript_and_generate

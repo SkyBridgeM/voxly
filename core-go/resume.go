@@ -115,6 +115,12 @@ func RunResume(args []string) error {
 	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
 	settings.TemplateStorePath = *templatesFile
 	settings.AppDataRoot = *appDataRoot
+	m.Provider = settings.ASRProvider
+	m.Chunks.ASRProvider = settings.ASRProvider
+	m.Chunks.ASRModel = settings.MimoModel
+	if m.SourceKind == "microphone_recording" && m.Recording != nil && m.Recording.FinalAudioReference != "" && (m.Recording.Status == "cancelled" || m.Recording.Status == "interrupted") {
+		m.Recording.Status = "recovered"
+	}
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return err
 	}

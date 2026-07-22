@@ -4,14 +4,14 @@
 
 Voxly turns imported voice recordings into structured, traceable content. The current desktop alpha uses the Go runtime, MiMo cloud speech recognition, and optional DeepSeek cloud generation. Tasks, manifests, transcripts, generated content, metadata, and custom templates remain in user-controlled local storage.
 
-Current workflow:
+Current desktop workflow:
 
-1. Import an existing audio file.
+1. Record microphone audio with durable checkpoints, or import an existing audio file.
 2. Create a canonical transcript with MiMo ASR.
 3. Optionally generate versioned content with a built-in or custom prompt template through DeepSeek.
 4. Browse, organize, open, and reveal results in the Task Library.
 
-Local SenseVoice/Whisper transcription and Ollama generation are planned; they are not included in `0.1.0-alpha`. Voxly does not currently claim fully local processing, built-in recording, or bundled local models.
+SenseVoiceSmall INT8 is available as a managed local transcription option on supported development builds. Voxly does not currently claim system-audio capture, real-time transcription, Ollama generation, or fully verified cross-platform recording.
 
 The actively supported desktop targets are macOS arm64 development builds. Windows x64 is an intended release target but is not yet confirmed as a packaged alpha in this repository.
 

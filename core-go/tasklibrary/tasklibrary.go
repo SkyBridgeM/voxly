@@ -41,6 +41,9 @@ type TaskSummary struct {
 	CanonicalTranscript *ArtifactSummary  `json:"canonical_transcript,omitempty"`
 	GeneratedContent    []GenerationGroup `json:"generated_content"`
 	CanGenerate         bool              `json:"can_generate"`
+	SourceKind          string            `json:"source_kind,omitempty"`
+	RecordingStatus     string            `json:"recording_status,omitempty"`
+	DurationMS          int64             `json:"duration_ms,omitempty"`
 }
 
 // ArtifactSummary contains only information useful for output presentation.
@@ -161,6 +164,27 @@ func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) 
 		tags = append(tags, manifest.UserMetadata.Tags...)
 	}
 	primary := primaryArtifacts(taskDir, manifest)
+	recordingStatus := ""
+	durationMS := int64(0)
+	status := manifest.Status
+	if manifest.Recording != nil {
+		recordingStatus, durationMS = manifest.Recording.Status, manifest.Recording.DurationMS
+		switch recordingStatus {
+		case "recording":
+			status = "running"
+		case "paused":
+			status = "pending"
+		case "stopped", "recovered":
+			if manifest.Status == "created" {
+				status = "pending"
+			}
+		case "interrupted", "cancelled":
+			status = "interrupted"
+		}
+		if reference := safeRelativeReference(taskDir, manifest.Recording.FinalAudioReference); reference != "" && isRegularFile(filepath.Join(taskDir, filepath.FromSlash(reference))) {
+			primary = append([]ArtifactSummary{{Kind: "audio", Status: "completed", Reference: reference}}, primary...)
+		}
+	}
 	canonical := canonicalTranscriptSummary(taskDir, manifest)
 	groups := generationGroups(taskDir, manifest)
 	return TaskSummary{
@@ -168,7 +192,7 @@ func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) 
 		Title:               title,
 		TitleSource:         titleSource,
 		Description:         description,
-		Status:              manifest.Status,
+		Status:              status,
 		CreatedAt:           manifest.CreatedAt,
 		UpdatedAt:           manifest.UpdatedAt,
 		Tags:                tags,
@@ -179,6 +203,9 @@ func summarize(taskDir, taskFolder string, manifest *taskmanifest.TaskManifest) 
 		CanonicalTranscript: canonical,
 		GeneratedContent:    groups,
 		CanGenerate:         canonical != nil && canonical.Status == "completed" && canonical.Reference != "",
+		SourceKind:          manifest.SourceKind,
+		RecordingStatus:     recordingStatus,
+		DurationMS:          durationMS,
 	}
 }
 

@@ -969,6 +969,38 @@ button {
   padding: 25px 28px 28px;
 }
 
+.input-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.input-choice-card { min-height: 150px; padding: 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); color: inherit; text-align: left; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; cursor: pointer; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+.input-choice-card:hover:not(:disabled) { transform: translateY(-2px); border-color: var(--accent); }
+.input-choice-card.primary { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.input-choice-card strong { font-size: 1.05rem; }
+.input-choice-card small { color: var(--text-muted); line-height: 1.55; }
+.input-choice-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-muted); font-size: 18px; }
+.record-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #d84b42; flex: 0 0 auto; }
+.record-dot.pulse { animation: record-pulse 1.4s ease-in-out infinite; }
+.record-dot.paused { background: #d19a35; }
+@keyframes record-pulse { 50% { opacity: .45; transform: scale(.82); } }
+.input-back { margin-bottom: 16px; }
+.recording-workspace { border: 1px solid var(--border); border-radius: 18px; padding: 20px; background: var(--surface); }
+.recording-device-row { display: grid; gap: 8px; margin-bottom: 16px; }
+.recording-device-row label { font-size: .82rem; color: var(--text-muted); }
+.recording-device-row select { width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; }
+.recording-start { width: 100%; display: flex; justify-content: center; align-items: center; gap: 9px; }
+.recording-live { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+.recording-live div { display: grid; gap: 2px; }
+.recording-live small { color: var(--text-muted); }
+.recording-live time { font-variant-numeric: tabular-nums; font-size: 1.25rem; font-weight: 650; letter-spacing: .03em; }
+.level-meter { height: 7px; overflow: hidden; border-radius: 999px; margin: 20px 0; background: var(--surface-muted); }
+.level-meter span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .08s linear; }
+.recording-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.recording-actions .danger { color: #b63e37; }
+.recording-help { margin: 14px 0 0; color: var(--text-muted); font-size: .82rem; line-height: 1.5; }
+.recording-saved-banner { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--success) 9%, var(--surface)); display: flex; justify-content: space-between; gap: 12px; }
+.recording-saved-banner span { color: var(--text-muted); }
+.recovery-list { margin-top: 16px; padding: 14px; border: 1px solid var(--warning-border); border-radius: 12px; background: var(--warning-soft); display: grid; gap: 10px; }
+.recovery-list > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+@media (max-width: 640px) { .input-choice-grid { grid-template-columns: 1fr; } .recording-live { grid-template-columns: auto 1fr; } .recording-live time { grid-column: 2; } }
+
 .workflow-block-heading {
   display: flex;
   align-items: center;

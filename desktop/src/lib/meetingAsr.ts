@@ -133,6 +133,11 @@ export interface LocalModelStatus { model_id: string; model_version: string; sta
 export interface ModelProgressEvent { state: string; completed: number; total: number }
 export interface ModelDownloadSettings { huggingface_endpoint: string }
 
+export interface InputDeviceInfo { id: string; name: string; is_default: boolean }
+export interface RecordingTask { task_id: string; task_folder: string; checkpoints_dir: string; audio_path: string; status: string; duration_ms: number; checkpoint_count: number }
+export interface RecordingProgress { duration_ms: number; level: number; checkpoint_count: number }
+export interface RecordingState { active: boolean; paused: boolean; task: RecordingTask | null }
+
 export interface ArtifactSummary {
   kind: string;
   status: string;
@@ -183,6 +188,9 @@ export interface TaskSummary {
   canonical_transcript: ArtifactSummary | null;
   generated_content: GenerationGroup[];
   can_generate: boolean;
+  source_kind: string;
+  recording_status: string;
+  duration_ms: number;
 }
 
 export interface TaskMetadata {
@@ -317,6 +325,17 @@ export const getModelDownloadSettings = () => invoke<ModelDownloadSettings>("get
 export const updateModelDownloadSettings = (endpoint: string) => invoke<ModelDownloadSettings>("update_model_download_settings", { endpoint });
 export const testHuggingFaceEndpoint = (endpoint: string) => invoke<{ endpoint: string; reachable: boolean }>("test_huggingface_endpoint", { endpoint });
 export const listenModelProgress = (handler: (event: ModelProgressEvent) => void) => listen<ModelProgressEvent>("model-progress", ({ payload }) => handler(payload));
+export const listInputDevices = () => invoke<InputDeviceInfo[]>("list_input_devices");
+export const startRecording = (deviceId?: string) => invoke<RecordingTask>("start_recording", { deviceId });
+export const pauseRecording = () => invoke<RecordingTask>("pause_recording");
+export const resumeRecording = () => invoke<RecordingTask>("resume_recording");
+export const stopRecording = () => invoke<RecordingTask>("stop_recording");
+export const cancelRecording = () => invoke<RecordingTask>("cancel_recording");
+export const getRecordingState = () => invoke<RecordingState>("get_recording_state");
+export const scanRecordings = () => invoke<RecordingTask[]>("scan_recordings");
+export const recoverRecording = (taskFolder: string) => invoke<RecordingTask>("recover_recording", { taskFolder });
+export const listenRecordingProgress = (handler: (event: RecordingProgress) => void) => listen<RecordingProgress>("recording-progress", ({ payload }) => handler(payload));
+export const listenRecordingError = (handler: (message: string) => void) => listen<string>("recording-error", ({ payload }) => handler(payload));
 
 export async function getProviderSettings(): Promise<ProviderSettingsInfo> {
   return invoke<ProviderSettingsInfo>("get_provider_settings");
@@ -452,6 +471,7 @@ export async function resumeMeetingAsr(
     backend?: BackendKind;
     mimoApiKey?: string;
     deepseekApiKey?: string;
+    templateId?: string;
   },
   callbacks: RunCallbacks
 ): Promise<RunResult> {
@@ -479,9 +499,10 @@ export async function resumeMeetingAsr(
     const result = await invoke<RunResult>("resume_meeting_asr", {
       taskDir,
       outputMode: options.outputMode || undefined,
-      backend: options.backend || "python",
+      backend: options.backend || "go",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
+      templateId: options.templateId || undefined,
     });
     return result;
   } finally {
