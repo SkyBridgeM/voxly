@@ -175,7 +175,8 @@ button {
   height: 100dvh;
   margin: 0 auto;
   padding: 20px;
-  transition: grid-template-columns 240ms cubic-bezier(.2, .8, .2, 1);
+  transition: grid-template-columns 180ms cubic-bezier(.2, .8, .2, 1);
+  will-change: grid-template-columns;
 }
 
 .app.sidebar-collapsed {
@@ -209,14 +210,14 @@ button {
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
   box-shadow: var(--shadow-card);
-  backdrop-filter: blur(18px);
-  transition: padding 240ms ease, border-radius 240ms ease;
+  contain: layout paint;
+  transition: padding 180ms cubic-bezier(.2, .8, .2, 1);
 }
 
 .sidebar-toggle {
   position: absolute;
   z-index: 2;
-  top: 74px;
+  top: 27px;
   right: -14px;
   width: 28px;
   min-height: 28px;
@@ -236,7 +237,7 @@ button {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
 }
 
 .sidebar-collapsed .app-sidebar {
@@ -267,10 +268,23 @@ button {
   padding-left: 0;
 }
 
+.sidebar-collapsed .workspace-tabs,
+.sidebar-collapsed .sidebar-footer {
+  align-items: center;
+}
+
+.sidebar-collapsed .workspace-tabs button,
+.sidebar-collapsed .sidebar-footer .runtime-pill,
+.sidebar-collapsed .sidebar-footer .btn-settings {
+  width: 44px;
+}
+
 .brand-lockup {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 15px;
+  min-height: 46px;
   min-width: 0;
 }
 
@@ -300,29 +314,47 @@ button {
 
 
 .brand-copy {
+  position: absolute;
+  top: 1px;
+  left: 61px;
+  width: 140px;
   min-width: 0;
-  max-width: 145px;
-  overflow: hidden;
   opacity: 1;
-  transition: max-width 220ms ease, opacity 150ms ease;
+  transform: translateX(0);
+  will-change: transform, opacity;
+  transition: opacity 120ms ease 45ms, transform 180ms cubic-bezier(.2, .8, .2, 1);
 }
 
 .workspace-tabs button > span,
 .runtime-label,
 .sidebar-footer .btn-settings > span {
-  max-width: 160px;
-  overflow: hidden;
+  position: absolute;
+  left: 43px;
+  width: 145px;
+  text-align: left;
   opacity: 1;
   white-space: nowrap;
-  transition: max-width 220ms ease, opacity 150ms ease;
+  transform: translateX(0);
+  will-change: transform, opacity;
+  transition: opacity 120ms ease 45ms, transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.workspace-tabs button,
+.sidebar-footer .runtime-pill,
+.sidebar-footer .btn-settings {
+  position: relative;
+}
+
+.runtime-label {
+  left: 31px;
 }
 
 .sidebar-collapsed .brand-copy,
 .sidebar-collapsed .workspace-tabs button > span,
 .sidebar-collapsed .runtime-label,
 .sidebar-collapsed .sidebar-footer .btn-settings > span {
-  max-width: 0;
   opacity: 0;
+  transform: translateX(-8px);
   pointer-events: none;
 }
 
@@ -2707,9 +2739,17 @@ textarea:focus-visible,
   .sidebar-collapsed .brand-copy,
   .sidebar-collapsed .workspace-tabs button > span,
   .sidebar-collapsed .sidebar-footer .btn-settings > span {
-    max-width: 160px;
+    position: static;
+    width: auto;
     opacity: 1;
+    transform: none;
     pointer-events: auto;
+  }
+
+  .brand-copy {
+    position: static;
+    width: auto;
+    transform: none;
   }
 
   .sidebar-collapsed .brand-lockup,
@@ -2720,6 +2760,7 @@ textarea:focus-visible,
 
   .sidebar-collapsed .workspace-tabs button,
   .sidebar-collapsed .sidebar-footer .btn-settings {
+    width: auto;
     padding-right: 12px;
     padding-left: 12px;
   }
