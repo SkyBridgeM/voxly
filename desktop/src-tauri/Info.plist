@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleName</key>
+  <string>Voxly</string>
+  <key>CFBundleDisplayName</key>
+  <string>Voxly</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Voxly needs microphone access when you choose to record audio.</string>
 </dict>

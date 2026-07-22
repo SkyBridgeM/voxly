@@ -177,6 +177,10 @@ button {
   padding: 20px;
 }
 
+.app.sidebar-collapsed {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
 .skip-link {
   position: fixed;
   z-index: 20;
@@ -204,6 +208,62 @@ button {
   background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px);
+}
+
+.sidebar-toggle {
+  align-self: flex-end;
+  width: 30px;
+  min-height: 30px;
+  margin-top: 18px;
+  padding: 0;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.sidebar-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-collapsed .app-sidebar {
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.sidebar-collapsed .brand-lockup,
+.sidebar-collapsed .workspace-tabs button,
+.sidebar-collapsed .sidebar-footer .runtime-pill,
+.sidebar-collapsed .sidebar-footer .btn-settings {
+  justify-content: center;
+}
+
+.sidebar-collapsed .brand-copy,
+.sidebar-collapsed .workspace-tabs button > span,
+.sidebar-collapsed .runtime-label,
+.sidebar-collapsed .sidebar-footer .btn-settings > span {
+  display: none;
+}
+
+.sidebar-collapsed .brand-mark {
+  width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+}
+
+.sidebar-collapsed .sidebar-toggle {
+  align-self: center;
+}
+
+.sidebar-collapsed .workspace-tabs button,
+.sidebar-collapsed .sidebar-footer .btn-settings {
+  padding-right: 0;
+  padding-left: 0;
 }
 
 .brand-lockup {
@@ -2525,7 +2585,8 @@ textarea:focus-visible,
 }
 
 @media (max-width: 760px) {
-  .app {
+  .app,
+  .app.sidebar-collapsed {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
     gap: 12px;
@@ -2539,6 +2600,32 @@ textarea:focus-visible,
     gap: 14px;
     padding: 10px 12px;
     border-radius: var(--radius-lg);
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .sidebar-collapsed .app-sidebar {
+    padding: 10px 12px;
+  }
+
+  .sidebar-collapsed .brand-copy,
+  .sidebar-collapsed .workspace-tabs button > span,
+  .sidebar-collapsed .sidebar-footer .btn-settings > span {
+    display: block;
+  }
+
+  .sidebar-collapsed .brand-lockup,
+  .sidebar-collapsed .workspace-tabs button,
+  .sidebar-collapsed .sidebar-footer .btn-settings {
+    justify-content: flex-start;
+  }
+
+  .sidebar-collapsed .workspace-tabs button,
+  .sidebar-collapsed .sidebar-footer .btn-settings {
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .subtitle,
@@ -2555,6 +2642,10 @@ textarea:focus-visible,
   .workspace-tabs button {
     justify-content: center;
     min-height: 38px;
+  }
+
+  .sidebar-collapsed .workspace-tabs button {
+    justify-content: center;
   }
 
   .sidebar-footer {

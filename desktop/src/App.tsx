@@ -71,6 +71,9 @@ function App() {
   const [theme, setTheme] = useState<Theme>(
     (localStorage.getItem("theme") as Theme) || "system"
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("sidebarCollapsed") === "true"
+  );
   const [audioPath, setAudioPath] = useState<string | null>(null);
   const [inputChoice, setInputChoice] = useState<"home" | "record" | "import">("home");
   const [recordingTask, setRecordingTask] = useState<RecordingTask | null>(null);
@@ -203,6 +206,10 @@ function App() {
     }
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("sidebarCollapsed", String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     setLocale(locale);
@@ -675,7 +682,7 @@ function App() {
       <a className="skip-link" href="#main-content">
         {locale === "zh" ? "跳到主要内容" : "Skip to main content"}
       </a>
-      <div className="app">
+      <div className={`app ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
         <aside className="app-sidebar">
           <div className="brand-lockup">
             <img
@@ -690,6 +697,22 @@ function App() {
               <p className="subtitle">{t.appSubtitle}</p>
             </div>
           </div>
+
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            aria-label={sidebarCollapsed
+              ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
+              : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
+            title={sidebarCollapsed
+              ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
+              : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d={sidebarCollapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"} />
+            </svg>
+          </button>
 
           <nav
             className="workspace-tabs"
@@ -726,7 +749,7 @@ function App() {
           <div className="sidebar-footer">
             <span className="runtime-pill">
               <span className="runtime-dot" aria-hidden="true"></span>
-              {runtimeMode === "production" ? t.production : t.development}
+              <span className="runtime-label">{runtimeMode === "production" ? t.production : t.development}</span>
             </span>
             <button
               ref={settingsButtonRef}

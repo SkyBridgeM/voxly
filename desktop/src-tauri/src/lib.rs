@@ -4401,6 +4401,8 @@ mod tests {
     fn voxly_branding_metadata_is_consistent() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let cargo_manifest = include_str!("../Cargo.toml");
+        let info_plist = include_str!("../Info.plist");
         assert_eq!(config["productName"], "Voxly");
         assert_eq!(config["identifier"], "com.skybridgem.voxly");
         assert_eq!(config["version"], env!("CARGO_PKG_VERSION"));
@@ -4408,6 +4410,8 @@ mod tests {
             config["app"]["windows"][0]["title"],
             "Voxly — Local Voice Workspace"
         );
+        assert!(cargo_manifest.contains("name = \"Voxly\"\npath = \"src/main.rs\""));
+        assert!(info_plist.contains("<key>CFBundleDisplayName</key>\n  <string>Voxly</string>"));
         for icon in [
             "icons/32x32.png",
             "icons/128x128.png",

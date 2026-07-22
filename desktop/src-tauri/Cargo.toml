@@ -4,6 +4,11 @@ version = "0.1.0-alpha"
 description = "Voxly — Local Voice Workspace"
 authors = ["SkyBridgeM"]
 edition = "2021"
+autobins = false
+
+[[bin]]
+name = "Voxly"
+path = "src/main.rs"
 
 [lib]
 name = "desktop_lib"
