@@ -3187,7 +3187,16 @@ textarea:focus-visible,
   }
 
   .markdown-reader-header-actions {
-    justify-content: flex-start;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .markdown-reader-header-actions button {
+    width: 100%;
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
   .markdown-generation-panel {
@@ -3302,13 +3311,7 @@ textarea:focus-visible,
   }
 
   .markdown-reader-header-actions {
-    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .markdown-reader-header-actions button:first-child {
-    grid-column: 1 / -1;
   }
 
   .markdown-generation-panel {
