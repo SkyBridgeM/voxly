@@ -614,14 +614,13 @@ export function TaskLibrary({
     <section className="task-library" aria-labelledby="task-library-title">
       <div className="library-heading">
         <div>
-          <span className="section-kicker">{labels.taskLibraryTitle}</span>
           <h2 id="task-library-title">{labels.taskLibraryTitle}</h2>
           <p>{labels.taskLibraryDescription}</p>
         </div>
         <div className="library-heading-actions">
           <label><span>{labels.filterByTag}</span><select value={effectiveTagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">{labels.allTasks}</option>{tagSuggestions.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           <label><span>{labels.sortBy}</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}><option value="updated">{labels.sortUpdated}</option><option value="created">{labels.sortCreated}</option><option value="title">{labels.sortTitle}</option></select></label>
-          <button className="btn-secondary" onClick={() => void refresh()} disabled={loading} aria-label={labels.refresh}>{loading && result ? labels.refreshing : labels.refresh}</button>
+          <button className="btn-secondary library-refresh" onClick={() => void refresh()} disabled={loading} aria-label={loading && result ? labels.refreshing : labels.refresh} title={loading && result ? labels.refreshing : labels.refresh}><svg className={loading ? "is-spinning" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9A7 7 0 0 1 18 6l2 5M17.9 15A7 7 0 0 1 6 18l-2-5" /></svg></button>
         </div>
       </div>
 

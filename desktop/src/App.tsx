@@ -72,7 +72,7 @@ function App() {
     (localStorage.getItem("theme") as Theme) || "system"
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem("sidebarCollapsed") === "true"
+    () => localStorage.getItem("sidebarCollapsed") !== "false"
   );
   const [audioPath, setAudioPath] = useState<string | null>(null);
   const [inputChoice, setInputChoice] = useState<"home" | "record" | "import">("home");
@@ -682,6 +682,31 @@ function App() {
   const llmProviderLabel = llmDescriptor?.display_name[locale] ?? "DeepSeek";
   const asrModelLabel = asrDescriptor?.models.find((model) => model.id === providerSettings.asr.model_id)?.display_name[locale] ?? providerSettings.asr.model_id;
   const llmModelLabel = llmDescriptor?.models.find((model) => model.id === providerSettings.llm.model_id)?.display_name[locale] ?? providerSettings.llm.model_id;
+  const renderProviderCredential = (
+    descriptor: typeof asrDescriptor,
+    providerLabel: string,
+    fieldId: string
+  ) => {
+    const key = descriptor?.credential_key;
+    if (key !== "MIMO_API_KEY" && key !== "DEEPSEEK_API_KEY") return null;
+    const value = key === "MIMO_API_KEY" ? mimoApiKey : deepseekApiKey;
+    const setValue = key === "MIMO_API_KEY" ? setMimoApiKey : setDeepseekApiKey;
+    const credential = key === "MIMO_API_KEY" ? preflight?.mimo_api_key : preflight?.deepseek_api_key;
+    return (
+      <div className="provider-credential">
+        <div className="provider-credential-heading">
+          <label htmlFor={fieldId}>{providerLabel} API Key</label>
+          {credential && <span className={credential.status.configured ? "ready" : "not-ready"}>{credentialStatusText(credential)}</span>}
+        </div>
+        <div className="key-input-row">
+          <input id={fieldId} type="password" value={value} onChange={(event) => setValue(event.target.value)} placeholder={credentialPlaceholder} />
+          {runtimeMode === "development" && <button className="btn-secondary btn-save-key" onClick={() => handleSaveKey(key, value)} disabled={!value.trim()} title={t.saveToEnv}>{t.saveToEnv}</button>}
+        </div>
+        {saveStatus[key] && <span className="save-status">{saveStatus[key]}</span>}
+        <small>{runtimeMode === "production" ? t.productionCredentialsNote : t.keysNotPersisted}</small>
+      </div>
+    );
+  };
 	const privacySummary = (() => {
 		const audioCloud = asrDescriptor?.privacy.sends_audio_off_device ?? true;
 		const textCloud = llmDescriptor?.privacy.sends_text_off_device ?? true;
@@ -726,7 +751,7 @@ function App() {
               : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d={sidebarCollapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"} />
+              <path d="m15 6-6 6 6 6" />
             </svg>
           </button>
 
@@ -1044,12 +1069,14 @@ function App() {
                     <div className="form-group form-group-compact"><label htmlFor="models-asr-provider">{t.provider}</label><select id="models-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
                     <div className="form-group form-group-compact"><label htmlFor="models-asr-model">{t.model}</label><select id="models-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
                     <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                    {renderProviderCredential(asrDescriptor, asrProviderLabel, "models-asr-credential")}
                   </div>
                   <div className="provider-settings-card">
                     <h4>{t.generatedContentProvider}</h4>
                     <div className="form-group form-group-compact"><label htmlFor="models-llm-provider">{t.provider}</label><select id="models-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
                     <div className="form-group form-group-compact"><label htmlFor="models-llm-model">{t.model}</label><select id="models-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
                     <p className={llmPreflightMatchesSelection && preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{llmPreflightMatchesSelection && preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
+                    {renderProviderCredential(llmDescriptor, llmProviderLabel, "models-llm-credential")}
                   </div>
                 </div>
                 <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
@@ -1303,124 +1330,6 @@ function App() {
                 <div className="settings-section-header">
                   <div className="settings-section-title">
                     <span>04</span>
-                    <div>
-                      <h3>{t.settingsCredentials}</h3>
-                      <p>{t.settingsCredentialsDesc}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="settings-note">
-                  <span className="warning-icon" aria-hidden="true">
-                    i
-                  </span>
-                  <span>
-                    {runtimeMode === "production"
-                      ? t.productionCredentialsNote
-                      : t.keysNotPersisted}
-                  </span>
-                </div>
-
-                {preflight && (
-                  <div className="credential-status-grid">
-                    <div className="credential-status-item">
-                      <span>{t.mimoApiKey}</span>
-                      <strong
-                        className={
-                          preflight.mimo_api_key.status.configured
-                            ? "ready"
-                            : "not-ready"
-                        }
-                      >
-                        {credentialStatusText(preflight.mimo_api_key)}
-                      </strong>
-                    </div>
-                    <div className="credential-status-item">
-                      <span>{t.deepseekApiKey}</span>
-                      <strong
-                        className={
-                          preflight.deepseek_api_key.status.configured
-                            ? "ready"
-                            : "not-ready"
-                        }
-                      >
-                        {credentialStatusText(preflight.deepseek_api_key)}
-                      </strong>
-                    </div>
-                  </div>
-                )}
-
-                <div className="credential-fields">
-                  <div className="form-group">
-                    <label htmlFor="settings-mimo-key">{t.mimoApiKey}</label>
-                    <div className="key-input-row">
-                      <input
-                        id="settings-mimo-key"
-                        type="password"
-                        value={mimoApiKey}
-                        onChange={(e) => setMimoApiKey(e.target.value)}
-                        placeholder={credentialPlaceholder}
-                      />
-                      {runtimeMode === "development" && (
-                        <button
-                          className="btn-secondary btn-save-key"
-                          onClick={() =>
-                            handleSaveKey("MIMO_API_KEY", mimoApiKey)
-                          }
-                          disabled={!mimoApiKey.trim()}
-                          title={t.saveToEnv}
-                        >
-                          {t.saveToEnv}
-                        </button>
-                      )}
-                    </div>
-                    {saveStatus["MIMO_API_KEY"] && (
-                      <span className="save-status">
-                        {saveStatus["MIMO_API_KEY"]}
-                      </span>
-                    )}
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="settings-deepseek-key">
-                      {t.deepseekApiKey}
-                    </label>
-                    <div className="key-input-row">
-                      <input
-                        id="settings-deepseek-key"
-                        type="password"
-                        value={deepseekApiKey}
-                        onChange={(e) => setDeepseekApiKey(e.target.value)}
-                        placeholder={credentialPlaceholder}
-                      />
-                      {runtimeMode === "development" && (
-                        <button
-                          className="btn-secondary btn-save-key"
-                          onClick={() =>
-                            handleSaveKey(
-                              "DEEPSEEK_API_KEY",
-                              deepseekApiKey
-                            )
-                          }
-                          disabled={!deepseekApiKey.trim()}
-                          title={t.saveToEnv}
-                        >
-                          {t.saveToEnv}
-                        </button>
-                      )}
-                    </div>
-                    {saveStatus["DEEPSEEK_API_KEY"] && (
-                      <span className="save-status">
-                        {saveStatus["DEEPSEEK_API_KEY"]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span>05</span>
                     <div>
                       <h3>{t.settingsOutputLocation}</h3>
                       <p>{t.settingsOutputLocationDesc}</p>
