@@ -247,6 +247,10 @@ export interface DiscoveryResult {
   issues: DiscoveryIssue[];
 }
 
+export interface TaskArtifactContent {
+  content: string;
+}
+
 export interface BackendErrorInfo {
   category: string;
   message: string;
@@ -366,6 +370,13 @@ export async function openTaskArtifact(
   artifactReference: string
 ): Promise<void> {
   return invoke("open_task_artifact", { taskFolder, artifactReference });
+}
+
+export async function readTaskArtifact(
+  taskFolder: string,
+  artifactReference: string
+): Promise<TaskArtifactContent> {
+  return invoke<TaskArtifactContent>("read_task_artifact", { taskFolder, artifactReference });
 }
 
 export async function revealTaskArtifact(
