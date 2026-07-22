@@ -16,6 +16,11 @@
   --accent-ink: #0c4e42;
   --accent-border: #9fc4ba;
   --accent-translucent: rgba(230, 241, 237, 0.72);
+  --icon-primary: #40534e;
+  --icon-muted: #60736e;
+  --icon-accent: #176b5b;
+  --icon-record: #a63f3a;
+  --runtime-surface: rgba(255, 255, 255, 0.34);
   --success: #16705d;
   --success-soft: #e3f2ed;
   --success-border: #add3c9;
@@ -62,6 +67,11 @@
   --accent-ink: #a6dece;
   --accent-border: #3f7569;
   --accent-translucent: rgba(27, 57, 50, 0.76);
+  --icon-primary: #d5e2de;
+  --icon-muted: #a9bbb6;
+  --icon-accent: #8fd5c3;
+  --icon-record: #ff9b95;
+  --runtime-surface: #1d2c28;
   --success: #6fc4ae;
   --success-soft: #193c34;
   --success-border: #356d60;
@@ -97,6 +107,11 @@
     --accent-ink: #a6dece;
     --accent-border: #3f7569;
     --accent-translucent: rgba(27, 57, 50, 0.76);
+    --icon-primary: #d5e2de;
+    --icon-muted: #a9bbb6;
+    --icon-accent: #8fd5c3;
+    --icon-record: #ff9b95;
+    --runtime-surface: #1d2c28;
     --success: #6fc4ae;
     --success-soft: #193c34;
     --success-border: #356d60;
@@ -224,7 +239,7 @@ button {
   width: 28px;
   min-height: 28px;
   padding: 0;
-  color: var(--text-secondary);
+  color: var(--icon-primary);
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--surface-muted);
@@ -416,6 +431,20 @@ button {
   stroke-linejoin: round;
 }
 
+.workspace-tabs svg {
+  color: var(--icon-muted);
+}
+
+.workspace-tabs button:hover:not(:disabled) svg,
+.workspace-tabs button:focus-visible svg,
+.workspace-tabs button[aria-selected="true"] svg {
+  color: var(--icon-accent);
+}
+
+.sidebar-footer .btn-settings svg {
+  color: var(--icon-primary);
+}
+
 .runtime-pill {
   display: inline-flex;
   align-items: center;
@@ -425,7 +454,7 @@ button {
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.34);
+  background: var(--runtime-surface);
   font-size: 0.72rem;
   font-weight: 600;
   backdrop-filter: blur(12px);
@@ -1629,8 +1658,8 @@ button {
 .input-choice-card.primary { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 .input-choice-card strong { font-size: 1.05rem; }
 .input-choice-card small { color: var(--text-muted); line-height: 1.55; }
-.input-choice-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-muted); font-size: 18px; }
-.input-choice-icon.record-icon { color: #b63e37; background: var(--error-soft); }
+.input-choice-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--icon-accent); background: var(--accent-soft); font-size: 18px; }
+.input-choice-icon.record-icon { color: var(--icon-record); background: var(--error-soft); }
 .record-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #d84b42; flex: 0 0 auto; }
 .record-dot.pulse { animation: record-pulse 1.4s ease-in-out infinite; }
 .record-dot.paused { background: #d19a35; }
