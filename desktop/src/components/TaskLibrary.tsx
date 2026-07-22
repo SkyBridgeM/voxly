@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowClockwise, ArrowLeft, ArrowRight, Check, PencilSimple, Plus, X } from "@phosphor-icons/react";
 import {
   listTasks,
   generateTaskContent,
@@ -320,8 +321,8 @@ function TaskCard({
                 placeholder={task.title}
                 disabled={metadataPending}
               />
-              <button type="submit" className="library-title-icon save" disabled={metadataPending} aria-label={labels.saveTitle} title={labels.saveTitle}>✓</button>
-              <button type="button" className="library-title-icon cancel" onClick={cancelTitleEditing} disabled={metadataPending} aria-label={labels.cancelTitleEdit} title={labels.cancelTitleEdit}>×</button>
+              <button type="submit" className="library-title-icon save" disabled={metadataPending} aria-label={labels.saveTitle} title={labels.saveTitle}><Check aria-hidden="true" /></button>
+              <button type="button" className="library-title-icon cancel" onClick={cancelTitleEditing} disabled={metadataPending} aria-label={labels.cancelTitleEdit} title={labels.cancelTitleEdit}><X aria-hidden="true" /></button>
           </form>
           <span className={`library-status ${statusTone(task.status)}`}>{statusLabel(task.status, labels)}</span>
         </div>
@@ -339,9 +340,9 @@ function TaskCard({
                 {task.tags.length > visibleTags.length && <span>+{task.tags.length - visibleTags.length}</span>}
               </span>
             )}
-            <span className="library-card-content-summary">{contentSummary}<span aria-hidden="true">→</span></span>
+            <span className="library-card-content-summary">{contentSummary}<ArrowRight aria-hidden="true" /></span>
           </button>
-          <button className="library-card-edit" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`} title={labels.editMetadata}>✎</button>
+          <button className="library-card-edit" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`} title={labels.editMetadata}><PencilSimple aria-hidden="true" /></button>
         </>
       )}
       {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
@@ -349,7 +350,32 @@ function TaskCard({
   );
 }
 
-function TaskDetails({ task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction, generationPending, generationError, onGenerate, promptOffer, onDismissPromptOffer, onTemplatesChanged, llmReady, llmProviderLabel, llmModelLabel, onOpenSettings, metadataPending, metadataError, onUpdateMetadata, tagSuggestions, onBack }: { task: TaskSummary; locale: "zh" | "en"; labels: TaskLibraryLabels; templates: PromptTemplateSummary[]; pendingActions: ReadonlyMap<string, "open" | "reveal">; actionErrors: ReadonlyMap<string, string>; onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void; generationPending: boolean; generationError: string | null; onGenerate: (task: TaskSummary, input: GenerationInput) => void; promptOffer: string | null; onDismissPromptOffer: () => void; onTemplatesChanged: () => Promise<void>; llmReady: boolean; llmProviderLabel: string; llmModelLabel: string; onOpenSettings: () => void; metadataPending: boolean; metadataError: string | null; onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>; tagSuggestions: readonly string[]; onBack: () => void }) {
+interface TaskDetailsProps {
+  task: TaskSummary;
+  locale: "zh" | "en";
+  labels: TaskLibraryLabels;
+  templates: PromptTemplateSummary[];
+  pendingActions: ReadonlyMap<string, "open" | "reveal">;
+  actionErrors: ReadonlyMap<string, string>;
+  onArtifactAction: (taskFolder: string, actionKey: string, action: "open" | "reveal", reference: string) => void;
+  generationPending: boolean;
+  generationError: string | null;
+  onGenerate: (task: TaskSummary, input: GenerationInput) => void;
+  promptOffer: string | null;
+  onDismissPromptOffer: () => void;
+  onTemplatesChanged: () => Promise<void>;
+  llmReady: boolean;
+  llmProviderLabel: string;
+  llmModelLabel: string;
+  onOpenSettings: () => void;
+  metadataPending: boolean;
+  metadataError: string | null;
+  onUpdateMetadata: (task: TaskSummary, metadata: TaskMetadataUpdate) => Promise<boolean>;
+  tagSuggestions: readonly string[];
+  onBack: () => void;
+}
+
+function TaskDetails({ task, locale, labels, templates, pendingActions, actionErrors, onArtifactAction, generationPending, generationError, onGenerate, promptOffer, onDismissPromptOffer, onTemplatesChanged, llmReady, llmProviderLabel, llmModelLabel, onOpenSettings, metadataPending, metadataError, onUpdateMetadata, tagSuggestions, onBack }: TaskDetailsProps) {
   const [description, setDescription] = useState(task.description);
   const [tags, setTags] = useState<string[]>(task.tags);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -380,10 +406,10 @@ function TaskDetails({ task, locale, labels, templates, pendingActions, actionEr
     if (await persistTags(nextTags)) { setTagInput(""); setTagPanelOpen(false); }
   };
   return <article className="library-details-view">
-    <button className="btn-secondary library-back" onClick={onBack}>← {labels.backToContent}</button>
-    <header className="library-details-heading"><div className="library-details-title"><span className="section-kicker">{labels.taskDetails}</span>{editingTitle ? <form className="library-title-form" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input id="task-details-title" autoFocus value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelTitleEditing(); } }} maxLength={200} aria-label={labels.taskTitle} placeholder={task.title} disabled={metadataPending} /><button type="submit" className="library-title-icon save" disabled={metadataPending} aria-label={labels.saveTitle} title={labels.saveTitle}>✓</button><button type="button" className="library-title-icon cancel" onClick={cancelTitleEditing} disabled={metadataPending} aria-label={labels.cancelTitleEdit} title={labels.cancelTitleEdit}>×</button></form> : <h2 id="task-details-title"><button className="library-title-button" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`}>{task.title}<span className="library-title-edit-mark" aria-hidden="true">✎</span></button></h2>}</div><span className={`library-status ${statusTone(task.status)}`}>{statusLabel(task.status, labels)}</span></header>
+    <button className="btn-secondary library-back" onClick={onBack}><ArrowLeft aria-hidden="true" />{labels.backToContent}</button>
+    <header className="library-details-heading"><div className="library-details-title"><span className="section-kicker">{labels.taskDetails}</span>{editingTitle ? <form className="library-title-form" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input id="task-details-title" autoFocus value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelTitleEditing(); } }} maxLength={200} aria-label={labels.taskTitle} placeholder={task.title} disabled={metadataPending} /><button type="submit" className="library-title-icon save" disabled={metadataPending} aria-label={labels.saveTitle} title={labels.saveTitle}><Check aria-hidden="true" /></button><button type="button" className="library-title-icon cancel" onClick={cancelTitleEditing} disabled={metadataPending} aria-label={labels.cancelTitleEdit} title={labels.cancelTitleEdit}><X aria-hidden="true" /></button></form> : <h2 id="task-details-title"><button className="library-title-button" onClick={beginTitleEditing} disabled={metadataPending} aria-label={`${labels.editMetadata}: ${task.title}`}>{task.title}<span className="library-title-edit-mark" aria-hidden="true"><PencilSimple /></span></button></h2>}</div><span className={`library-status ${statusTone(task.status)}`}>{statusLabel(task.status, labels)}</span></header>
     {metadataError && <p className="library-artifact-error" role="status">{metadataError}</p>}
-    <section className="library-quick-tags" aria-label={labels.tags}><div className="library-tags">{tags.map((tag) => <span key={tag}>{tag}<button type="button" onClick={() => void persistTags(tags.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}>×</button></span>)}</div>{!tagPanelOpen && <button type="button" className="btn-secondary" onClick={() => setTagPanelOpen(true)} disabled={metadataPending || tags.length >= 20}>+ {labels.addTag}</button>}{tagPanelOpen && <form className="library-tag-panel" onSubmit={(event) => { event.preventDefault(); void addTag(); }}>{suggestions.length > 0 && <div className="library-tag-suggestions"><span>{labels.existingTags}</span><div>{suggestions.map((tag) => <button type="button" key={tag} onClick={() => setTagInput(tag)} disabled={metadataPending}>+ {tag}</button>)}</div></div>}<input autoFocus value={tagInput} onChange={(event) => setTagInput(event.target.value)} maxLength={50} placeholder={labels.tagPlaceholder} aria-label={labels.addTag} disabled={metadataPending || tags.length >= 20} /><div className="library-tag-panel-actions form-action-row"><button type="button" className="btn-secondary" onClick={() => { setTagInput(""); setTagPanelOpen(false); }} disabled={metadataPending}>{labels.cancel}</button><button type="submit" className="btn-primary" disabled={metadataPending || !tagInput.trim() || tags.includes(tagInput.trim()) || tags.length >= 20}>{labels.addTag}</button></div></form>}</section>
+    <section className="library-quick-tags" aria-label={labels.tags}><div className="library-tags">{tags.map((tag) => <span key={tag}>{tag}<button type="button" onClick={() => void persistTags(tags.filter((item) => item !== tag))} aria-label={`${labels.removeTag}: ${tag}`} disabled={metadataPending}><X aria-hidden="true" /></button></span>)}</div>{!tagPanelOpen && <button type="button" className="btn-secondary" onClick={() => setTagPanelOpen(true)} disabled={metadataPending || tags.length >= 20}><Plus aria-hidden="true" />{labels.addTag}</button>}{tagPanelOpen && <form className="library-tag-panel" onSubmit={(event) => { event.preventDefault(); void addTag(); }}>{suggestions.length > 0 && <div className="library-tag-suggestions"><span>{labels.existingTags}</span><div>{suggestions.map((tag) => <button type="button" key={tag} onClick={() => setTagInput(tag)} disabled={metadataPending}><Plus aria-hidden="true" />{tag}</button>)}</div></div>}<input autoFocus value={tagInput} onChange={(event) => setTagInput(event.target.value)} maxLength={50} placeholder={labels.tagPlaceholder} aria-label={labels.addTag} disabled={metadataPending || tags.length >= 20} /><div className="library-tag-panel-actions form-action-row"><button type="button" className="btn-secondary" onClick={() => { setTagInput(""); setTagPanelOpen(false); }} disabled={metadataPending}>{labels.cancel}</button><button type="submit" className="btn-primary" disabled={metadataPending || !tagInput.trim() || tags.includes(tagInput.trim()) || tags.length >= 20}>{labels.addTag}</button></div></form>}</section>
     {sourceAudio && <section className="library-details-section library-artifacts"><h3>{labels.audioFile}</h3><ul><ArtifactItem artifact={sourceAudio} labels={labels} actionKey={`${task.task_folder}:audio`} pendingAction={pendingActions.get(`${task.task_folder}:audio`) ?? null} actionError={actionErrors.get(`${task.task_folder}:audio`) ?? null} metadata={[formatCompactDuration(task.duration_ms)]} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /></ul></section>}
     <section className="library-details-section library-artifacts"><h3>{labels.canonicalTranscript}</h3><ul>{transcript ? <ArtifactItem artifact={transcript} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={pendingActions.get(`${task.task_folder}:transcript`) ?? null} actionError={actionErrors.get(`${task.task_folder}:transcript`) ?? null} onAction={(key, action, reference) => onArtifactAction(task.task_folder, key, action, reference)} /> : <ArtifactItem artifact={{ kind: "transcript", status: "unavailable", reference: null, has_error: false, retryable: null, provider: "", model: "" }} labels={labels} actionKey={`${task.task_folder}:transcript`} pendingAction={null} actionError={null} onAction={() => undefined} />}</ul></section>
     <section className="library-details-section"><div className="library-section-heading"><h3>{labels.generatedContent}</h3>{task.can_generate && !generationOpen && <button className="btn-secondary" onClick={() => setGenerationOpen(true)}>{labels.generateContent}</button>}</div>{generationOpen && <div className="task-generation-action"><p>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</p>{!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}<GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} /><div className="library-generation-buttons form-action-row"><button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button><button className="btn-primary" disabled={generationPending || !generationInputIsValid(generationInput) || !llmReady} onClick={() => onGenerate(task, generationInput)}>{generationPending ? labels.generatingContent : labels.generateContent}</button></div>{generationError && <p className="library-artifact-error" role="status">{generationError}</p>}</div>}<div className="library-generated">{task.generated_content.map((group) => <GenerationGroupView key={group.template_id} group={group} task={task} locale={locale} labels={labels} templates={templates} pendingActions={pendingActions} actionErrors={actionErrors} onArtifactAction={onArtifactAction} />)}</div></section>
@@ -669,7 +695,7 @@ export function TaskLibrary({
         <div className="library-heading-actions">
           <label><span>{labels.filterByTag}</span><select value={effectiveTagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">{labels.allTasks}</option>{tagSuggestions.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
           <label><span>{labels.sortBy}</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}><option value="updated">{labels.sortUpdated}</option><option value="created">{labels.sortCreated}</option><option value="title">{labels.sortTitle}</option></select></label>
-          <button className="btn-secondary library-refresh" onClick={() => void refresh()} disabled={loading} aria-label={loading && result ? labels.refreshing : labels.refresh} title={loading && result ? labels.refreshing : labels.refresh}><svg className={loading ? "is-spinning" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-4M4 4v5h5" /><path d="M4 13a8 8 0 0 0 14.8 4M20 20v-5h-5" /></svg></button>
+          <button className="btn-secondary library-refresh" onClick={() => void refresh()} disabled={loading} aria-label={loading && result ? labels.refreshing : labels.refresh} title={loading && result ? labels.refreshing : labels.refresh}><ArrowClockwise className={loading ? "is-spinning" : ""} aria-hidden="true" weight="regular" /></button>
         </div>
       </div>
 

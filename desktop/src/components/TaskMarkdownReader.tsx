@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, X } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -166,7 +167,7 @@ export function TaskMarkdownReader({
       <header className="markdown-reader-header">
         <div>
           <div className="markdown-reader-title-line">
-            <button className="reader-back" onClick={onBack}>← {labels.backToTaskLibrary}</button>
+            <button className="reader-back" onClick={onBack}><ArrowLeft aria-hidden="true" />{labels.backToTaskLibrary}</button>
             <div className="markdown-reader-title-copy">
               <h2>{task.title}</h2>
               {selected && <p>{selected.title}{selected.provider ? ` · ${selected.provider}${selected.model ? ` / ${selected.model}` : ""}` : ""}</p>}
@@ -186,7 +187,7 @@ export function TaskMarkdownReader({
           <div className="markdown-generation-surface">
             <header className="markdown-generation-heading">
               <div><strong>{labels.generateContent}</strong><span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span></div>
-              <button type="button" className="generation-panel-close" onClick={() => setGenerationOpen(false)} disabled={generationPending} aria-label={labels.cancel} title={labels.cancel}>×</button>
+              <button type="button" className="generation-panel-close" onClick={() => setGenerationOpen(false)} disabled={generationPending} aria-label={labels.cancel} title={labels.cancel}><X aria-hidden="true" /></button>
             </header>
             {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
             <GenerationInputControl input={generationInput} onChange={setGenerationInput} templates={templates} locale={locale} disabled={generationPending || !llmReady} />

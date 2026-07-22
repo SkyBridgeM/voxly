@@ -36,7 +36,7 @@ export function RecordingWorkspace({ locale, disabled, onSaved, onError }: Props
   const [paused, setPaused] = useState(false);
   const [duration, setDuration] = useState(0);
   const [level, setLevel] = useState(0);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"start" | "pause" | "stop" | "cancel" | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -62,26 +62,26 @@ export function RecordingWorkspace({ locale, disabled, onSaved, onError }: Props
   }, [onError]);
 
   const selectedName = useMemo(() => devices.find((device) => device.id === deviceId)?.name, [devices, deviceId]);
-  const run = async (operation: () => Promise<unknown>) => {
-    setPending(true);
-    try { await operation(); } catch (error) { onError(String(error)); } finally { setPending(false); }
+  const run = async (action: NonNullable<typeof pending>, operation: () => Promise<unknown>) => {
+    setPending(action);
+    try { await operation(); } catch (error) { onError(String(error)); } finally { setPending(null); }
   };
 
-  const begin = () => run(async () => {
+  const begin = () => run("start", async () => {
     await startRecording(deviceId || undefined);
     setActive(true); setPaused(false); setDuration(0); setLevel(0);
   });
-  const togglePause = () => run(async () => {
+  const togglePause = () => run("pause", async () => {
     if (paused) await resumeRecording(); else await pauseRecording();
     setPaused(!paused);
   });
-  const stop = () => run(async () => {
+  const stop = () => run("stop", async () => {
     const task = await stopRecording();
     setActive(false); setPaused(false); setLevel(0); onSaved(task);
   });
   const cancel = () => {
     if (!window.confirm(zh ? "停止录音并保留已经录制的音频？" : "Stop recording and keep the captured audio?")) return;
-    void run(async () => {
+    void run("cancel", async () => {
       const task = await cancelRecording();
       setActive(false); setPaused(false); setLevel(0); onSaved(task);
     });
@@ -92,25 +92,25 @@ export function RecordingWorkspace({ locale, disabled, onSaved, onError }: Props
       {!active ? <>
         <div className="recording-device-row">
           <label htmlFor="recording-device">{zh ? "麦克风" : "Microphone"}</label>
-          <select id="recording-device" value={deviceId} onChange={(event) => setDeviceId(event.target.value)} disabled={disabled || pending}>
+          <select id="recording-device" value={deviceId} onChange={(event) => setDeviceId(event.target.value)} disabled={disabled || Boolean(pending)}>
             {devices.map((device) => <option key={device.id} value={device.id}>{device.name}{device.is_default ? (zh ? "（默认）" : " (Default)") : ""}</option>)}
           </select>
         </div>
-        <button className="btn-primary recording-start" onClick={begin} disabled={disabled || pending || !deviceId}>
+        <button className="btn-primary recording-start" onClick={begin} disabled={disabled || Boolean(pending) || !deviceId}>
           <span className="record-dot" aria-hidden="true"></span>{zh ? "开始录音" : "Start recording"}
         </button>
         {devices.length === 0 && <p className="recording-help">{zh ? "未发现可用麦克风，请检查系统权限。" : "No microphone found. Check system permissions."}</p>}
       </> : <>
         <div className="recording-live" role="status" aria-live="polite">
           <span className={`record-dot ${paused ? "paused" : "pulse"}`} aria-hidden="true"></span>
-          <div><strong>{paused ? (zh ? "录音已暂停" : "Recording paused") : (zh ? "正在录音" : "Recording")}</strong><small>{selectedName}</small></div>
+          <div><strong>{pending === "stop" || pending === "cancel" ? (zh ? "正在保存录音…" : "Saving recording…") : paused ? (zh ? "录音已暂停" : "Recording paused") : (zh ? "正在录音" : "Recording")}</strong><small>{selectedName}</small></div>
           <time>{formatDuration(duration)}</time>
         </div>
         <div className="level-meter" aria-label={zh ? "输入音量" : "Input level"}><span style={{ width: `${Math.max(2, level * 100)}%` }}></span></div>
         <div className="recording-actions">
-          <button className="btn-secondary" onClick={togglePause} disabled={pending}>{paused ? (zh ? "继续" : "Resume") : (zh ? "暂停" : "Pause")}</button>
-          <button className="btn-primary" onClick={stop} disabled={pending}>{zh ? "停止并保存" : "Stop and save"}</button>
-          <button className="link-button danger" onClick={cancel} disabled={pending}>{zh ? "取消" : "Cancel"}</button>
+          <button className="btn-secondary" onClick={togglePause} disabled={Boolean(pending)}>{paused ? (zh ? "继续" : "Resume") : (zh ? "暂停" : "Pause")}</button>
+          <button className="btn-primary" onClick={stop} disabled={Boolean(pending)}>{pending === "stop" ? (zh ? "正在保存…" : "Saving…") : (zh ? "停止并保存" : "Stop and save")}</button>
+          <button className="link-button danger" onClick={cancel} disabled={Boolean(pending)}>{zh ? "取消" : "Cancel"}</button>
         </div>
         <p className="recording-help">{zh ? "录音每 30 秒安全保存一次；停止后由你确认是否处理。" : "Audio is safely checkpointed every 30 seconds. You choose whether to process it after stopping."}</p>
       </>}

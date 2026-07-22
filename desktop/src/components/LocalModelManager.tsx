@@ -46,7 +46,7 @@ export function LocalModelManager({ locale, disabled, labels, onStatusChanged }:
   <div className="local-model-card">
     <div className="local-model-heading"><div><h4>{labels.title}</h4><p>{labels.description}</p></div><span className="privacy-chip">{labels.chineseFirst}</span></div>
     <strong>{model?.display_name[locale] ?? "SenseVoiceSmall INT8"}</strong>
-    <dl className="local-model-facts"><div><dt>{labels.status}</dt><dd>{statusLabel}</dd></div><div><dt>{labels.size}</dt><dd>≈ 156 MB</dd></div><div><dt>{labels.source}</dt><dd>k2-fsa / sherpa-onnx · 2024-07-17</dd></div></dl>
+    <dl className="local-model-facts"><div><dt>{labels.status}</dt><dd>{statusLabel}</dd></div><div><dt>{labels.size}</dt><dd>≈ 156 MB</dd></div></dl>
     {pending && <div className="model-progress" role="status"><div style={{ width: `${percent}%` }} /><span>{progress?.state ?? labels.status} {percent > 0 ? `${percent}%` : ""}</span></div>}
     <p className="local-model-privacy"><strong>{labels.privacyTitle}</strong> {labels.privacyBody}</p>
     <div className="local-model-actions">
@@ -54,12 +54,12 @@ export function LocalModelManager({ locale, disabled, labels, onStatusChanged }:
       {pending && <button className="btn-secondary" onClick={() => void cancelModelDownload()}>{labels.cancel}</button>}
       {(status?.state === "runtime_missing" || status?.state === "model_invalid") && !pending && <button className="btn-secondary" disabled={disabled} onClick={() => { if (confirm(labels.confirmDelete)) void run(deleteLocalModel); }}>{labels.delete}</button>}
     </div>
-    <details><summary>{labels.technicalDetails}</summary><code>{model?.archive.sha256}</code></details>
+    <details><summary>{labels.technicalDetails}</summary><dl className="local-model-technical"><div><dt>{labels.source}</dt><dd>k2-fsa / sherpa-onnx · 2024-07-17</dd></div></dl><code>{model?.archive.sha256}</code></details>
     {error && <p className="provider-not-ready" role="status">{error}</p>}
   </div>
-  <div className="model-network-settings-card">
-    <h4>{labels.advanced}</h4><p>{labels.endpointScope}</p>
+  <details className="model-network-settings-card">
+    <summary><strong>{labels.advanced}</strong><span>{labels.endpointScope}</span></summary>
     <div className="form-group form-group-compact"><label htmlFor="hf-endpoint">{labels.endpoint}</label><input id="hf-endpoint" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /><div className="form-action-row"><button className="btn-secondary" onClick={() => void testHuggingFaceEndpoint(endpoint).then((result) => setError(result.reachable ? labels.endpointReachable : labels.operationFailed)).catch(() => setError(labels.operationFailed))}>{labels.test}</button><button className="btn-primary" onClick={() => void updateModelDownloadSettings(endpoint).then((result) => setEndpoint(result.huggingface_endpoint)).catch(() => setError(labels.operationFailed))}>{labels.save}</button></div></div>
-  </div>
+  </details>
   </>;
 }

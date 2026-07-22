@@ -66,6 +66,7 @@ export interface Translations {
   lightMode: string;
   darkMode: string;
   errorTitle: string;
+  recordingRuntimeFailed: string;
   close: string;
   showLogs: string;
   hideLogs: string;
@@ -310,6 +311,7 @@ export const translations: Record<Locale, Translations> = {
     lightMode: "浅色模式",
     darkMode: "深色模式",
     errorTitle: "错误",
+    recordingRuntimeFailed: "无法初始化录音任务。请重启 Voxly；如果正在运行开发版，请重新构建 Go 后端后再试。",
     close: "关闭",
     showLogs: "显示日志",
     hideLogs: "隐藏日志",
@@ -551,6 +553,7 @@ export const translations: Record<Locale, Translations> = {
     lightMode: "Light Mode",
     darkMode: "Dark Mode",
     errorTitle: "Error",
+    recordingRuntimeFailed: "The recording task could not be initialized. Restart Voxly; for a development build, rebuild the Go backend and try again.",
     close: "Close",
     showLogs: "Show Logs",
     hideLogs: "Hide Logs",

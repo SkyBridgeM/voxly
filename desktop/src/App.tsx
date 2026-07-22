@@ -6,6 +6,18 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  ArrowLeft,
+  Books,
+  FileText,
+  GearSix,
+  HardDrives,
+  Microphone,
+  Plus,
+  SidebarSimple,
+  UploadSimple,
+  X,
+} from "@phosphor-icons/react";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
@@ -423,9 +435,12 @@ function App() {
 
   const handleRecordingError = useCallback((message: string) => {
     const parsed = parseBackendError(message).message;
-    setErrorMessage(parsed);
+    const localized = parsed.toLocaleLowerCase().includes("recording task runtime")
+      ? t.recordingRuntimeFailed
+      : parsed;
+    setErrorMessage(localized);
     setShowError(true);
-  }, []);
+  }, [t.recordingRuntimeFailed]);
 
   const handleRecoverRecording = useCallback(async (task: RecordingTask) => {
     setRecordingRecoveryPending(task.task_id);
@@ -759,9 +774,7 @@ function App() {
               ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
               : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m15 6-6 6 6 6" />
-            </svg>
+            <SidebarSimple aria-hidden="true" weight="bold" />
           </button>
 
           <nav
@@ -780,7 +793,7 @@ function App() {
               onClick={showWorkflow}
               title={t.newTask}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <Plus aria-hidden="true" weight="bold" />
               <span>{t.newTask}</span>
             </button>
             <button
@@ -793,7 +806,7 @@ function App() {
               onClick={showLibrary}
               title={t.taskLibraryTitle}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM7 3.5h10M8 10h8M8 14h5" /></svg>
+              <Books aria-hidden="true" weight="bold" />
               <span>{t.taskLibraryTitle}</span>
             </button>
             <button
@@ -806,7 +819,7 @@ function App() {
               onClick={showModels}
               title={t.settingsProviders}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7c0-2 3.1-3.5 7-3.5S19 5 19 7s-3.1 3.5-7 3.5S5 9 5 7Zm0 0v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5V7M5 12v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5v-5" /></svg>
+              <HardDrives aria-hidden="true" weight="bold" />
               <span>{t.settingsProviders}</span>
             </button>
             <button
@@ -819,7 +832,7 @@ function App() {
               onClick={showTemplates}
               title={locale === "zh" ? "模板" : "Templates"}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l3 3V20.5H6zM15 3.5v4h3M9 12h6M9 16h6" /></svg>
+              <FileText aria-hidden="true" weight="bold" />
               <span>{locale === "zh" ? "模板" : "Templates"}</span>
             </button>
           </nav>
@@ -837,7 +850,7 @@ function App() {
               aria-expanded={showSettings}
               aria-controls="settings-dialog"
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM19 12l2-1-2-3-2 .5a8 8 0 0 0-2-1.2L14.5 5h-5L9 7.3a8 8 0 0 0-2 1.2L5 8l-2 3 2 1a8 8 0 0 0 0 2l-2 1 2 3 2-.5a8 8 0 0 0 2 1.2l.5 2.3h5l.5-2.3a8 8 0 0 0 2-1.2l2 .5 2-3-2-1a8 8 0 0 0 0-2Z" /></svg>
+              <GearSix aria-hidden="true" weight="bold" />
               <span>{t.settingsTitle}</span>
             </button>
           </div>
@@ -872,12 +885,12 @@ function App() {
                   <>
                   <div className="input-choice-grid">
                     <button className="input-choice-card primary" onClick={() => setInputChoice("record")} disabled={isRunning}>
-                      <span className="input-choice-icon record-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9 21h6" /></svg></span>
+                      <span className="input-choice-icon record-icon" aria-hidden="true"><Microphone weight="bold" /></span>
                       <strong>{locale === "zh" ? "开始录音" : "Start recording"}</strong>
                       <small>{locale === "zh" ? "使用麦克风采集语音，停止后再确认处理。" : "Capture voice with your microphone, then choose how to process it."}</small>
                     </button>
                     <button className="input-choice-card" onClick={() => setInputChoice("import")} disabled={isRunning}>
-                      <span className="input-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5" /></svg></span>
+                      <span className="input-choice-icon" aria-hidden="true"><UploadSimple weight="bold" /></span>
                       <strong>{locale === "zh" ? "导入音频" : "Import audio"}</strong>
                       <small>{locale === "zh" ? "处理已有的 MP3、WAV 或 M4A 文件。" : "Process an existing MP3, WAV, or M4A file."}</small>
                     </button>
@@ -890,14 +903,14 @@ function App() {
                 )}
                 {inputChoice === "record" && (
                   <>
-                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}>{locale === "zh" ? "← 返回输入方式" : "← Back to input methods"}</button>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}><ArrowLeft aria-hidden="true" />{locale === "zh" ? "返回输入方式" : "Back to input methods"}</button>
                     <RecordingWorkspace locale={locale} disabled={isRunning} onSaved={handleRecordingSaved} onError={handleRecordingError} />
                     {recordingTask?.audio_path && <div className="recording-saved-banner"><strong>{locale === "zh" ? "录音已保存" : "Recording saved"}</strong><span>{Math.round(recordingTask.duration_ms / 1000)}s · {recordingTask.checkpoint_count} {locale === "zh" ? "个安全分段" : "checkpoints"}</span></div>}
                   </>
                 )}
                 {inputChoice === "import" && (
                   <>
-                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}>{locale === "zh" ? "← 返回输入方式" : "← Back to input methods"}</button>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}><ArrowLeft aria-hidden="true" />{locale === "zh" ? "返回输入方式" : "Back to input methods"}</button>
                     <FilePicker
                       audioPath={audioPath}
                       onFileSelected={(path) => { setRecordingTask(null); setAudioPath(path); }}
@@ -1140,13 +1153,13 @@ function App() {
                 onClick={handleCloseSettings}
                 aria-label={t.close}
               >
-                ×
+                <X aria-hidden="true" />
               </button>
             </div>
 
             <div className="modal-body settings-body">
-              <section className="settings-section">
-                <div className="settings-section-header settings-section-header-action">
+              <details className="settings-section settings-diagnostics">
+                <summary className="settings-section-header">
                   <div className="settings-section-title">
                     <span>01</span>
                     <div>
@@ -1154,14 +1167,14 @@ function App() {
                       <p>{t.settingsReadinessDesc}</p>
                     </div>
                   </div>
-                  <button
-                    className="btn-secondary preflight-refresh"
-                    onClick={() => void refreshPreflight()}
-                    disabled={preflightLoading}
-                  >
-                    {preflightLoading ? t.checking : t.refresh}
-                  </button>
-                </div>
+                </summary>
+                <button
+                  className="btn-secondary preflight-refresh"
+                  onClick={() => void refreshPreflight()}
+                  disabled={preflightLoading}
+                >
+                  {preflightLoading ? t.checking : t.refresh}
+                </button>
 
                 {preflightError && (
                   <div className="preflight-error">{preflightError}</div>
@@ -1239,24 +1252,7 @@ function App() {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section className="settings-section about-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span aria-hidden="true">V</span>
-                    <div>
-                      <h3>{t.aboutTitle}</h3>
-                      <p>{t.aboutDescription}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="about-card">
-                  <strong>{t.aboutProductNames}</strong>
-                  <span>{t.aboutSubtitles}</span>
-                  <span>{t.aboutVersion}</span>
-                </div>
-              </section>
+              </details>
 
               <section className="settings-section">
                 <div className="settings-section-header">
@@ -1416,6 +1412,22 @@ function App() {
                   <div className="preflight-empty">{t.preflightPrompt}</div>
                 )}
               </section>
+
+              <section className="settings-section about-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <div>
+                      <h3>{t.aboutTitle}</h3>
+                      <p>{t.aboutDescription}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="about-card">
+                  <strong>{t.aboutProductNames}</strong>
+                  <span>{t.aboutSubtitles}</span>
+                  <span>{t.aboutVersion}</span>
+                </div>
+              </section>
             </div>
 
             <div className="modal-footer">
@@ -1438,7 +1450,7 @@ function App() {
           >
             <div className="modal-header">
               <div>
-                <span className="modal-eyebrow">Meeting ASR</span>
+                <span className="modal-eyebrow">{t.appKicker}</span>
                 <h2 id="error-title">{t.errorTitle}</h2>
               </div>
               <button
@@ -1446,7 +1458,7 @@ function App() {
                 onClick={() => setShowError(false)}
                 aria-label={t.close}
               >
-                ×
+                <X aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">
