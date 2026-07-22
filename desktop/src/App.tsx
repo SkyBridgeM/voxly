@@ -435,9 +435,12 @@ function App() {
 
   const handleRecordingError = useCallback((message: string) => {
     const parsed = parseBackendError(message).message;
-    setErrorMessage(parsed);
+    const localized = parsed.toLocaleLowerCase().includes("recording task runtime")
+      ? t.recordingRuntimeFailed
+      : parsed;
+    setErrorMessage(localized);
     setShowError(true);
-  }, []);
+  }, [t.recordingRuntimeFailed]);
 
   const handleRecoverRecording = useCallback(async (task: RecordingTask) => {
     setRecordingRecoveryPending(task.task_id);
@@ -1447,7 +1450,7 @@ function App() {
           >
             <div className="modal-header">
               <div>
-                <span className="modal-eyebrow">Meeting ASR</span>
+                <span className="modal-eyebrow">{t.appKicker}</span>
                 <h2 id="error-title">{t.errorTitle}</h2>
               </div>
               <button
