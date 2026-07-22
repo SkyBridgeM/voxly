@@ -76,6 +76,13 @@ export function TaskMarkdownReader({
   templates,
   onBack,
   onOpenDetails,
+  generationPending,
+  generationError,
+  onGenerate,
+  llmReady,
+  llmProviderLabel,
+  llmModelLabel,
+  onOpenSettings,
 }: {
   task: TaskSummary;
   locale: "zh" | "en";
@@ -83,6 +90,13 @@ export function TaskMarkdownReader({
   templates: PromptTemplateSummary[];
   onBack: () => void;
   onOpenDetails: () => void;
+  generationPending: boolean;
+  generationError: string | null;
+  onGenerate: (task: TaskSummary, templateId: string) => void;
+  llmReady: boolean;
+  llmProviderLabel: string;
+  llmModelLabel: string;
+  onOpenSettings: () => void;
 }) {
   const artifacts = useMemo(
     () => readableArtifacts(task, templates, locale, labels),
@@ -94,6 +108,8 @@ export function TaskMarkdownReader({
   const [error, setError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const [actionPending, setActionPending] = useState<"open" | "reveal" | null>(null);
+  const [generationOpen, setGenerationOpen] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("structured-notes");
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
   const selected = artifacts.find((artifact) => artifact.key === selectedKey) ?? artifacts[0] ?? null;
@@ -146,11 +162,34 @@ export function TaskMarkdownReader({
           {selected && <p>{selected.title}{selected.provider ? ` · ${selected.provider}${selected.model ? ` / ${selected.model}` : ""}` : ""}</p>}
         </div>
         <div className="markdown-reader-header-actions">
+          {task.can_generate && <button className="btn-primary" onClick={() => setGenerationOpen(true)} disabled={generationPending}>{generationPending ? labels.generatingContent : labels.generateContent}</button>}
           <button className="btn-secondary" onClick={onOpenDetails}>{labels.taskDetails}</button>
           {selected && <button className="btn-secondary" onClick={() => void performAction("open")} disabled={actionPending !== null}>{actionPending === "open" ? labels.openingArtifact : labels.openArtifact}</button>}
           {selected && <button className="btn-secondary" onClick={() => void performAction("reveal")} disabled={actionPending !== null}>{actionPending === "reveal" ? labels.revealingArtifact : labels.revealArtifact}</button>}
         </div>
       </header>
+
+      {generationOpen && (
+        <section className="markdown-generation-panel" aria-label={labels.generateContent}>
+          <div>
+            <strong>{labels.generateContent}</strong>
+            <span>{labels.generatedWithProvider}: {llmProviderLabel} · {llmModelLabel}</span>
+          </div>
+          {!llmReady && <p className="provider-not-ready">{labels.providerNotReady} <button className="link-button" onClick={onOpenSettings}>{labels.openSettings}</button></p>}
+          <label>
+            <span>{labels.templateLabel}</span>
+            <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)} disabled={generationPending || !llmReady}>
+              <optgroup label={labels.builtInTemplates}>{templates.filter((template) => template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>
+              {templates.some((template) => !template.built_in) && <optgroup label={labels.myTemplates}>{templates.filter((template) => !template.built_in).map((template) => <option key={template.id} value={template.id}>{template.display_name[locale]}</option>)}</optgroup>}
+            </select>
+          </label>
+          <div className="markdown-generation-actions form-action-row">
+            <button className="btn-secondary" onClick={() => setGenerationOpen(false)} disabled={generationPending}>{labels.cancel}</button>
+            <button className="btn-primary" onClick={() => onGenerate(task, selectedTemplate)} disabled={generationPending || templates.length === 0 || !llmReady}>{generationPending ? labels.generatingContent : labels.generateContent}</button>
+          </div>
+          {generationError && <p className="library-artifact-error" role="status">{generationError}</p>}
+        </section>
+      )}
 
       {artifacts.length > 0 ? (
         <div className="markdown-reader-layout">

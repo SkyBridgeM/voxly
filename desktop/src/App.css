@@ -681,10 +681,12 @@ button {
 
 .library-card-open {
   display: grid;
-  gap: 8px;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 3px;
   width: 100%;
   min-height: 0;
-  padding: 17px 56px 17px 19px;
+  padding: 12px 52px 12px 16px;
   color: inherit;
   border: 0;
   border-radius: inherit;
@@ -714,8 +716,8 @@ button {
 
 .library-card-edit {
   position: absolute;
-  top: 15px;
-  right: 16px;
+  top: 10px;
+  right: 13px;
   z-index: 1;
   width: 30px;
   min-width: 30px;
@@ -750,7 +752,7 @@ button {
 .library-card-content-summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   color: var(--accent-ink);
   font-size: 0.73rem;
@@ -758,6 +760,7 @@ button {
 }
 
 .library-card-content-summary > span {
+  margin-left: auto;
   font-size: 1rem;
   transition: transform 160ms ease;
 }
@@ -887,10 +890,17 @@ button {
 
 .library-card-open .library-task-time {
   margin-top: 0;
+  font-size: 0.64rem;
 }
 
 .library-card-open .library-tag-summary {
   margin-top: 0;
+}
+
+.library-card-open .library-tags > span {
+  min-height: 20px;
+  padding: 1px 7px;
+  font-size: 0.6rem;
 }
 
 .library-description-preview {
@@ -1117,6 +1127,48 @@ button {
   min-height: 32px;
   padding: 0 11px;
   white-space: nowrap;
+}
+
+.markdown-generation-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(190px, 280px) auto;
+  align-items: end;
+  gap: 12px 16px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.markdown-generation-panel > div:first-child,
+.markdown-generation-panel > label {
+  display: grid;
+  gap: 4px;
+}
+
+.markdown-generation-panel strong,
+.markdown-generation-panel label > span {
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+
+.markdown-generation-panel > div:first-child > span {
+  color: var(--text-muted);
+  font-size: 0.64rem;
+}
+
+.markdown-generation-panel select {
+  width: 100%;
+  min-height: var(--form-action-height);
+}
+
+.markdown-generation-actions {
+  min-width: 220px;
+}
+
+.markdown-generation-panel .provider-not-ready,
+.markdown-generation-panel .library-artifact-error {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .markdown-reader-layout {
@@ -3138,6 +3190,14 @@ textarea:focus-visible,
     justify-content: flex-start;
   }
 
+  .markdown-generation-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .markdown-generation-actions {
+    min-width: 0;
+  }
+
   .markdown-reader-layout {
     grid-template-columns: 1fr;
   }
@@ -3249,6 +3309,10 @@ textarea:focus-visible,
 
   .markdown-reader-header-actions button:first-child {
     grid-column: 1 / -1;
+  }
+
+  .markdown-generation-panel {
+    padding: 14px 17px;
   }
 
   .markdown-document {

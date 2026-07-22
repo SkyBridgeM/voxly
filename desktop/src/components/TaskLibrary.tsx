@@ -597,6 +597,13 @@ export function TaskLibrary({
             templates={templates}
             onBack={() => setSelectedTaskKey(null)}
             onOpenDetails={() => setSelectedTaskView("details")}
+            generationPending={generationPending.has(selectedTask.task_folder)}
+            generationError={generationErrors.get(selectedTask.task_folder) ?? null}
+            onGenerate={handleGenerate}
+            llmReady={llmReady}
+            llmProviderLabel={llmProviderLabel}
+            llmModelLabel={llmModelLabel}
+            onOpenSettings={onOpenSettings}
           />
         </section>
       );
