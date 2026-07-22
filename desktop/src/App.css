@@ -1089,9 +1089,14 @@ button {
 
 .markdown-reader-title-line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-width: 0;
+}
+
+.markdown-reader-title-copy {
+  min-width: 0;
+  flex: 1;
 }
 
 .markdown-reader-header h2 {
@@ -1188,7 +1193,7 @@ button {
 
 .markdown-reader-layout {
   display: grid;
-  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  grid-template-columns: minmax(160px, 190px) minmax(0, 1fr);
   min-height: min(660px, calc(100vh - 210px));
 }
 
@@ -1212,6 +1217,9 @@ button {
 
 .markdown-document-list button {
   display: grid;
+  align-items: start;
+  justify-content: stretch;
+  justify-items: start;
   gap: 3px;
   width: 100%;
   min-height: 0;
@@ -3086,6 +3094,24 @@ textarea:focus-visible,
   background: var(--border-strong);
 }
 
+@media (max-width: 1100px) {
+  .markdown-reader-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+    padding: 13px 16px;
+  }
+
+  .markdown-reader-header > div:first-child,
+  .markdown-reader-header-actions {
+    width: 100%;
+  }
+
+  .markdown-reader-header h2 {
+    font-size: 1.2rem;
+  }
+}
+
 @media (max-width: 760px) {
   .app,
   .app.sidebar-collapsed {
@@ -3197,18 +3223,11 @@ textarea:focus-visible,
   }
 
   .markdown-reader-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 9px;
-    padding: 13px 16px;
+    align-items: stretch;
   }
 
   .markdown-reader-header > div:first-child {
     width: 100%;
-  }
-
-  .markdown-reader-header h2 {
-    font-size: 1.2rem;
   }
 
   .markdown-reader-header-actions {

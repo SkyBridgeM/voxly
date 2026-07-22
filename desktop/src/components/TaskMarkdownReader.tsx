@@ -159,9 +159,11 @@ export function TaskMarkdownReader({
         <div>
           <div className="markdown-reader-title-line">
             <button className="reader-back" onClick={onBack}>← {labels.backToTaskLibrary}</button>
-            <h2>{task.title}</h2>
+            <div className="markdown-reader-title-copy">
+              <h2>{task.title}</h2>
+              {selected && <p>{selected.title}{selected.provider ? ` · ${selected.provider}${selected.model ? ` / ${selected.model}` : ""}` : ""}</p>}
+            </div>
           </div>
-          {selected && <p>{selected.title}{selected.provider ? ` · ${selected.provider}${selected.model ? ` / ${selected.model}` : ""}` : ""}</p>}
         </div>
         <div className="markdown-reader-header-actions">
           {task.can_generate && <button className="btn-primary" onClick={() => setGenerationOpen(true)} disabled={generationPending}>{generationPending ? labels.generatingContent : labels.generateContent}</button>}
