@@ -66,6 +66,7 @@ export interface Translations {
   lightMode: string;
   darkMode: string;
   errorTitle: string;
+  recordingRuntimeFailed: string;
   close: string;
   showLogs: string;
   hideLogs: string;
@@ -159,12 +160,21 @@ export interface Translations {
   taskDetails: string;
   openTaskDetails: string;
   backToTaskLibrary: string;
+  backToContent: string;
   transcriptSummary: string;
   generatedArtifactCount: string;
   saveTitle: string;
   cancelTitleEdit: string;
   taskInformation: string;
   existingTags: string;
+  taskDocuments: string;
+  markdownLoading: string;
+  markdownLoadError: string;
+  markdownEmpty: string;
+  noReadableMarkdown: string;
+  cardGeneratedContent: string;
+  cardTranscriptOnly: string;
+  cardNoContent: string;
   available: string;
   unavailable: string;
   artifactError: string;
@@ -244,8 +254,8 @@ export const translations: Record<Locale, Translations> = {
     aboutVersion: "版本 0.1.0-alpha",
     aboutDescription: "将语音转写为可整理、可生成、可追溯的内容。",
     workflowEyebrow: "新建任务",
-    workflowTitle: "处理会议录音",
-    workflowDescription: "选择一段音频和需要的输出，其余文件会整理到同一个任务文件夹。",
+    workflowTitle: "从语音，到可用内容",
+    workflowDescription: "录制或导入音频，转写并生成你需要的内容。",
     inputTitle: "音频来源",
     outputModeTitle: "输出类型",
     chooseFile: "选择音频文件",
@@ -301,6 +311,7 @@ export const translations: Record<Locale, Translations> = {
     lightMode: "浅色模式",
     darkMode: "深色模式",
     errorTitle: "错误",
+    recordingRuntimeFailed: "无法初始化录音任务。请重启 Voxly；如果正在运行开发版，请重新构建 Go 后端后再试。",
     close: "关闭",
     showLogs: "显示日志",
     hideLogs: "隐藏日志",
@@ -328,8 +339,8 @@ export const translations: Record<Locale, Translations> = {
     developmentEnv: "开发 .env",
     preflightUnavailable: "运行就绪检查暂不可用。",
     preflightPrompt: "刷新后查看本机运行环境与配置状态。",
-    chooseFileToBegin: "从一段会议录音开始",
-    chooseFileToBeginDesc: "选择本机音频文件，再选择转写、笔记准备或会议纪要。",
+    chooseFileToBegin: "选择一种语音输入方式",
+    chooseFileToBeginDesc: "开始录音，或导入已有音频，然后选择所需的处理方式。",
     readyToRun: "已准备好开始",
     readyToRunDesc: "音频已选择。确认输出类型后即可开始处理。",
     settingsIntro: "检查本机运行状态，并调整界面、处理后端与会话配置。",
@@ -341,8 +352,8 @@ export const translations: Record<Locale, Translations> = {
     settingsBackendDesc: "生产模式固定使用内置 Go；开发模式默认使用 Go，也可手动选择 Python 备用。",
     settingsCredentials: "凭据",
     settingsCredentialsDesc: "会话 Key 不会显示在状态信息、日志或输出文件中。",
-    settingsMinutesModel: "会议纪要模型",
-    settingsMinutesModelDesc: "DeepSeek 模型仅用于会议纪要输出。",
+    settingsMinutesModel: "内容生成模型",
+    settingsMinutesModelDesc: "DeepSeek 模型用于按所选模板生成结构化内容。",
     settingsOutputLocation: "输出位置",
     settingsOutputLocationDesc: "所有任务文件都会保存在已配置输出位置之内。",
     currentOutputFolder: "当前文件夹",
@@ -394,12 +405,21 @@ export const translations: Record<Locale, Translations> = {
     taskDetails: "任务详情",
     openTaskDetails: "打开任务详情",
     backToTaskLibrary: "返回任务库",
+    backToContent: "返回内容",
     transcriptSummary: "转写",
     generatedArtifactCount: "生成内容",
     saveTitle: "保存任务名称",
     cancelTitleEdit: "取消编辑任务名称",
     taskInformation: "任务信息",
     existingTags: "已有标签",
+    taskDocuments: "任务文档",
+    markdownLoading: "正在载入文档…",
+    markdownLoadError: "无法载入此文档，请重试。",
+    markdownEmpty: "此文档暂时没有内容。",
+    noReadableMarkdown: "此任务还没有可阅读的 Markdown 内容。",
+    cardGeneratedContent: "查看最新生成内容",
+    cardTranscriptOnly: "查看转写文本",
+    cardNoContent: "查看任务状态",
     available: "可用",
     unavailable: "不可用",
     artifactError: "生成出错",
@@ -476,8 +496,8 @@ export const translations: Record<Locale, Translations> = {
     aboutVersion: "Version 0.1.0-alpha",
     aboutDescription: "Turn voice into structured, traceable content.",
     workflowEyebrow: "New task",
-    workflowTitle: "Process a meeting recording",
-    workflowDescription: "Choose an audio file and the output you need. Generated files stay together in one task folder.",
+    workflowTitle: "From voice to useful content",
+    workflowDescription: "Record or import audio, transcribe it, and generate the content you need.",
     inputTitle: "Audio source",
     outputModeTitle: "Output type",
     chooseFile: "Choose Audio File",
@@ -533,6 +553,7 @@ export const translations: Record<Locale, Translations> = {
     lightMode: "Light Mode",
     darkMode: "Dark Mode",
     errorTitle: "Error",
+    recordingRuntimeFailed: "The recording task could not be initialized. Restart Voxly; for a development build, rebuild the Go backend and try again.",
     close: "Close",
     showLogs: "Show Logs",
     hideLogs: "Hide Logs",
@@ -560,8 +581,8 @@ export const translations: Record<Locale, Translations> = {
     developmentEnv: "Development .env",
     preflightUnavailable: "Runtime readiness check is unavailable.",
     preflightPrompt: "Refresh to inspect this Mac's runtime and configuration status.",
-    chooseFileToBegin: "Start with a meeting recording",
-    chooseFileToBeginDesc: "Choose a local audio file, then select transcript, notes preparation, or meeting minutes.",
+    chooseFileToBegin: "Choose a voice input method",
+    chooseFileToBeginDesc: "Start recording or import existing audio, then choose how to process it.",
     readyToRun: "Ready to begin",
     readyToRunDesc: "Your audio is selected. Confirm the output type, then start processing.",
     settingsIntro: "Inspect local readiness and adjust appearance, processing, and session configuration.",
@@ -573,8 +594,8 @@ export const translations: Record<Locale, Translations> = {
     settingsBackendDesc: "Production uses packaged Go; development defaults to Go with Python available as a manual fallback.",
     settingsCredentials: "Credentials",
     settingsCredentialsDesc: "Session keys are never shown in status metadata, logs, or output files.",
-    settingsMinutesModel: "Minutes model",
-    settingsMinutesModelDesc: "The DeepSeek model is used only for meeting-minutes output.",
+    settingsMinutesModel: "Content generation model",
+    settingsMinutesModelDesc: "The DeepSeek model generates structured content with the selected template.",
     settingsOutputLocation: "Output location",
     settingsOutputLocationDesc: "Every task folder and generated file stays inside the configured output location.",
     currentOutputFolder: "Current folder",
@@ -626,12 +647,21 @@ export const translations: Record<Locale, Translations> = {
     taskDetails: "Task details",
     openTaskDetails: "Open task details",
     backToTaskLibrary: "Back to Task Library",
+    backToContent: "Back to content",
     transcriptSummary: "Transcript",
     generatedArtifactCount: "Generated artifacts",
     saveTitle: "Save task title",
     cancelTitleEdit: "Cancel title editing",
     taskInformation: "Task information",
     existingTags: "Existing tags",
+    taskDocuments: "Task documents",
+    markdownLoading: "Loading document…",
+    markdownLoadError: "This document could not be loaded. Try again.",
+    markdownEmpty: "This document is empty.",
+    noReadableMarkdown: "This task has no readable Markdown content yet.",
+    cardGeneratedContent: "Read latest generated content",
+    cardTranscriptOnly: "Read transcript",
+    cardNoContent: "View task status",
     available: "Available",
     unavailable: "Unavailable",
     artifactError: "Generation error",

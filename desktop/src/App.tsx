@@ -6,9 +6,24 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  ArrowLeft,
+  Books,
+  FileText,
+  GearSix,
+  HardDrives,
+  Microphone,
+  Plus,
+  SidebarSimple,
+  UploadSimple,
+  X,
+} from "@phosphor-icons/react";
 import { translations, getLocale, setLocale, type Locale } from "./i18n";
 import {
   runMeetingAsr,
+  resumeMeetingAsr,
+  scanRecordings,
+  recoverRecording,
   openTaskFolder,
   saveEnvKey,
   getRuntimeInfo,
@@ -22,6 +37,7 @@ import {
   getProviderSettings,
   setProviderSettings,
   type BackendKind,
+  type GenerationInput,
   type RuntimeMode,
   type RuntimePreflight,
   type LogEntry,
@@ -31,14 +47,17 @@ import {
   type PromptTemplateSummary,
   type ProviderCatalog,
   type ProviderSettingsInfo,
+  type RecordingTask,
 } from "./lib/meetingAsr";
 import { FilePicker } from "./components/FilePicker";
 import { RunControls } from "./components/RunControls";
+import { SaveTemporaryPromptPanel } from "./components/GenerationInputControl";
 import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
 import { TemplateManager } from "./components/TemplateManager";
 import { LocalModelManager } from "./components/LocalModelManager";
+import { RecordingWorkspace } from "./components/RecordingWorkspace";
 import voxlyAppIcon from "./assets/voxly-app-icon.png";
 import "./App.css";
 
@@ -66,11 +85,19 @@ function App() {
   const [theme, setTheme] = useState<Theme>(
     (localStorage.getItem("theme") as Theme) || "system"
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("sidebarCollapsed") !== "false"
+  );
   const [audioPath, setAudioPath] = useState<string | null>(null);
+  const [inputChoice, setInputChoice] = useState<"home" | "record" | "import">("home");
+  const [recordingTask, setRecordingTask] = useState<RecordingTask | null>(null);
+  const [recoverableRecordings, setRecoverableRecordings] = useState<RecordingTask[]>([]);
+  const [recordingRecoveryPending, setRecordingRecoveryPending] = useState<string | null>(null);
   const [outputMode, setOutputMode] = useState<OutputMode>("transcript_only");
   const [templates, setTemplates] = useState<PromptTemplateSummary[]>([]);
   const [templateIssues, setTemplateIssues] = useState<string[]>([]);
-  const [templateId, setTemplateId] = useState("structured-notes");
+  const [generationInput, setGenerationInput] = useState<GenerationInput>({ kind: "template", templateId: "structured-notes" });
+  const [temporaryPromptOffer, setTemporaryPromptOffer] = useState<string | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
   const [backend, setBackend] = useState<BackendKind>(() =>
     resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
@@ -89,11 +116,13 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showLogs, setShowLogs] = useState(false);
-  const [activeArea, setActiveArea] = useState<"workflow" | "library">("workflow");
+  const [activeArea, setActiveArea] = useState<"workflow" | "library" | "models" | "templates">("workflow");
   const [libraryOpened, setLibraryOpened] = useState(false);
   const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const workflowTabRef = useRef<HTMLButtonElement>(null);
   const libraryTabRef = useRef<HTMLButtonElement>(null);
+  const modelsTabRef = useRef<HTMLButtonElement>(null);
+  const templatesTabRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
@@ -196,6 +225,10 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    localStorage.setItem("sidebarCollapsed", String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
     setLocale(locale);
   }, [locale]);
 
@@ -228,6 +261,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void scanRecordings().then(setRecoverableRecordings).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let active = true;
     Promise.all([listProviders(), getProviderSettings()])
       .then(([catalog, settings]) => {
@@ -245,7 +282,7 @@ function App() {
     const catalog = await listPromptTemplates();
     setTemplates(catalog.templates);
     setTemplateIssues(catalog.issues.map((issue) => issue.message));
-    setTemplateId((current) => catalog.templates.some((template) => template.id === current) ? current : catalog.templates[0]?.id ?? "");
+    setGenerationInput((current) => current.kind === "temporary_prompt" || catalog.templates.some((template) => template.id === current.templateId) ? current : { kind: "template", templateId: catalog.templates[0]?.id ?? "" });
   }, []);
 
   useEffect(() => { void refreshTemplates().catch(() => { setTemplates([]); setTemplateIssues([t.templateSaveFailed]); }); }, [refreshTemplates]);
@@ -326,25 +363,27 @@ function App() {
     }
     setLogs([]);
     setErrorMessage("");
+    setTemporaryPromptOffer(null);
 
     try {
-      const result = await runMeetingAsr(
-        audioPath,
-        outputMode,
-        {
-          mimoApiKey,
-          deepseekApiKey,
-          backend,
-          templateId,
-          asrConfig: providerSettings.asr,
-          llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
-        },
-        {
-          onLog: queueLog,
-          onProgress: (event) => setProgress(event),
-          onDone: () => {},
-        }
-      );
+      const callbacks = { onLog: queueLog, onProgress: (event: ProgressEvent) => setProgress(event), onDone: () => {} };
+      const result = recordingTask
+        ? await resumeMeetingAsr(recordingTask.task_folder, {
+            outputMode, backend: "go", mimoApiKey, deepseekApiKey,
+            templateId: outputMode === "transcript_and_generate" && generationInput.kind === "template" ? generationInput.templateId : undefined,
+            temporaryPrompt: outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt" ? generationInput.prompt : undefined,
+          }, callbacks)
+        : await runMeetingAsr(
+            audioPath,
+            outputMode,
+            {
+              mimoApiKey, deepseekApiKey, backend,
+              templateId: outputMode === "transcript_and_generate" && generationInput.kind === "template" ? generationInput.templateId : undefined,
+              temporaryPrompt: outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt" ? generationInput.prompt : undefined,
+              asrConfig: providerSettings.asr,
+              llmConfig: outputMode === "transcript_and_generate" ? providerSettings.llm : undefined,
+            }, callbacks
+          );
 
       if (result.task_folder) setTaskFolder(result.task_folder);
       if (result.transcript_path) setTranscriptPath(result.transcript_path);
@@ -354,6 +393,7 @@ function App() {
 
       setStatus(t.completedSuccessfully);
       setStatusOk(true);
+      if (outputMode === "transcript_and_generate" && generationInput.kind === "temporary_prompt") setTemporaryPromptOffer(generationInput.prompt.trim());
       if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } catch (e) {
       const error = parseBackendError(String(e));
@@ -375,12 +415,46 @@ function App() {
     deepseekApiKey,
     providerSettings,
     backend,
-    templateId,
+    generationInput,
     t,
     queueLog,
     flushPendingLogs,
     libraryOpened,
+    recordingTask,
   ]);
+
+  const handleRecordingSaved = useCallback((task: RecordingTask) => {
+    setRecordingTask(task);
+    setAudioPath(task.audio_path);
+    setTaskFolder(task.task_folder);
+    setStatus(locale === "zh" ? "录音已保存。确认处理方式，或稍后从任务库继续。" : "Recording saved. Confirm how to process it, or continue later from the Task Library.");
+    setStatusOk(true);
+    setLibraryRefreshToken((token) => token + 1);
+    setRecoverableRecordings((items) => [task, ...items.filter((item) => item.task_id !== task.task_id)]);
+  }, [locale]);
+
+  const handleRecordingError = useCallback((message: string) => {
+    const parsed = parseBackendError(message).message;
+    const localized = parsed.toLocaleLowerCase().includes("recording task runtime")
+      ? t.recordingRuntimeFailed
+      : parsed;
+    setErrorMessage(localized);
+    setShowError(true);
+  }, [t.recordingRuntimeFailed]);
+
+  const handleRecoverRecording = useCallback(async (task: RecordingTask) => {
+    setRecordingRecoveryPending(task.task_id);
+    try {
+      const recovered = await recoverRecording(task.task_folder);
+      setRecoverableRecordings((items) => items.filter((item) => item.task_id !== task.task_id));
+      setInputChoice("record");
+      handleRecordingSaved(recovered);
+    } catch (error) {
+      handleRecordingError(String(error));
+    } finally {
+      setRecordingRecoveryPending(null);
+    }
+  }, [handleRecordingError, handleRecordingSaved]);
 
   const showWorkflow = useCallback(() => {
     setActiveArea("workflow");
@@ -393,15 +467,29 @@ function App() {
     void refreshPreflight();
   };
 
+  const showModels = () => {
+    setActiveArea("models");
+    void refreshPreflight();
+  };
+
+  const showTemplates = () => {
+    setActiveArea("templates");
+    void refreshTemplates();
+  };
+
   const handleWorkspaceTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault();
-    if (activeArea === "workflow") {
-      showLibrary();
-      requestAnimationFrame(() => libraryTabRef.current?.focus());
-    } else {
-      showWorkflow();
-    }
+    const areas = ["workflow", "library", "models", "templates"] as const;
+    const refs = [workflowTabRef, libraryTabRef, modelsTabRef, templatesTabRef];
+    const current = areas.indexOf(activeArea);
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    const next = (current + (forward ? 1 : areas.length - 1)) % areas.length;
+    if (areas[next] === "workflow") showWorkflow();
+    if (areas[next] === "library") showLibrary();
+    if (areas[next] === "models") showModels();
+    if (areas[next] === "templates") showTemplates();
+    requestAnimationFrame(() => refs[next].current?.focus());
   };
 
   const handleOpenFolder = useCallback(async () => {
@@ -618,6 +706,31 @@ function App() {
   const llmProviderLabel = llmDescriptor?.display_name[locale] ?? "DeepSeek";
   const asrModelLabel = asrDescriptor?.models.find((model) => model.id === providerSettings.asr.model_id)?.display_name[locale] ?? providerSettings.asr.model_id;
   const llmModelLabel = llmDescriptor?.models.find((model) => model.id === providerSettings.llm.model_id)?.display_name[locale] ?? providerSettings.llm.model_id;
+  const renderProviderCredential = (
+    descriptor: typeof asrDescriptor,
+    providerLabel: string,
+    fieldId: string
+  ) => {
+    const key = descriptor?.credential_key;
+    if (key !== "MIMO_API_KEY" && key !== "DEEPSEEK_API_KEY") return null;
+    const value = key === "MIMO_API_KEY" ? mimoApiKey : deepseekApiKey;
+    const setValue = key === "MIMO_API_KEY" ? setMimoApiKey : setDeepseekApiKey;
+    const credential = key === "MIMO_API_KEY" ? preflight?.mimo_api_key : preflight?.deepseek_api_key;
+    return (
+      <div className="provider-credential">
+        <div className="provider-credential-heading">
+          <label htmlFor={fieldId}>{providerLabel} API Key</label>
+          {credential && <span className={credential.status.configured ? "ready" : "not-ready"}>{credentialStatusText(credential)}</span>}
+        </div>
+        <div className="key-input-row">
+          <input id={fieldId} type="password" value={value} onChange={(event) => setValue(event.target.value)} placeholder={credentialPlaceholder} />
+          {runtimeMode === "development" && <button className="btn-secondary btn-save-key" onClick={() => handleSaveKey(key, value)} disabled={!value.trim()} title={t.saveToEnv}>{t.saveToEnv}</button>}
+        </div>
+        {saveStatus[key] && <span className="save-status">{saveStatus[key]}</span>}
+        <small>{runtimeMode === "production" ? t.productionCredentialsNote : t.keysNotPersisted}</small>
+      </div>
+    );
+  };
 	const privacySummary = (() => {
 		const audioCloud = asrDescriptor?.privacy.sends_audio_off_device ?? true;
 		const textCloud = llmDescriptor?.privacy.sends_text_off_device ?? true;
@@ -631,8 +744,11 @@ function App() {
 
   return (
     <div className="app-shell">
-      <div className="app">
-        <header className="app-header">
+      <a className="skip-link" href="#main-content">
+        {locale === "zh" ? "跳到主要内容" : "Skip to main content"}
+      </a>
+      <div className={`app ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+        <aside className="app-sidebar">
           <div className="brand-lockup">
             <img
               className="brand-mark"
@@ -646,10 +762,85 @@ function App() {
               <p className="subtitle">{t.appSubtitle}</p>
             </div>
           </div>
-          <div className="header-actions">
+
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            aria-label={sidebarCollapsed
+              ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
+              : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
+            title={sidebarCollapsed
+              ? (locale === "zh" ? "展开侧边栏" : "Expand sidebar")
+              : (locale === "zh" ? "折叠侧边栏" : "Collapse sidebar")}
+          >
+            <SidebarSimple aria-hidden="true" weight="bold" />
+          </button>
+
+          <nav
+            className="workspace-tabs"
+            role="tablist"
+            aria-label={t.workspaceNavigation}
+            onKeyDown={handleWorkspaceTabKeyDown}
+          >
+            <button
+              ref={workflowTabRef}
+              id="workflow-tab"
+              role="tab"
+              aria-selected={activeArea === "workflow"}
+              aria-controls="workflow-panel"
+              tabIndex={activeArea === "workflow" ? 0 : -1}
+              onClick={showWorkflow}
+              title={t.newTask}
+            >
+              <Plus aria-hidden="true" weight="bold" />
+              <span>{t.newTask}</span>
+            </button>
+            <button
+              ref={libraryTabRef}
+              id="library-tab"
+              role="tab"
+              aria-selected={activeArea === "library"}
+              aria-controls="library-panel"
+              tabIndex={activeArea === "library" ? 0 : -1}
+              onClick={showLibrary}
+              title={t.taskLibraryTitle}
+            >
+              <Books aria-hidden="true" weight="bold" />
+              <span>{t.taskLibraryTitle}</span>
+            </button>
+            <button
+              ref={modelsTabRef}
+              id="models-tab"
+              role="tab"
+              aria-selected={activeArea === "models"}
+              aria-controls="models-panel"
+              tabIndex={activeArea === "models" ? 0 : -1}
+              onClick={showModels}
+              title={t.settingsProviders}
+            >
+              <HardDrives aria-hidden="true" weight="bold" />
+              <span>{t.settingsProviders}</span>
+            </button>
+            <button
+              ref={templatesTabRef}
+              id="templates-tab"
+              role="tab"
+              aria-selected={activeArea === "templates"}
+              aria-controls="templates-panel"
+              tabIndex={activeArea === "templates" ? 0 : -1}
+              onClick={showTemplates}
+              title={locale === "zh" ? "模板" : "Templates"}
+            >
+              <FileText aria-hidden="true" weight="bold" />
+              <span>{locale === "zh" ? "模板" : "Templates"}</span>
+            </button>
+          </nav>
+
+          <div className="sidebar-footer">
             <span className="runtime-pill">
               <span className="runtime-dot" aria-hidden="true"></span>
-              {runtimeMode === "production" ? t.production : t.development}
+              <span className="runtime-label">{runtimeMode === "production" ? t.production : t.development}</span>
             </span>
             <button
               ref={settingsButtonRef}
@@ -659,42 +850,13 @@ function App() {
               aria-expanded={showSettings}
               aria-controls="settings-dialog"
             >
-              {t.settingsTitle}
+              <GearSix aria-hidden="true" weight="bold" />
+              <span>{t.settingsTitle}</span>
             </button>
           </div>
-        </header>
+        </aside>
 
-        <nav
-          className="workspace-tabs"
-          role="tablist"
-          aria-label={t.workspaceNavigation}
-          onKeyDown={handleWorkspaceTabKeyDown}
-        >
-          <button
-            ref={workflowTabRef}
-            id="workflow-tab"
-            role="tab"
-            aria-selected={activeArea === "workflow"}
-            aria-controls="workflow-panel"
-            tabIndex={activeArea === "workflow" ? 0 : -1}
-            onClick={() => setActiveArea("workflow")}
-          >
-            {t.newTask}
-          </button>
-          <button
-            ref={libraryTabRef}
-            id="library-tab"
-            role="tab"
-            aria-selected={activeArea === "library"}
-            aria-controls="library-panel"
-            tabIndex={activeArea === "library" ? 0 : -1}
-            onClick={showLibrary}
-          >
-            {t.taskLibraryTitle}
-          </button>
-        </nav>
-
-        <main className="main-content">
+        <main id="main-content" className="main-content" tabIndex={-1}>
           <div
             id="workflow-panel"
             role="tabpanel"
@@ -719,18 +881,47 @@ function App() {
                   <span>01</span>
                   <h3>{t.inputTitle}</h3>
                 </div>
-                <FilePicker
-                  audioPath={audioPath}
-                  onFileSelected={setAudioPath}
-                  disabled={isRunning}
-                  labels={{
-                    chooseFile: t.chooseFile,
-                    noFileSelected: t.noFileSelected,
-                    audioFile: t.audioFile,
-                  }}
-                />
+                {inputChoice === "home" && (
+                  <>
+                  <div className="input-choice-grid">
+                    <button className="input-choice-card primary" onClick={() => setInputChoice("record")} disabled={isRunning}>
+                      <span className="input-choice-icon record-icon" aria-hidden="true"><Microphone weight="bold" /></span>
+                      <strong>{locale === "zh" ? "开始录音" : "Start recording"}</strong>
+                      <small>{locale === "zh" ? "使用麦克风采集语音，停止后再确认处理。" : "Capture voice with your microphone, then choose how to process it."}</small>
+                    </button>
+                    <button className="input-choice-card" onClick={() => setInputChoice("import")} disabled={isRunning}>
+                      <span className="input-choice-icon" aria-hidden="true"><UploadSimple weight="bold" /></span>
+                      <strong>{locale === "zh" ? "导入音频" : "Import audio"}</strong>
+                      <small>{locale === "zh" ? "处理已有的 MP3、WAV 或 M4A 文件。" : "Process an existing MP3, WAV, or M4A file."}</small>
+                    </button>
+                  </div>
+                  {recoverableRecordings.length > 0 && <div className="recovery-list">
+                    <strong>{locale === "zh" ? "已保存与中断的录音" : "Saved and interrupted recordings"}</strong>
+                    {recoverableRecordings.slice(0, 5).map((task) => <div key={task.task_id}><span>{new Date(task.task_id.slice(0, 8).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")).toLocaleDateString()} · {task.status === "interrupted" ? (locale === "zh" ? "待恢复" : "Interrupted") : `${Math.round(task.duration_ms / 1000)}s`}</span>{task.status === "interrupted" ? <button className="btn-secondary" onClick={() => void handleRecoverRecording(task)} disabled={recordingRecoveryPending !== null || task.checkpoint_count === 0}>{recordingRecoveryPending === task.task_id ? (locale === "zh" ? "恢复中…" : "Recovering…") : (locale === "zh" ? "恢复录音" : "Recover")}</button> : <button className="btn-secondary" onClick={() => { setInputChoice("record"); handleRecordingSaved(task); }}>{locale === "zh" ? "继续处理" : "Continue"}</button>}</div>)}
+                  </div>}
+                  </>
+                )}
+                {inputChoice === "record" && (
+                  <>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}><ArrowLeft aria-hidden="true" />{locale === "zh" ? "返回输入方式" : "Back to input methods"}</button>
+                    <RecordingWorkspace locale={locale} disabled={isRunning} onSaved={handleRecordingSaved} onError={handleRecordingError} />
+                    {recordingTask?.audio_path && <div className="recording-saved-banner"><strong>{locale === "zh" ? "录音已保存" : "Recording saved"}</strong><span>{Math.round(recordingTask.duration_ms / 1000)}s · {recordingTask.checkpoint_count} {locale === "zh" ? "个安全分段" : "checkpoints"}</span></div>}
+                  </>
+                )}
+                {inputChoice === "import" && (
+                  <>
+                    <button className="link-button input-back" onClick={() => setInputChoice("home")} disabled={isRunning}><ArrowLeft aria-hidden="true" />{locale === "zh" ? "返回输入方式" : "Back to input methods"}</button>
+                    <FilePicker
+                      audioPath={audioPath}
+                      onFileSelected={(path) => { setRecordingTask(null); setAudioPath(path); }}
+                      disabled={isRunning}
+                      labels={{ chooseFile: t.chooseFile, noFileSelected: t.noFileSelected, audioFile: t.audioFile }}
+                    />
+                  </>
+                )}
               </div>
 
+              {audioPath && <>
               <div className="workflow-divider"></div>
 
               <div className="workflow-block">
@@ -742,8 +933,8 @@ function App() {
                   outputMode={outputMode}
                   onModeChange={setOutputMode}
                   templates={templates}
-                  templateId={templateId}
-                  onTemplateChange={setTemplateId}
+                  generationInput={generationInput}
+                  onGenerationInputChange={setGenerationInput}
                   locale={locale}
                   onStartRun={startRun}
                   isRunning={isRunning}
@@ -770,8 +961,10 @@ function App() {
                     myTemplates: t.myTemplates,
                   }}
                 />
+                {temporaryPromptOffer && <SaveTemporaryPromptPanel prompt={temporaryPromptOffer} locale={locale} onDismiss={() => setTemporaryPromptOffer(null)} onSaved={refreshTemplates} />}
 				<p className="privacy-summary">{privacySummary}</p>
               </div>
+              </>}
             </div>
           </section>
 
@@ -876,9 +1069,62 @@ function App() {
                 llmModelLabel={llmModelLabel}
                 llmConfig={providerSettings.llm}
                 onOpenSettings={handleOpenSettings}
+                onTemplatesChanged={refreshTemplates}
               />
             </div>
           )}
+
+          <div
+            id="models-panel"
+            role="tabpanel"
+            aria-labelledby="models-tab"
+            hidden={activeArea !== "models"}
+          >
+            <section className="management-page">
+              <header className="management-page-heading">
+                <span className="section-kicker">{locale === "zh" ? "处理配置" : "Processing configuration"}</span>
+                <h2>{t.settingsProviders}</h2>
+                <p>{t.settingsProvidersDesc}</p>
+              </header>
+              <div className="management-surface">
+                <div className="provider-settings-grid">
+                  <div className="provider-settings-card">
+                    <h4>{t.speechRecognition}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="models-asr-provider">{t.provider}</label><select id="models-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="models-asr-model">{t.model}</label><select id="models-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
+                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                    {renderProviderCredential(asrDescriptor, asrProviderLabel, "models-asr-credential")}
+                  </div>
+                  <div className="provider-settings-card">
+                    <h4>{t.generatedContentProvider}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="models-llm-provider">{t.provider}</label><select id="models-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="models-llm-model">{t.model}</label><select id="models-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
+                    <p className={llmPreflightMatchesSelection && preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{llmPreflightMatchesSelection && preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
+                    {renderProviderCredential(llmDescriptor, llmProviderLabel, "models-llm-credential")}
+                  </div>
+                </div>
+                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
+              </div>
+              <div className="management-surface"><LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} /></div>
+            </section>
+          </div>
+
+          <div
+            id="templates-panel"
+            role="tabpanel"
+            aria-labelledby="templates-tab"
+            hidden={activeArea !== "templates"}
+          >
+            <section className="management-page">
+              <header className="management-page-heading">
+                <span className="section-kicker">{locale === "zh" ? "内容生成" : "Content generation"}</span>
+                <h2>{t.settingsTemplates}</h2>
+                <p>{t.settingsTemplatesDesc}</p>
+              </header>
+              {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
+              <div className="management-surface"><TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, technicalDetails: t.technicalDetails, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} /></div>
+            </section>
+          </div>
         </main>
       </div>
 
@@ -907,13 +1153,13 @@ function App() {
                 onClick={handleCloseSettings}
                 aria-label={t.close}
               >
-                ×
+                <X aria-hidden="true" />
               </button>
             </div>
 
             <div className="modal-body settings-body">
-              <section className="settings-section">
-                <div className="settings-section-header settings-section-header-action">
+              <details className="settings-section settings-diagnostics">
+                <summary className="settings-section-header">
                   <div className="settings-section-title">
                     <span>01</span>
                     <div>
@@ -921,14 +1167,14 @@ function App() {
                       <p>{t.settingsReadinessDesc}</p>
                     </div>
                   </div>
-                  <button
-                    className="btn-secondary preflight-refresh"
-                    onClick={() => void refreshPreflight()}
-                    disabled={preflightLoading}
-                  >
-                    {preflightLoading ? t.checking : t.refresh}
-                  </button>
-                </div>
+                </summary>
+                <button
+                  className="btn-secondary preflight-refresh"
+                  onClick={() => void refreshPreflight()}
+                  disabled={preflightLoading}
+                >
+                  {preflightLoading ? t.checking : t.refresh}
+                </button>
 
                 {preflightError && (
                   <div className="preflight-error">{preflightError}</div>
@@ -1006,24 +1252,7 @@ function App() {
                     </div>
                   </div>
                 )}
-              </section>
-
-              <section className="settings-section about-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span aria-hidden="true">V</span>
-                    <div>
-                      <h3>{t.aboutTitle}</h3>
-                      <p>{t.aboutDescription}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="about-card">
-                  <strong>{t.aboutProductNames}</strong>
-                  <span>{t.aboutSubtitles}</span>
-                  <span>{t.aboutVersion}</span>
-                </div>
-              </section>
+              </details>
 
               <section className="settings-section">
                 <div className="settings-section-header">
@@ -1109,158 +1338,6 @@ function App() {
                   <div className="settings-section-title">
                     <span>04</span>
                     <div>
-                      <h3>{t.settingsCredentials}</h3>
-                      <p>{t.settingsCredentialsDesc}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="settings-note">
-                  <span className="warning-icon" aria-hidden="true">
-                    i
-                  </span>
-                  <span>
-                    {runtimeMode === "production"
-                      ? t.productionCredentialsNote
-                      : t.keysNotPersisted}
-                  </span>
-                </div>
-
-                {preflight && (
-                  <div className="credential-status-grid">
-                    <div className="credential-status-item">
-                      <span>{t.mimoApiKey}</span>
-                      <strong
-                        className={
-                          preflight.mimo_api_key.status.configured
-                            ? "ready"
-                            : "not-ready"
-                        }
-                      >
-                        {credentialStatusText(preflight.mimo_api_key)}
-                      </strong>
-                    </div>
-                    <div className="credential-status-item">
-                      <span>{t.deepseekApiKey}</span>
-                      <strong
-                        className={
-                          preflight.deepseek_api_key.status.configured
-                            ? "ready"
-                            : "not-ready"
-                        }
-                      >
-                        {credentialStatusText(preflight.deepseek_api_key)}
-                      </strong>
-                    </div>
-                  </div>
-                )}
-
-                <div className="credential-fields">
-                  <div className="form-group">
-                    <label htmlFor="settings-mimo-key">{t.mimoApiKey}</label>
-                    <div className="key-input-row">
-                      <input
-                        id="settings-mimo-key"
-                        type="password"
-                        value={mimoApiKey}
-                        onChange={(e) => setMimoApiKey(e.target.value)}
-                        placeholder={credentialPlaceholder}
-                      />
-                      {runtimeMode === "development" && (
-                        <button
-                          className="btn-secondary btn-save-key"
-                          onClick={() =>
-                            handleSaveKey("MIMO_API_KEY", mimoApiKey)
-                          }
-                          disabled={!mimoApiKey.trim()}
-                          title={t.saveToEnv}
-                        >
-                          {t.saveToEnv}
-                        </button>
-                      )}
-                    </div>
-                    {saveStatus["MIMO_API_KEY"] && (
-                      <span className="save-status">
-                        {saveStatus["MIMO_API_KEY"]}
-                      </span>
-                    )}
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="settings-deepseek-key">
-                      {t.deepseekApiKey}
-                    </label>
-                    <div className="key-input-row">
-                      <input
-                        id="settings-deepseek-key"
-                        type="password"
-                        value={deepseekApiKey}
-                        onChange={(e) => setDeepseekApiKey(e.target.value)}
-                        placeholder={credentialPlaceholder}
-                      />
-                      {runtimeMode === "development" && (
-                        <button
-                          className="btn-secondary btn-save-key"
-                          onClick={() =>
-                            handleSaveKey(
-                              "DEEPSEEK_API_KEY",
-                              deepseekApiKey
-                            )
-                          }
-                          disabled={!deepseekApiKey.trim()}
-                          title={t.saveToEnv}
-                        >
-                          {t.saveToEnv}
-                        </button>
-                      )}
-                    </div>
-                    {saveStatus["DEEPSEEK_API_KEY"] && (
-                      <span className="save-status">
-                        {saveStatus["DEEPSEEK_API_KEY"]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span>05</span>
-                    <div>
-                      <h3>{t.settingsProviders}</h3>
-                      <p>{t.settingsProvidersDesc}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="provider-settings-grid">
-                  <div className="provider-settings-card">
-                    <h4>{t.speechRecognition}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
-                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                  <div className="provider-settings-card">
-                    <h4>{t.generatedContentProvider}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-provider">{t.provider}</label><select id="settings-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-model">{t.model}</label><select id="settings-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
-                    <p className={preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                </div>
-                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
-                <LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} />
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header"><div className="settings-section-title"><span>06</span><div><h3>{t.settingsTemplates}</h3><p>{t.settingsTemplatesDesc}</p></div></div></div>
-                {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
-                <TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, technicalDetails: t.technicalDetails, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} />
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span>07</span>
-                    <div>
                       <h3>{t.settingsOutputLocation}</h3>
                       <p>{t.settingsOutputLocationDesc}</p>
                     </div>
@@ -1335,6 +1412,22 @@ function App() {
                   <div className="preflight-empty">{t.preflightPrompt}</div>
                 )}
               </section>
+
+              <section className="settings-section about-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <div>
+                      <h3>{t.aboutTitle}</h3>
+                      <p>{t.aboutDescription}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="about-card">
+                  <strong>{t.aboutProductNames}</strong>
+                  <span>{t.aboutSubtitles}</span>
+                  <span>{t.aboutVersion}</span>
+                </div>
+              </section>
             </div>
 
             <div className="modal-footer">
@@ -1357,7 +1450,7 @@ function App() {
           >
             <div className="modal-header">
               <div>
-                <span className="modal-eyebrow">Meeting ASR</span>
+                <span className="modal-eyebrow">{t.appKicker}</span>
                 <h2 id="error-title">{t.errorTitle}</h2>
               </div>
               <button
@@ -1365,7 +1458,7 @@ function App() {
                 onClick={() => setShowError(false)}
                 aria-label={t.close}
               >
-                ×
+                <X aria-hidden="true" />
               </button>
             </div>
             <div className="modal-body">

@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func TestReadTemporaryPrompt(t *testing.T) {
+	prompt, err := readTemporaryPrompt(strings.NewReader("  summarize decisions  \n"))
+	if err != nil || prompt != "summarize decisions" {
+		t.Fatalf("prompt = %q, err = %v", prompt, err)
+	}
+	for _, input := range []string{"", "   ", strings.Repeat("x", maxTemplateInstructions+1)} {
+		if _, err := readTemporaryPrompt(strings.NewReader(input)); err == nil {
+			t.Fatalf("input length %d was accepted", len(input))
+		}
+	}
+}
+
 // --- --env-file / --project-root integration tests ---
 
 func TestRunTranscribe_EnvFileExplicit(t *testing.T) {

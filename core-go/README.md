@@ -18,7 +18,7 @@ This is the actively developed processing runtime used by the desktop app.
 
 ## What it does NOT do
 
-- **No recording** — cannot record from microphone.
+- **No direct device capture** — the Tauri desktop owns microphone capture; Go owns recording-task manifests, recovery metadata, and downstream processing.
 - **No ffmpeg bundling** — requires external `ffmpeg` on PATH.
 
 The Python runtime is a deprecated development-only fallback and does not implement Processing Model V2.

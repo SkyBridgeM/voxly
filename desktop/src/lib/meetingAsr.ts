@@ -4,6 +4,9 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 export type BackendKind = "python" | "go";
 export type RuntimeMode = "development" | "production";
 export type OutputMode = "transcript_only" | "transcript_and_generate";
+export type GenerationInput =
+  | { kind: "template"; templateId: string }
+  | { kind: "temporary_prompt"; prompt: string };
 export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
 export type CredentialSource = "session" | "secure_store" | "env" | "missing";
 
@@ -133,6 +136,11 @@ export interface LocalModelStatus { model_id: string; model_version: string; sta
 export interface ModelProgressEvent { state: string; completed: number; total: number }
 export interface ModelDownloadSettings { huggingface_endpoint: string }
 
+export interface InputDeviceInfo { id: string; name: string; is_default: boolean }
+export interface RecordingTask { task_id: string; task_folder: string; checkpoints_dir: string; audio_path: string; status: string; duration_ms: number; checkpoint_count: number }
+export interface RecordingProgress { duration_ms: number; level: number; checkpoint_count: number }
+export interface RecordingState { active: boolean; paused: boolean; task: RecordingTask | null }
+
 export interface ArtifactSummary {
   kind: string;
   status: string;
@@ -183,6 +191,9 @@ export interface TaskSummary {
   canonical_transcript: ArtifactSummary | null;
   generated_content: GenerationGroup[];
   can_generate: boolean;
+  source_kind: string;
+  recording_status: string;
+  duration_ms: number;
 }
 
 export interface TaskMetadata {
@@ -237,6 +248,10 @@ export interface DiscoveryIssue {
 export interface DiscoveryResult {
   tasks: TaskSummary[];
   issues: DiscoveryIssue[];
+}
+
+export interface TaskArtifactContent {
+  content: string;
 }
 
 export interface BackendErrorInfo {
@@ -299,8 +314,14 @@ export async function deleteCustomTemplate(templateId: string, expectedCurrentRe
   await invoke("delete_custom_template", { input: { template_id: templateId, expected_current_revision: expectedCurrentRevision } });
 }
 
-export async function generateTaskContent(options: { taskFolder: string; templateId: string; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
-  return invoke("generate_task_content", { taskFolder: options.taskFolder, templateId: options.templateId, deepseekApiKey: options.deepseekApiKey || undefined, llmConfig: options.llmConfig });
+export async function generateTaskContent(options: { taskFolder: string; input: GenerationInput; deepseekApiKey?: string; llmConfig: ProviderSelection }): Promise<{ generation_id: string }> {
+  return invoke("generate_task_content", {
+    taskFolder: options.taskFolder,
+    templateId: options.input.kind === "template" ? options.input.templateId : undefined,
+    temporaryPrompt: options.input.kind === "temporary_prompt" ? options.input.prompt : undefined,
+    deepseekApiKey: options.deepseekApiKey || undefined,
+    llmConfig: options.llmConfig,
+  });
 }
 
 export async function listProviders(): Promise<ProviderCatalog> {
@@ -317,6 +338,17 @@ export const getModelDownloadSettings = () => invoke<ModelDownloadSettings>("get
 export const updateModelDownloadSettings = (endpoint: string) => invoke<ModelDownloadSettings>("update_model_download_settings", { endpoint });
 export const testHuggingFaceEndpoint = (endpoint: string) => invoke<{ endpoint: string; reachable: boolean }>("test_huggingface_endpoint", { endpoint });
 export const listenModelProgress = (handler: (event: ModelProgressEvent) => void) => listen<ModelProgressEvent>("model-progress", ({ payload }) => handler(payload));
+export const listInputDevices = () => invoke<InputDeviceInfo[]>("list_input_devices");
+export const startRecording = (deviceId?: string) => invoke<RecordingTask>("start_recording", { deviceId });
+export const pauseRecording = () => invoke<RecordingTask>("pause_recording");
+export const resumeRecording = () => invoke<RecordingTask>("resume_recording");
+export const stopRecording = () => invoke<RecordingTask>("stop_recording");
+export const cancelRecording = () => invoke<RecordingTask>("cancel_recording");
+export const getRecordingState = () => invoke<RecordingState>("get_recording_state");
+export const scanRecordings = () => invoke<RecordingTask[]>("scan_recordings");
+export const recoverRecording = (taskFolder: string) => invoke<RecordingTask>("recover_recording", { taskFolder });
+export const listenRecordingProgress = (handler: (event: RecordingProgress) => void) => listen<RecordingProgress>("recording-progress", ({ payload }) => handler(payload));
+export const listenRecordingError = (handler: (message: string) => void) => listen<string>("recording-error", ({ payload }) => handler(payload));
 
 export async function getProviderSettings(): Promise<ProviderSettingsInfo> {
   return invoke<ProviderSettingsInfo>("get_provider_settings");
@@ -349,6 +381,13 @@ export async function openTaskArtifact(
   return invoke("open_task_artifact", { taskFolder, artifactReference });
 }
 
+export async function readTaskArtifact(
+  taskFolder: string,
+  artifactReference: string
+): Promise<TaskArtifactContent> {
+  return invoke<TaskArtifactContent>("read_task_artifact", { taskFolder, artifactReference });
+}
+
 export async function revealTaskArtifact(
   taskFolder: string,
   artifactReference: string
@@ -377,6 +416,7 @@ export interface RunOptions {
   deepseekApiKey?: string;
   backend?: BackendKind;
   templateId?: string;
+  temporaryPrompt?: string;
   asrConfig: ProviderSelection;
   llmConfig?: ProviderSelection;
 }
@@ -434,6 +474,7 @@ export async function runMeetingAsr(
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
       templateId: options.templateId || undefined,
+      temporaryPrompt: options.temporaryPrompt || undefined,
       asrConfig: options.asrConfig,
       llmConfig: options.llmConfig,
     });
@@ -452,6 +493,8 @@ export async function resumeMeetingAsr(
     backend?: BackendKind;
     mimoApiKey?: string;
     deepseekApiKey?: string;
+    templateId?: string;
+    temporaryPrompt?: string;
   },
   callbacks: RunCallbacks
 ): Promise<RunResult> {
@@ -479,9 +522,11 @@ export async function resumeMeetingAsr(
     const result = await invoke<RunResult>("resume_meeting_asr", {
       taskDir,
       outputMode: options.outputMode || undefined,
-      backend: options.backend || "python",
+      backend: options.backend || "go",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
+      templateId: options.templateId || undefined,
+      temporaryPrompt: options.temporaryPrompt || undefined,
     });
     return result;
   } finally {

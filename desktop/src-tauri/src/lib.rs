@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 mod app_namespace;
 mod credentials;
+mod recording;
 use app_namespace::{migrate_app_namespace, AppNamespacePaths};
 use credentials::{
     resolve_credential, status_for, CredentialError, CredentialKey, CredentialSource,
@@ -422,6 +423,12 @@ struct TaskSummary {
     generated_content: Vec<GenerationGroup>,
     #[serde(default)]
     can_generate: bool,
+    #[serde(default)]
+    source_kind: String,
+    #[serde(default)]
+    recording_status: String,
+    #[serde(default)]
+    duration_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2065,9 +2072,22 @@ fn redact_lines(lines: &[String], secrets: &[String]) -> Vec<String> {
 fn spawn_and_watch(
     app: &AppHandle,
     active: &ActiveProcess,
-    mut cmd: Command,
+    cmd: Command,
     secrets: &[String],
 ) -> Result<ProcessRunner, BackendError> {
+    spawn_and_watch_with_stdin(app, active, cmd, secrets, None)
+}
+
+fn spawn_and_watch_with_stdin(
+    app: &AppHandle,
+    active: &ActiveProcess,
+    mut cmd: Command,
+    secrets: &[String],
+    stdin_payload: Option<&str>,
+) -> Result<ProcessRunner, BackendError> {
+    if stdin_payload.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2087,6 +2107,7 @@ fn spawn_and_watch(
 
     let stdout_stream = child.stdout.take().unwrap();
     let stderr_stream = child.stderr.take().unwrap();
+    let mut child_stdin = child.stdin.take();
 
     {
         let mut guard = active.child.lock().unwrap();
@@ -2098,6 +2119,31 @@ fn spawn_and_watch(
             });
         }
         *guard = Some(child);
+    }
+
+    if let Some(payload) = stdin_payload {
+        let write_result = child_stdin
+            .as_mut()
+            .ok_or_else(|| BackendError::ProcessFailed {
+                message: "Could not open the generation input channel.".to_string(),
+                code: None,
+            })
+            .and_then(|stdin| {
+                stdin
+                    .write_all(payload.as_bytes())
+                    .map_err(|_| BackendError::ProcessFailed {
+                        message: "Could not send generation instructions.".to_string(),
+                        code: None,
+                    })
+            });
+        drop(child_stdin);
+        if let Err(error) = write_result {
+            if let Some(mut child) = active.child.lock().unwrap().take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            return Err(error);
+        }
     }
 
     let stdout_lines = Arc::new(Mutex::new(Vec::new()));
@@ -2239,6 +2285,18 @@ impl ProcessRunner {
 // Command construction helpers
 // ---------------------------------------------------------------------------
 
+fn append_generation_input_args(
+    cmd: &mut Command,
+    template_id: Option<&str>,
+    uses_temporary_prompt: bool,
+) {
+    if let Some(template_id) = template_id {
+        cmd.arg("--template-id").arg(template_id);
+    } else if uses_temporary_prompt {
+        cmd.arg("--temporary-prompt-stdin");
+    }
+}
+
 fn build_python_command(
     audio_path: &str,
     output_mode: &str,
@@ -2318,6 +2376,7 @@ fn build_go_command(
     runtime_mode: RuntimeMode,
     packaged_executable_dir: Option<&Path>,
     template_id: Option<&str>,
+    uses_temporary_prompt: bool,
 ) -> Result<Command, BackendError> {
     let binary = discover_go_binary(runtime_mode, packaged_executable_dir)?;
     validate_go_binary(&binary)?;
@@ -2329,9 +2388,7 @@ fn build_go_command(
         .arg(output_mode)
         .arg("--output-dir")
         .arg(output_dir);
-    if let Some(template_id) = template_id {
-        cmd.arg("--template-id").arg(template_id);
-    }
+    append_generation_input_args(&mut cmd, template_id, uses_temporary_prompt);
     cmd.arg("--asr-provider")
         .arg(&providers.asr.provider_id)
         .arg("--asr-model")
@@ -2377,15 +2434,17 @@ fn build_go_command(
 // Shared exec-and-check helper
 // ---------------------------------------------------------------------------
 
-fn run_and_check(
+fn run_and_check_with_stdin(
     app: &AppHandle,
     active: &ActiveProcess,
     cmd: Command,
     output_mode: &str,
     expected_task_root: &Path,
     secrets: &[String],
+    stdin_payload: Option<&str>,
 ) -> Result<RunResult, String> {
-    let runner = spawn_and_watch(app, active, cmd, secrets).map_err(String::from)?;
+    let runner = spawn_and_watch_with_stdin(app, active, cmd, secrets, stdin_payload)
+        .map_err(String::from)?;
     let (code, stdout_lines, stderr_lines) = runner.wait()?;
 
     // Always emit process-done so the UI stops its progress view.
@@ -2436,6 +2495,7 @@ fn run_meeting_asr_blocking(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
     asr_config: ProviderSelection,
     llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
@@ -2448,6 +2508,25 @@ fn run_meeting_asr_blocking(
                 "Invalid output_mode: {}. Must be 'transcript_only' or 'transcript_and_generate'.",
                 output_mode
             ),
+        }
+        .into());
+    }
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    let has_template = template_id
+        .as_deref()
+        .is_some_and(|template| !template.trim().is_empty());
+    let has_prompt = temporary_prompt.is_some();
+    if output_mode == "transcript_and_generate" && has_template == has_prompt {
+        return Err(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }
+        .into());
+    }
+    if output_mode == "transcript_only" && (has_template || has_prompt) {
+        return Err(BackendError::InvalidInput {
+            message: "Generated-content input requires generated-content mode.".to_string(),
         }
         .into());
     }
@@ -2470,6 +2549,11 @@ fn run_meeting_asr_blocking(
     // Resolve backend.
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+    if backend_kind == BackendKind::Python && temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompts require the Go backend.".to_string(),
+        }));
+    }
     if backend_kind == BackendKind::Python && output_mode == "transcript_and_generate" {
         return Err(BackendError::InvalidInput { message: "Processing Model V2 generation is unavailable in the deprecated Python development fallback.".to_string() }.into());
     }
@@ -2555,6 +2639,7 @@ fn run_meeting_asr_blocking(
             runtime_mode,
             packaged_executable_dir.as_deref(),
             template_id.as_deref(),
+            has_prompt,
         )
         .map_err(String::from)?,
     };
@@ -2571,7 +2656,15 @@ fn run_meeting_asr_blocking(
         .chain(credentials.deepseek.iter())
         .cloned()
         .collect::<Vec<_>>();
-    run_and_check(&app, &active, cmd, &output_mode, &abs_out, &secrets)
+    run_and_check_with_stdin(
+        &app,
+        &active,
+        cmd,
+        &output_mode,
+        &abs_out,
+        &secrets,
+        temporary_prompt.as_deref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2585,6 +2678,7 @@ async fn run_meeting_asr(
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
     template_id: Option<String>,
+    temporary_prompt: Option<String>,
     asr_config: ProviderSelection,
     llm_config: Option<ProviderSelection>,
 ) -> Result<RunResult, String> {
@@ -2599,6 +2693,7 @@ async fn run_meeting_asr(
             mimo_api_key,
             deepseek_api_key,
             template_id,
+            temporary_prompt,
             asr_config,
             llm_config,
         )
@@ -2635,7 +2730,10 @@ fn find_go_manifest(task_dir: &Path) -> Option<PathBuf> {
 fn read_manifest_output_mode(manifest_path: &Path) -> Option<String> {
     let data = fs::read_to_string(manifest_path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
-    let mode = v.get("output_mode").and_then(|m| m.as_str())?;
+    let mode = v
+        .get("output_mode")
+        .and_then(|m| m.as_str())
+        .or_else(|| v.pointer("/execution/output_mode").and_then(|m| m.as_str()))?;
     match mode {
         "transcript" | "notes" | "minutes" | "transcript_only" | "transcript_and_generate" => {
             Some(mode.to_string())
@@ -2668,10 +2766,34 @@ fn resume_meeting_asr_blocking(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
 ) -> Result<RunResult, String> {
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    if temporary_prompt.is_some() && output_mode.as_deref() != Some("transcript_and_generate") {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompt requires generated-content mode.".to_string(),
+        }));
+    }
+    if temporary_prompt.is_some()
+        && template_id
+            .as_deref()
+            .is_some_and(|template| !template.trim().is_empty())
+    {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }));
+    }
     let runtime_mode = RuntimeMode::current();
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
+    if backend_kind == BackendKind::Python && temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Temporary prompts require the Go backend.".to_string(),
+        }));
+    }
 
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
@@ -2768,6 +2890,9 @@ fn resume_meeting_asr_blocking(
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
+            if let Some(ref template) = template_id {
+                c.arg("--template-id").arg(template);
+            }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
             c.env_remove("VOXLY_SENSEVOICE_WRAPPER");
@@ -2804,6 +2929,11 @@ fn resume_meeting_asr_blocking(
             if let Some(ref mode) = output_mode {
                 c.arg("--output-mode").arg(mode);
             }
+            append_generation_input_args(
+                &mut c,
+                template_id.as_deref(),
+                temporary_prompt.is_some(),
+            );
             if runtime_mode == RuntimeMode::Development {
                 if let Some(env) = env_file.as_ref() {
                     c.arg("--env-file").arg(env);
@@ -2836,7 +2966,15 @@ fn resume_meeting_asr_blocking(
         .cloned()
         .collect::<Vec<_>>();
 
-    run_and_check(&app, &active, cmd, &effective_mode, &output_root, &secrets)
+    run_and_check_with_stdin(
+        &app,
+        &active,
+        cmd,
+        &effective_mode,
+        &output_root,
+        &secrets,
+        temporary_prompt.as_deref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2849,6 +2987,8 @@ async fn resume_meeting_asr(
     backend: Option<String>,
     mimo_api_key: Option<String>,
     deepseek_api_key: Option<String>,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
 ) -> Result<RunResult, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -2860,6 +3000,8 @@ async fn resume_meeting_asr(
             backend,
             mimo_api_key,
             deepseek_api_key,
+            template_id,
+            temporary_prompt,
         )
     })
     .await
@@ -3761,10 +3903,22 @@ fn generate_task_content_blocking(
     app: AppHandle,
     active: ActiveProcess,
     task_folder: String,
-    template_id: String,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
     deepseek_api_key: Option<String>,
     llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
+    let temporary_prompt = temporary_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
+    let template_id = template_id
+        .map(|template| template.trim().to_string())
+        .filter(|template| !template.is_empty());
+    if template_id.is_some() == temporary_prompt.is_some() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "Choose exactly one generated-content input.".to_string(),
+        }));
+    }
     let output_root = resolve_task_library_output_root(&app)
         .map_err(|_| {
             String::from(BackendError::ArtifactValidationFailed {
@@ -3809,14 +3963,13 @@ fn generate_task_content_blocking(
     cmd.arg("generate-content")
         .arg("--task-dir")
         .arg(&task_dir)
-        .arg("--template-id")
-        .arg(&template_id)
         .arg("--templates-file")
         .arg(custom_templates_path(&app).map_err(String::from)?)
         .arg("--llm-provider")
         .arg(&llm_config.provider_id)
         .arg("--llm-model")
         .arg(&llm_config.model_id);
+    append_generation_input_args(&mut cmd, template_id.as_deref(), temporary_prompt.is_some());
     let isolated = isolated_go_project_root().map_err(String::from)?;
     cmd.arg("--project-root")
         .arg(&isolated)
@@ -3825,7 +3978,9 @@ fn generate_task_content_blocking(
         .env_remove("DEEPSEEK_API_KEY")
         .env("DEEPSEEK_API_KEY", &credential.value);
     let secrets = vec![credential.value];
-    let runner = spawn_and_watch(&app, &active, cmd, &secrets).map_err(String::from)?;
+    let runner =
+        spawn_and_watch_with_stdin(&app, &active, cmd, &secrets, temporary_prompt.as_deref())
+            .map_err(String::from)?;
     let (code, stdout, stderr) = runner.wait()?;
     let _ = app.emit("process-done", DoneEvent { code });
     if code != Some(0) {
@@ -3854,7 +4009,8 @@ async fn generate_task_content(
     app: AppHandle,
     active: State<'_, ActiveProcess>,
     task_folder: String,
-    template_id: String,
+    template_id: Option<String>,
+    temporary_prompt: Option<String>,
     deepseek_api_key: Option<String>,
     llm_config: ProviderSelection,
 ) -> Result<GenerateContentResult, String> {
@@ -3865,6 +4021,7 @@ async fn generate_task_content(
             active,
             task_folder,
             template_id,
+            temporary_prompt,
             deepseek_api_key,
             llm_config,
         )
@@ -3886,6 +4043,13 @@ async fn generate_task_content(
 enum TaskArtifactAction {
     Open,
     Reveal,
+}
+
+const MAX_MARKDOWN_ARTIFACT_BYTES: u64 = 5 * 1024 * 1024;
+
+#[derive(Clone, serde::Serialize)]
+struct TaskArtifactContent {
+    content: String,
 }
 
 fn validated_relative_hint(
@@ -4174,6 +4338,93 @@ async fn reveal_task_artifact(
     .await
 }
 
+fn read_validated_task_markdown(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    artifact_reference: &str,
+) -> Result<TaskArtifactContent, BackendError> {
+    let artifact =
+        resolve_validated_task_artifact(output_root, discovery, task_folder, artifact_reference)?;
+    let is_markdown = artifact
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+    if !is_markdown {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Only Markdown task artifacts can be previewed.".to_string(),
+        });
+    }
+    let metadata = artifact
+        .metadata()
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    if !metadata.is_file() || metadata.len() > MAX_MARKDOWN_ARTIFACT_BYTES {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Markdown artifact is unavailable for preview.".to_string(),
+        });
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    fs::File::open(&artifact)
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact could not be read. Refresh the Task Library.".to_string(),
+        })?
+        .take(MAX_MARKDOWN_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Artifact could not be read. Refresh the Task Library.".to_string(),
+        })?;
+    if bytes.len() as u64 > MAX_MARKDOWN_ARTIFACT_BYTES {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Markdown artifact is unavailable for preview.".to_string(),
+        });
+    }
+    let content = String::from_utf8(bytes).map_err(|_| BackendError::ArtifactValidationFailed {
+        message: "Markdown artifact is not valid UTF-8.".to_string(),
+    })?;
+    Ok(TaskArtifactContent { content })
+}
+
+fn read_task_artifact_blocking(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<TaskArtifactContent, String> {
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(|_| {
+            String::from(BackendError::ArtifactValidationFailed {
+                message: "Task Library output root is unavailable.".to_string(),
+            })
+        })?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty. Refresh the Task Library.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    read_validated_task_markdown(&output_root, &discovery, &task_folder, &artifact_reference)
+        .map_err(String::from)
+}
+
+#[tauri::command]
+async fn read_task_artifact(
+    app: AppHandle,
+    task_folder: String,
+    artifact_reference: String,
+) -> Result<TaskArtifactContent, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_task_artifact_blocking(app, task_folder, artifact_reference)
+    })
+    .await
+    .map_err(|_| task_artifact_worker_error())?
+}
+
 // ---------------------------------------------------------------------------
 // open_task_folder
 // ---------------------------------------------------------------------------
@@ -4299,6 +4550,7 @@ fn save_env_key(key: String, value: String) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(ActiveProcess::default())
+        .manage(recording::RecordingManager::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config = app.path().app_config_dir();
@@ -4324,6 +4576,15 @@ pub fn run() {
             open_output_root,
             open_task_folder,
             run_meeting_asr,
+            recording::list_input_devices,
+            recording::start_recording,
+            recording::pause_recording,
+            recording::resume_recording,
+            recording::stop_recording,
+            recording::cancel_recording,
+            recording::get_recording_state,
+            recording::scan_recordings,
+            recording::recover_recording,
             resume_meeting_asr,
             list_tasks,
             get_task_metadata,
@@ -4343,6 +4604,7 @@ pub fn run() {
             update_model_download_settings,
             test_huggingface_endpoint,
             generate_task_content,
+            read_task_artifact,
             open_task_artifact,
             reveal_task_artifact,
             get_credential_status,
@@ -4356,6 +4618,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
             app_handle.state::<ActiveProcess>().terminate();
+            recording::interrupt_active_recording(app_handle);
         }
     });
 }
@@ -4374,6 +4637,8 @@ mod tests {
     fn voxly_branding_metadata_is_consistent() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let cargo_manifest = include_str!("../Cargo.toml");
+        let info_plist = include_str!("../Info.plist");
         assert_eq!(config["productName"], "Voxly");
         assert_eq!(config["identifier"], "com.skybridgem.voxly");
         assert_eq!(config["version"], env!("CARGO_PKG_VERSION"));
@@ -4381,6 +4646,8 @@ mod tests {
             config["app"]["windows"][0]["title"],
             "Voxly — Local Voice Workspace"
         );
+        assert!(cargo_manifest.contains("name = \"Voxly\"\npath = \"src/main.rs\""));
+        assert!(info_plist.contains("<key>CFBundleDisplayName</key>\n  <string>Voxly</string>"));
         for icon in [
             "icons/32x32.png",
             "icons/128x128.png",
@@ -5471,6 +5738,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_temporary_prompt_uses_stdin_flag_without_prompt_in_argv() {
+        let prompt = "private one-time generation instructions";
+        let mut cmd = Command::new("meeting-asr-go");
+        append_generation_input_args(&mut cmd, None, true);
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["--temporary-prompt-stdin"]);
+        assert!(!args.iter().any(|arg| arg.contains(prompt)));
+
+        let mut template_cmd = Command::new("meeting-asr-go");
+        append_generation_input_args(&mut template_cmd, Some("structured-notes"), false);
+        let template_args = template_cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(template_args, vec!["--template-id", "structured-notes"]);
+    }
+
     // --- misc ---
 
     #[test]
@@ -6004,6 +6292,9 @@ mod tests {
                 canonical_transcript: None,
                 generated_content: Vec::new(),
                 can_generate: false,
+                source_kind: String::new(),
+                recording_status: String::new(),
+                duration_ms: 0,
             }],
             issues: Vec::new(),
         }
@@ -6073,6 +6364,81 @@ mod tests {
             assert!(called.get());
         }
         fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_read_task_artifact_returns_registered_markdown() {
+        let base = test_dir("voxly-read-task-markdown");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("transcript.md"), "# Transcript\n\nHello.").unwrap();
+
+        let result = read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "transcript.md"),
+            "task",
+            "transcript.md",
+        )
+        .unwrap();
+        assert_eq!(result.content, "# Transcript\n\nHello.");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_read_task_artifact_rejects_non_markdown_large_and_invalid_utf8() {
+        let base = test_dir("voxly-read-task-markdown-invalid");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+
+        fs::write(task.join("artifact.txt"), "text").unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "artifact.txt"),
+            "task",
+            "artifact.txt",
+        )
+        .is_err());
+
+        let large = task.join("large.md");
+        fs::File::create(&large)
+            .unwrap()
+            .set_len(MAX_MARKDOWN_ARTIFACT_BYTES + 1)
+            .unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "large.md"),
+            "task",
+            "large.md",
+        )
+        .is_err());
+
+        fs::write(task.join("invalid.md"), [0xff, 0xfe]).unwrap();
+        assert!(read_validated_task_markdown(
+            &root,
+            &artifact_discovery("task", "invalid.md"),
+            "task",
+            "invalid.md",
+        )
+        .is_err());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_read_task_artifact_reuses_registration_and_containment_checks() {
+        let base = test_dir("voxly-read-task-markdown-containment");
+        let root = base.join("root");
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("listed.md"), "safe").unwrap();
+        fs::write(task.join("other.md"), "not listed").unwrap();
+        let discovery = artifact_discovery("task", "listed.md");
+
+        for reference in ["other.md", "../escape.md", "/tmp/escape.md"] {
+            assert!(read_validated_task_markdown(&root, &discovery, "task", reference).is_err());
+        }
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]

@@ -238,7 +238,7 @@ No filesystem, shell, network, or opener permissions are granted.
   candidate is not committed.
 - No auto-update, system tray, or menu bar.
 - No FastAPI, database, task queue, or server backend.
-- No LAN mode, PWA, or browser recording.
+- No LAN mode, PWA, browser recording, system-audio capture, or real-time transcription.
 - No public production distribution. The only bundle path is the internal
   unsigned app-only smoke; installers and release artifacts remain deferred.
 - No normal resume or cancellation UI. Rust exposes resume for a future UI and

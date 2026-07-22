@@ -16,6 +16,8 @@ import (
 
 const transcriptHashContractVersion = 1
 
+const temporaryPromptTemplateID = "temporary-prompt"
+
 type ContentGenerator interface {
 	Generate(systemPrompt, userPrompt string, settings *Settings) (string, error)
 }
@@ -51,6 +53,9 @@ func relativeTaskReference(taskDir, path string) (string, error) {
 }
 
 func validateTemplateArtifactID(id string) error {
+	if id == temporaryPromptTemplateID {
+		return nil
+	}
 	if _, ok := builtInTemplates[id]; ok {
 		return nil
 	}
@@ -190,6 +195,22 @@ func GenerateContent(taskDir string, m *Manifest, templateID string, settings *S
 	if err != nil {
 		return nil, err
 	}
+	return generateContentWithTemplate(taskDir, m, template, settings, generator)
+}
+
+func GenerateContentWithPrompt(taskDir string, m *Manifest, prompt string, settings *Settings, generator ContentGenerator) (*taskmanifest.GenerationRecord, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" || len([]rune(prompt)) > maxTemplateInstructions {
+		return nil, fmt.Errorf("invalid_temporary_prompt: prompt is required and must be at most %d characters", maxTemplateInstructions)
+	}
+	template := PromptTemplate{ID: temporaryPromptTemplateID, Revision: 1, DisplayName: map[string]string{"en": "Temporary prompt", "zh": "临时提示词"}, Instructions: prompt, ContentType: "text/markdown", Extension: ".md"}
+	return generateContentWithTemplate(taskDir, m, template, settings, generator)
+}
+
+func generateContentWithTemplate(taskDir string, m *Manifest, template PromptTemplate, settings *Settings, generator ContentGenerator) (*taskmanifest.GenerationRecord, error) {
+	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
+		return nil, err
+	}
 	if m.CanonicalTranscript == nil || m.CanonicalTranscript.Status != "completed" {
 		return nil, fmt.Errorf("canonical transcript is not completed")
 	}
@@ -272,7 +293,12 @@ func ResumeOrGenerateContent(taskDir string, m *Manifest, settings *Settings, ge
 		}
 	}
 	if len(m.Generations) == 0 {
-		_, err := GenerateContent(taskDir, m, m.RequestedTemplateID, settings, generator)
+		var err error
+		if strings.TrimSpace(m.RequestedPrompt) != "" {
+			_, err = GenerateContentWithPrompt(taskDir, m, m.RequestedPrompt, settings, generator)
+		} else {
+			_, err = GenerateContent(taskDir, m, m.RequestedTemplateID, settings, generator)
+		}
 		return err
 	}
 	index := len(m.Generations) - 1

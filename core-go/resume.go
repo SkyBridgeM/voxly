@@ -19,6 +19,7 @@ func RunResume(args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	outputMode := fs.String("output-mode", "", "Output mode (transcript, notes, minutes)")
 	templateID := fs.String("template-id", "structured-notes", "Built-in generation template")
+	temporaryPromptStdin := fs.Bool("temporary-prompt-stdin", false, "Read one-time generation instructions from stdin")
 	envFile := fs.String("env-file", "", "Explicit path to .env file")
 	projectRoot := fs.String("project-root", "", "Explicit project root for .env lookup")
 	promptPath := fs.String("prompt-path", "", "Path to prompt template")
@@ -90,11 +91,27 @@ func RunResume(args []string) error {
 
 	// Inherit output mode from manifest unless explicitly overridden.
 	if outputModeExplicit && *outputMode != "" {
-		mode, template, err := normalizeProcessingSelection(*outputMode, *templateID)
-		if err != nil {
-			return err
+		if *temporaryPromptStdin {
+			if *outputMode != "transcript_and_generate" {
+				return fmt.Errorf("temporary prompt requires --output-mode transcript_and_generate")
+			}
+			prompt, err := readTemporaryPrompt(os.Stdin)
+			if err != nil {
+				return err
+			}
+			m.OutputMode = "transcript_and_generate"
+			m.RequestedTemplateID = ""
+			m.RequestedPrompt = prompt
+		} else {
+			mode, template, err := normalizeProcessingSelection(*outputMode, *templateID)
+			if err != nil {
+				return err
+			}
+			m.OutputMode, m.RequestedTemplateID = mode, template
+			m.RequestedPrompt = ""
 		}
-		m.OutputMode, m.RequestedTemplateID = mode, template
+	} else if *temporaryPromptStdin {
+		return fmt.Errorf("temporary prompt requires an explicit --output-mode transcript_and_generate")
 	} else if m.OutputMode == "" {
 		m.OutputMode = "transcript"
 	}
@@ -115,6 +132,12 @@ func RunResume(args []string) error {
 	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
 	settings.TemplateStorePath = *templatesFile
 	settings.AppDataRoot = *appDataRoot
+	m.Provider = settings.ASRProvider
+	m.Chunks.ASRProvider = settings.ASRProvider
+	m.Chunks.ASRModel = settings.MimoModel
+	if m.SourceKind == "microphone_recording" && m.Recording != nil && m.Recording.FinalAudioReference != "" && (m.Recording.Status == "cancelled" || m.Recording.Status == "interrupted") {
+		m.Recording.Status = "recovered"
+	}
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
 		return err
 	}
