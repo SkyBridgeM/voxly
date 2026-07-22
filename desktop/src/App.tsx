@@ -744,6 +744,7 @@ function App() {
               aria-controls="workflow-panel"
               tabIndex={activeArea === "workflow" ? 0 : -1}
               onClick={showWorkflow}
+              title={t.newTask}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
               <span>{t.newTask}</span>
@@ -756,6 +757,7 @@ function App() {
               aria-controls="library-panel"
               tabIndex={activeArea === "library" ? 0 : -1}
               onClick={showLibrary}
+              title={t.taskLibraryTitle}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v13H4zM7 3.5h10M8 10h8M8 14h5" /></svg>
               <span>{t.taskLibraryTitle}</span>
@@ -768,9 +770,10 @@ function App() {
               aria-controls="models-panel"
               tabIndex={activeArea === "models" ? 0 : -1}
               onClick={showModels}
+              title={t.settingsProviders}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7c0-2 3.1-3.5 7-3.5S19 5 19 7s-3.1 3.5-7 3.5S5 9 5 7Zm0 0v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5V7M5 12v5c0 2 3.1 3.5 7 3.5s7-1.5 7-3.5v-5" /></svg>
-              <span>{locale === "zh" ? "模型" : "Models"}</span>
+              <span>{t.settingsProviders}</span>
             </button>
             <button
               ref={templatesTabRef}
@@ -780,6 +783,7 @@ function App() {
               aria-controls="templates-panel"
               tabIndex={activeArea === "templates" ? 0 : -1}
               onClick={showTemplates}
+              title={locale === "zh" ? "模板" : "Templates"}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h9l3 3V20.5H6zM15 3.5v4h3M9 12h6M9 16h6" /></svg>
               <span>{locale === "zh" ? "模板" : "Templates"}</span>
@@ -1029,10 +1033,27 @@ function App() {
           >
             <section className="management-page">
               <header className="management-page-heading">
-                <span className="section-kicker">{locale === "zh" ? "本地运行时" : "Local runtime"}</span>
-                <h2>{locale === "zh" ? "模型" : "Models"}</h2>
-                <p>{locale === "zh" ? "管理 Voxly 使用的本地处理模型与运行资产。" : "Manage local processing models and runtime assets used by Voxly."}</p>
+                <span className="section-kicker">{locale === "zh" ? "处理配置" : "Processing configuration"}</span>
+                <h2>{t.settingsProviders}</h2>
+                <p>{t.settingsProvidersDesc}</p>
               </header>
+              <div className="management-surface">
+                <div className="provider-settings-grid">
+                  <div className="provider-settings-card">
+                    <h4>{t.speechRecognition}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="models-asr-provider">{t.provider}</label><select id="models-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="models-asr-model">{t.model}</label><select id="models-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
+                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
+                  </div>
+                  <div className="provider-settings-card">
+                    <h4>{t.generatedContentProvider}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="models-llm-provider">{t.provider}</label><select id="models-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="models-llm-model">{t.model}</label><select id="models-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
+                    <p className={llmPreflightMatchesSelection && preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{llmPreflightMatchesSelection && preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
+                  </div>
+                </div>
+                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
+              </div>
               <div className="management-surface"><LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} /></div>
             </section>
           </div>
@@ -1400,33 +1421,6 @@ function App() {
                 <div className="settings-section-header">
                   <div className="settings-section-title">
                     <span>05</span>
-                    <div>
-                      <h3>{t.settingsProviders}</h3>
-                      <p>{t.settingsProvidersDesc}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="provider-settings-grid">
-                  <div className="provider-settings-card">
-                    <h4>{t.speechRecognition}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
-                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                  <div className="provider-settings-card">
-                    <h4>{t.generatedContentProvider}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-provider">{t.provider}</label><select id="settings-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-model">{t.model}</label><select id="settings-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
-                    <p className={preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                </div>
-                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
-              </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span>06</span>
                     <div>
                       <h3>{t.settingsOutputLocation}</h3>
                       <p>{t.settingsOutputLocationDesc}</p>
