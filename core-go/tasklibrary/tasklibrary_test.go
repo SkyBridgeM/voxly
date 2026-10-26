@@ -429,3 +429,55 @@ func snapshotTree(t *testing.T, root string) map[string]fileSnapshot {
 	}
 	return result
 }
+
+func TestGenerationPartialOutputIsReadableButIncomplete(t *testing.T) {
+	retryable := true
+	root := t.TempDir()
+	m := manifestFor("v2-partial", "completed_with_errors", "2026-07-16T03:00:00Z", "transcript_and_generate")
+	m.SchemaVersion = taskmanifest.LatestSchemaVersion
+	m.RequestedTemplateID = "structured-notes"
+	m.Artifacts.Transcript.Path = "transcript.md"
+	m.CanonicalTranscript = &taskmanifest.CanonicalTranscript{TranscriptID: "canonical", RevisionID: "tr_1", ArtifactReference: "transcript.md", ContentSHA256: "hash", HashContractVersion: 1, CreatedAt: "2026-07-16T03:00:00Z", ASRProvider: "mimo", ASRModel: "model", Status: "completed"}
+	m.Generations = []taskmanifest.GenerationRecord{
+		{GenerationID: "gen_partial", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T03:01:00Z", UpdatedAt: "2026-07-16T03:01:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "one", Status: "failed", ArtifactReference: "generated/structured-notes/gen_partial.md", Error: &taskmanifest.ArtifactError{Code: "output_incomplete", Message: "safe", Retryable: &retryable}},
+		{GenerationID: "gen_failed", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T03:02:00Z", UpdatedAt: "2026-07-16T03:02:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "two", Status: "failed", Error: &taskmanifest.ArtifactError{Code: "generation_failed", Message: "safe", Retryable: &retryable}},
+		{GenerationID: "gen_missing", TemplateID: "structured-notes", TemplateRevision: 1, TemplateDisplayName: "Structured notes", TemplateInstructions: "notes", CreatedAt: "2026-07-16T03:03:00Z", UpdatedAt: "2026-07-16T03:03:00Z", SourceTranscriptRevisionID: "tr_1", SourceTranscriptSHA256: "hash", LLMProvider: "deepseek", LLMModel: "model", PromptCompositionVersion: 1, PromptHash: "three", Status: "failed", ArtifactReference: "generated/structured-notes/gen_missing.md", Error: &taskmanifest.ArtifactError{Code: "output_incomplete", Message: "safe", Retryable: &retryable}},
+	}
+	writeTask(t, root, "v2-partial", m)
+	artifactDir := filepath.Join(root, "v2-partial", "generated", "structured-notes")
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "gen_partial.md"), []byte("truncated body\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != 1 || len(result.Tasks[0].GeneratedContent) != 1 {
+		t.Fatalf("summary = %#v", result.Tasks)
+	}
+	versions := result.Tasks[0].GeneratedContent[0].Versions
+	if len(versions) != 3 {
+		t.Fatalf("versions = %#v", versions)
+	}
+	byID := make(map[string]GenerationSummary, len(versions))
+	for _, version := range versions {
+		byID[version.GenerationID] = version
+	}
+	partial := byID["gen_partial"]
+	if partial.Status != "failed" || !partial.PartialOutput || partial.ErrorCode != "output_incomplete" {
+		t.Fatalf("partial version = %#v", partial)
+	}
+	if partial.Reference != "generated/structured-notes/gen_partial.md" {
+		t.Fatalf("partial reference = %q", partial.Reference)
+	}
+	if failed := byID["gen_failed"]; failed.PartialOutput || failed.Reference != "" || failed.ErrorCode != "generation_failed" {
+		t.Fatalf("plain failure version = %#v", failed)
+	}
+	if missing := byID["gen_missing"]; missing.PartialOutput || missing.Reference != "" {
+		t.Fatalf("missing artifact version = %#v", missing)
+	}
+}

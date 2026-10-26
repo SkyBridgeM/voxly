@@ -1,5 +1,10 @@
 # Phase 3 Python/Go parity validation
 
+> **Historical validation harness.** Phase 3 is complete and Go is now the
+> active desktop runtime. This document remains the contract for the retained
+> parity tooling; its statements about Python being the current baseline or Go
+> not being the default backend are historical, not current product status.
+
 ## Goal and scope
 
 Phase 3 evaluates whether the experimental Go core is close enough to become the backend candidate for a future desktop shell. Python remains the stable reference implementation; Go is not the default backend and this phase does not remove or change Python.

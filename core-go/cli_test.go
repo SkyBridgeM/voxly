@@ -186,7 +186,7 @@ func TestRunTranscribe_NotesAliasRequiresDeepSeekKey(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "notes", audioPath})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), "--output-mode", "notes", audioPath})
 	if err == nil || !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
 		t.Fatalf("notes alias error = %v", err)
 	}
@@ -200,7 +200,7 @@ func TestRunTranscribe_MinutesModeRequiresDeepSeekKey(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "minutes", audioPath})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), "--output-mode", "minutes", audioPath})
 	if err == nil {
 		t.Fatal("expected error for missing DEEPSEEK_API_KEY in minutes mode")
 	}
@@ -216,7 +216,7 @@ func TestRunTranscribe_TranscriptModeNoDeepSeekKey(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, "--output-mode", "transcript", audioPath})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), "--output-mode", "transcript", audioPath})
 	if err != nil && strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
 		t.Errorf("transcript mode should not require DEEPSEEK_API_KEY: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestRunTranscribe_MissingAPIKey(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.mp3")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, audioPath})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), audioPath})
 	if err == nil {
 		t.Fatal("expected error for missing MIMO_API_KEY")
 	}
@@ -246,7 +246,7 @@ func TestRunTranscribe_InvalidAudioSuffix(t *testing.T) {
 	audioPath := filepath.Join(dir, "test.flac")
 	os.WriteFile(audioPath, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, audioPath})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), audioPath})
 	if err == nil {
 		t.Fatal("expected error for unsupported audio format")
 	}
@@ -264,7 +264,7 @@ func TestRunTranscribe_MultipleAudioPaths(t *testing.T) {
 	os.WriteFile(a, []byte("fake"), 0644)
 	os.WriteFile(b, []byte("fake"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, a, b})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), a, b})
 	if err == nil {
 		t.Fatal("expected error for multiple audio paths")
 	}
@@ -288,7 +288,7 @@ func TestRunTranscribe_AudioNotFound(t *testing.T) {
 	envPath := filepath.Join(dir, ".env")
 	os.WriteFile(envPath, []byte("MIMO_API_KEY=x\n"), 0644)
 
-	err := runTranscribe([]string{"--env-file", envPath, "/nonexistent/audio.mp3"})
+	err := runTranscribe([]string{"--env-file", envPath, "--output-dir", filepath.Join(dir, "out"), "/nonexistent/audio.mp3"})
 	if err == nil {
 		t.Fatal("expected error for missing audio file")
 	}
@@ -397,6 +397,7 @@ func TestRunTranscribe_LegacyMinutesProviderDoesNotOverrideV2LLMConfig(t *testin
 
 	err := runTranscribe([]string{
 		"--env-file", envPath,
+		"--output-dir", filepath.Join(dir, "out"),
 		"--output-mode", "minutes",
 		audioPath,
 	})
@@ -439,7 +440,7 @@ func TestRunResume_LegacyMinutesProviderDoesNotOverrideV2LLMConfig(t *testing.T)
 	}
 
 	// Create a manifest with chunk items so resume doesn't try to re-split.
-	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "meeting.wav"), "minutes", 5, 10, "mimo", "model")
+	m := CreateManifest(taskDir, filepath.Join(taskDir, "audio", "meeting.wav"), "minutes", 5, 10, "mimo", defaultMimoModel)
 	m.Chunks.Format = "wav"
 	m.Chunks.Total = 1
 	m.Chunks.Items = []ChunkItem{

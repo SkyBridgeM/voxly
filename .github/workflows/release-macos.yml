@@ -1,0 +1,38 @@
+name: Build macOS Alpha package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-go-toolchain
+      - name: Install frontend dependencies
+        run: npm --prefix desktop ci
+      - name: Prepare unsigned Apple Silicon Alpha
+        env:
+          VOXLY_RELEASE_OUTPUT: ${{ runner.temp }}/voxly-release
+          GOCACHE: ${{ runner.temp }}/go-build
+        run: ./scripts/build_macos_release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Voxly-macos-arm64-alpha
+          path: |
+            ${{ runner.temp }}/voxly-release/*.dmg
+            ${{ runner.temp }}/voxly-release/*.tar.gz
+            ${{ runner.temp }}/voxly-release/SHA256SUMS.txt
+            ${{ runner.temp }}/voxly-release/RELEASE-NOTES.md
+          if-no-files-found: error

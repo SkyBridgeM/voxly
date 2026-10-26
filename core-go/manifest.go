@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -204,6 +205,11 @@ func taskStatus(m *Manifest) string {
 	if m.State == TaskCreated {
 		return "created"
 	}
+	if m.State == TaskCancelled {
+		// A cancelled Task keeps every artifact it already finished; the missing
+		// work is exactly what a later resume continues.
+		return "cancelled"
+	}
 	if m.State == TaskCompleted {
 		for _, artifact := range requiredArtifacts(m) {
 			if artifact.State != ArtifactReady {
@@ -330,6 +336,11 @@ func PrepareArtifactsForResume(m *Manifest) error {
 }
 
 func IsRetryableError(err error) bool {
+	// A cancelled or timed-out request can be attempted again; both are
+	// transient by nature and must never make a version permanently unretryable.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	var clientErr *httpClientError
 	if errors.As(err, &clientErr) {
 		return clientErr.isRetriable()

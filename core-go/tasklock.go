@@ -48,6 +48,25 @@ func AcquireTaskLock(taskDir string) (*TaskLock, error) {
 	return &TaskLock{path: path, file: f}, nil
 }
 
+// ProbeTaskLock reports whether the Task lock is currently free, without
+// creating or rewriting the lock file: Task Library discovery must stay
+// read-only. It observes the same OS lock the runtime takes instead of guessing
+// a process id, and it reports "free" whenever nothing observable holds the
+// lock, because the runtime still refuses a real conflict when it locks.
+func ProbeTaskLock(taskDir string) bool {
+	path := filepath.Join(taskDir, ".resume.lock")
+	f, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	if err := lockTaskFile(f); err != nil {
+		return false
+	}
+	_ = unlockTaskFile(f)
+	return true
+}
+
 func (l *TaskLock) Release() error {
 	if l == nil || l.file == nil {
 		return nil

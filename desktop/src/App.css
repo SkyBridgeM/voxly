@@ -1762,7 +1762,103 @@ button:disabled {
 }
 
 .settings-modal {
-  width: min(100%, 760px);
+  width: min(100%, 900px);
+  height: min(88dvh, 720px);
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 164px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 20px 12px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.settings-navigation button {
+  justify-content: flex-start;
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.settings-navigation button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-accent);
+}
+
+.settings-navigation button[aria-current="page"] {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-weight: 650;
+}
+
+.settings-navigation button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-navigation button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-panel .settings-section-title > span {
+  display: none;
+}
+
+.settings-panel .provider-settings-grid {
+  grid-template-columns: 1fr;
+}
+
+.settings-body {
+  min-height: 340px;
+}
+
+@media (max-width: 640px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-navigation {
+    flex-direction: row;
+    gap: 4px;
+    padding: 10px 14px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .settings-navigation button {
+    min-height: 34px;
+    padding: 7px 10px;
+    white-space: nowrap;
+  }
+
+  .settings-body {
+    min-height: 0;
+  }
 }
 
 @keyframes modal-in {
@@ -2260,6 +2356,67 @@ button:disabled {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.form-group .form-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-bottom: 0;
+  color: var(--text-primary);
+  font-size: 0.73rem;
+  cursor: pointer;
+}
+
+.form-group .form-checkbox input[type="checkbox"] {
+  appearance: none;
+  display: grid;
+  place-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-elevated);
+  cursor: pointer;
+}
+
+.form-group .form-checkbox input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.form-group .form-checkbox input:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid var(--surface-elevated);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.form-group .form-checkbox input:focus {
+  box-shadow: none;
+}
+
+.form-group .form-checkbox input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.form-group .form-checkbox input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-group-help {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.73rem;
+  line-height: 1.65;
+}
+
 .readonly-field {
   display: flex;
   align-items: center;
@@ -2663,3 +2820,57 @@ textarea:focus-visible,
 .generation-group details {
   margin-top: 10px;
 }
+
+.library-cache > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.library-cache p,
+.library-cache ul {
+  margin: 10px 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.library-cache ul {
+  max-height: 180px;
+  overflow: auto;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.library-cache .btn-primary {
+  width: auto;
+}
+
+.storage-manager strong { display: block; margin: 14px 0; }
+.storage-help { color: var(--text-muted); font-size: 0.75rem; line-height: 1.7; margin: 8px 0; }
+.storage-sizes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 22px; margin: 12px 0; }
+.storage-sizes > div { display: flex; justify-content: space-between; gap: 12px; font-size: 0.78rem; }
+.storage-sizes dt { color: var(--text-secondary); }
+.storage-sizes dd { margin: 0; white-space: nowrap; }
+.storage-table-wrap { overflow: auto; max-height: 240px; margin: 16px 0; }
+.storage-manager table { width: 100%; border-collapse: collapse; font-size: 0.76rem; text-align: left; }
+.storage-manager th, .storage-manager td { padding: 9px 8px; border-bottom: 1px solid var(--border); }
+.storage-manager td:first-child { overflow-wrap: anywhere; }
+.storage-manager td:not(:first-child) { white-space: nowrap; }
+.storage-preferences { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.storage-manager label { display: flex; align-items: flex-start; gap: 9px; font-size: 0.8rem; line-height: 1.6; }
+.storage-manager input[type="checkbox"] { width: auto; flex-shrink: 0; margin-top: 4px; accent-color: var(--accent); }
+.storage-select-all { margin: 14px 0; }
+.storage-batch { margin-top: 18px; }
+.storage-batch h4 { font-size: 0.88rem; }
+.storage-batch-list { max-height: 320px; overflow: auto; margin: 12px 0; }
+.storage-batch-task { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.storage-batch-task details, .storage-batch-task p { margin: 5px 0 0 24px; font-size: 0.75rem; color: var(--text-secondary); }
+.storage-batch-task summary { cursor: pointer; }
+.storage-batch-task ul { padding-left: 18px; overflow-wrap: anywhere; }
+.storage-manager .btn-primary { width: auto; }
+@media (max-width: 520px) { .storage-sizes { grid-template-columns: minmax(0, 1fr); } }
+
+.library-cache .cache-scope { margin-top: 12px; }

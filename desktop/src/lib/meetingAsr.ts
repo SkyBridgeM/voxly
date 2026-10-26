@@ -21,6 +21,15 @@ export interface RunResult {
   generated_content_path: string | null;
 }
 
+export interface RetryGenerationResult {
+  generation_id: string;
+  status: string;
+}
+
+export interface CancelTaskResult {
+  state: string;
+}
+
 export interface RuntimeInfo {
   runtime_mode: RuntimeMode;
   backend: BackendKind;
@@ -69,6 +78,8 @@ export interface ProviderSelection {
 }
 
 export interface ProviderSettingsInfo {
+  local_asr_language: "zh" | "auto";
+  local_vad_enabled: boolean;
   asr: ProviderSelection;
   llm: ProviderSelection;
 }
@@ -141,6 +152,10 @@ export interface ArtifactSummary {
   retryable: boolean | null;
   provider: string;
   model: string;
+  /** Safe generation error code, when the runtime reported one. */
+  error_code?: string;
+  /** True when a failed generation kept a usable but incomplete body. */
+  partial?: boolean;
 }
 
 export interface GenerationSummary {
@@ -151,6 +166,8 @@ export interface GenerationSummary {
   created_at: string;
   reference: string | null;
   has_error: boolean;
+  error_code: string;
+  partial_output: boolean;
   retryable: boolean | null;
   legacy: boolean;
   provider: string;
@@ -162,6 +179,76 @@ export interface GenerationGroup {
   display_name: string;
   latest: GenerationSummary | null;
   versions: GenerationSummary[];
+}
+
+export interface CachePreview {
+  scope?: string;
+  can_clean: boolean;
+  reason?: string;
+  files: { reference: string; size_bytes: number }[];
+  total_bytes: number;
+  token?: string;
+  cache_status: string;
+  removed_bytes: number;
+}
+
+export const previewTaskCache = (taskFolder: string, textOnly = false) =>
+  invoke<CachePreview>("preview_task_cache", { taskFolder, textOnly });
+
+export const cleanTaskCache = (taskFolder: string, expectedToken: string, textOnly = false) =>
+  invoke<CachePreview>("clean_task_cache", { taskFolder, expectedToken, textOnly });
+
+export interface StorageSettings {
+  auto_clean_chunks: boolean;
+  cleanup_temporary_on_startup: boolean;
+}
+export interface TemporaryCleanup {
+  removed_bytes: number;
+  removed_count: number;
+  skipped_count: number;
+}
+export interface StorageSummary {
+  output_root: string;
+  categories: Record<string, number>;
+  total_bytes: number;
+  tasks: { folder: string; title: string; status: string; total_bytes: number; chunk_bytes: number }[];
+  issue_count: number;
+}
+export interface BatchCacheResult {
+  output_root: string;
+  tasks: { folder: string; title: string; preview: CachePreview }[];
+  removed_bytes: number;
+  cleaned_count: number;
+  skipped_count: number;
+  failed_count: number;
+}
+export const getStorageSettings = () => invoke<StorageSettings>("get_storage_settings");
+export const setStorageSettings = (settings: StorageSettings) => invoke<StorageSettings>("set_storage_settings", {
+  autoCleanChunks: settings.auto_clean_chunks,
+  cleanupTemporaryOnStartup: settings.cleanup_temporary_on_startup,
+});
+export const getStorageSummary = () => invoke<StorageSummary>("get_storage_summary");
+export const previewCacheBatch = () => invoke<BatchCacheResult>("preview_cache_batch");
+export const cleanCacheBatch = (request: { output_root: string; tasks: {folder: string; token: string}[] }) =>
+  invoke<BatchCacheResult>("clean_cache_batch", { request });
+export const runStorageMaintenance = (startup = false) => invoke<TemporaryCleanup>("run_storage_maintenance", { startup });
+
+export interface TaskActions {
+  locked: boolean;
+  /** Omitted by the runtime when the Task has no unfinished stage. */
+  next_stage?: string;
+  can_resume: boolean;
+  can_resume_transcribe: boolean;
+  can_resume_generation: boolean;
+  can_retry_generation: boolean;
+  pending_chunks: number;
+  blocking_reasons: TaskBlockingReason[];
+}
+
+/** One reason an action is unavailable. The code is stable so the UI can localize it. */
+export interface TaskBlockingReason {
+  code: string;
+  message: string;
 }
 
 export interface TaskSummary {
@@ -180,6 +267,8 @@ export interface TaskSummary {
   canonical_transcript: ArtifactSummary | null;
   generated_content: GenerationGroup[];
   can_generate: boolean;
+  /** Runtime-derived actions, absent on manifests written before the field existed. */
+  actions?: TaskActions | null;
 }
 
 export interface TaskMetadata {
@@ -319,8 +408,8 @@ export async function getProviderSettings(): Promise<ProviderSettingsInfo> {
   return invoke<ProviderSettingsInfo>("get_provider_settings");
 }
 
-export async function setProviderSettings(asr: ProviderSelection, llm: ProviderSelection): Promise<ProviderSettingsInfo> {
-  return invoke<ProviderSettingsInfo>("set_provider_settings", { asr, llm });
+export async function setProviderSettings(asr: ProviderSelection, llm: ProviderSelection, localAsrLanguage: "zh" | "auto", localVadEnabled: boolean): Promise<ProviderSettingsInfo> {
+  return invoke<ProviderSettingsInfo>("set_provider_settings", { asr, llm, localAsrLanguage, localVadEnabled });
 }
 
 export async function getOutputRoot(): Promise<OutputRootInfo> {
@@ -486,6 +575,67 @@ export async function resumeMeetingAsr(
       fn();
     }
   }
+}
+
+/**
+ * Continues an interrupted Task from the Task Library. The runtime decides which
+ * work is left, and resume adopts the speech identity the manifest recorded, so
+ * no session credential is sent here. The command is Go-only: no backend argument.
+ */
+export async function resumeTask(
+  taskFolder: string,
+  options?: { outputMode?: string; mimoApiKey?: string; deepseekApiKey?: string },
+  callbacks?: RunCallbacks
+): Promise<RunResult> {
+  const unlisteners: UnlistenFn[] = [];
+
+  const unlistenLog = await listen<LogEntry>("log-line", (event) => {
+    callbacks?.onLog(event.payload);
+  });
+  unlisteners.push(unlistenLog);
+
+  const unlistenProgress = await listen<ProgressEvent>("progress", (event) => {
+    callbacks?.onProgress(event.payload);
+  });
+  unlisteners.push(unlistenProgress);
+
+  const unlistenDone = await listen<{ code: number | null }>(
+    "process-done",
+    () => {
+      callbacks?.onDone();
+    }
+  );
+  unlisteners.push(unlistenDone);
+
+  try {
+    const result = await invoke<RunResult>("resume_task", {
+      taskFolder,
+      outputMode: options?.outputMode || undefined,
+    });
+    return result;
+  } finally {
+    for (const fn of unlisteners) {
+      fn();
+    }
+  }
+}
+
+/**
+ * Retries one user-selected failed generation under its original identity. It
+ * never creates a new generation: the same generation id, provider and model run
+ * again, and only process-done is reported.
+ */
+export async function retryTaskGeneration(options: { taskFolder: string; generationId: string; deepseekApiKey?: string }): Promise<RetryGenerationResult> {
+  return invoke<RetryGenerationResult>("retry_task_generation", { taskFolder: options.taskFolder, generationId: options.generationId, deepseekApiKey: options.deepseekApiKey || undefined });
+}
+
+/**
+ * Asks the active run to stop. The runtime stops cooperatively and forces a stop
+ * only after its grace period, so a stopping run still owns its artifacts and a
+ * new operation is rejected until the child exits.
+ */
+export async function cancelTask(): Promise<CancelTaskResult> {
+  return invoke<CancelTaskResult>("cancel_task");
 }
 
 export async function openTaskFolder(taskFolder: string): Promise<void> {

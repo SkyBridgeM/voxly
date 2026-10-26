@@ -156,7 +156,7 @@ func MissingRuntime(model Model) RuntimeReadiness {
 }
 
 func Status(root, catalogRevision string, model Model) Readiness {
-	return StatusWithRuntime(root, catalogRevision, model, MissingRuntime(model))
+	return StatusWithRuntime(root, catalogRevision, model, ProbeRuntime(model))
 }
 
 func StatusWithRuntime(root, catalogRevision string, model Model, runtimeStatus RuntimeReadiness) Readiness {
@@ -217,7 +217,7 @@ func StatusWithRuntime(root, catalogRevision string, model Model, runtimeStatus 
 		return status
 	}
 	status.State = "runtime_missing"
-	status.Message = "Model installed; the local speech runtime will arrive in the next implementation stage."
+	status.Message = "Model installed; the matching local speech runtime is missing or incompatible."
 	return status
 }
 

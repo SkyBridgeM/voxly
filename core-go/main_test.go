@@ -65,3 +65,16 @@ func TestReorderArgs_MixedOrder(t *testing.T) {
 		t.Errorf("reorderArgs(%v) = %v, want %v", input, got, want)
 	}
 }
+
+func TestReorderArgsCleanupBooleanAndEqualsBeforeInput(t *testing.T) {
+	for _, args := range [][]string{
+		{"--auto-clean-chunks", "input.wav", "--output-dir", "out"},
+		{"--auto-clean-chunks=true", "input.wav", "--output-dir", "out"},
+		{"--control-stdin", "input.wav", "--output-dir", "out"},
+	} {
+		reordered := reorderArgs(args)
+		if reordered[len(reordered)-1] != "input.wav" || reordered[len(reordered)-2] != "out" {
+			t.Fatalf("boolean option swallowed input: %v", reordered)
+		}
+	}
+}

@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Voxly — Local Voice Workspace",
+        "title": "Voxly \u2014 Local Voice Workspace",
         "width": 900,
         "height": 700
       }
@@ -22,12 +22,19 @@
     }
   },
   "bundle": {
+    "resources": {
+      "binaries/silero_vad.onnx": "silero_vad.onnx",
+      "resources/licenses/": "licenses/"
+    },
     "active": true,
     "targets": [
-      "app"
+      "app",
+      "dmg"
     ],
     "externalBin": [
-      "binaries/meeting-asr-go"
+      "binaries/meeting-asr-go",
+      "binaries/voxly-sensevoice-wrapper",
+      "binaries/ffmpeg"
     ],
     "icon": [
       "icons/32x32.png",

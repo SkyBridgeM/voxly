@@ -29,7 +29,18 @@ var artifactStatuses = map[string]struct{}{
 
 var taskStatuses = map[string]struct{}{
 	"created": {}, "processing": {}, "completed": {}, "completed_with_errors": {},
-	"failed": {}, "cleaned": {}, "archived": {},
+	"cancelled": {}, "failed": {}, "cleaned": {}, "archived": {},
+}
+
+// CacheCleanup records intentional removal of regenerable audio chunks.
+// cleaning is written before deletion so interrupted cleanup can be retried.
+type CacheCleanup struct {
+	Scope           string                     `json:"scope,omitempty"`
+	SourceReference string                     `json:"source_reference,omitempty"`
+	Status          string                     `json:"status"`
+	StartedAt       string                     `json:"started_at"`
+	CleanedAt       string                     `json:"cleaned_at,omitempty"`
+	UnknownFields   map[string]json.RawMessage `json:"-"`
 }
 
 type TaskManifest struct {
@@ -62,6 +73,7 @@ type TaskManifest struct {
 	CheckpointUnknownFields map[string]json.RawMessage `json:"-"`
 	CanonicalTranscript     *CanonicalTranscript       `json:"-"`
 	Generations             []GenerationRecord         `json:"-"`
+	CacheCleanup            *CacheCleanup              `json:"-"`
 }
 
 // CanonicalTranscript identifies the immutable transcript revision used by
@@ -102,11 +114,21 @@ type GenerationRecord struct {
 	UnknownFields              map[string]json.RawMessage `json:"-"`
 }
 
+// GenerationAttempt is one execution of a generation record. The identity,
+// completion and finish-reason fields are informational provenance: they record
+// what actually executed and how the provider reported stopping. They are
+// optional so manifests written before they existed keep loading unchanged.
 type GenerationAttempt struct {
-	Attempt   int            `json:"attempt"`
-	CreatedAt string         `json:"created_at"`
-	Status    string         `json:"status"`
-	Error     *ArtifactError `json:"error,omitempty"`
+	Attempt       int                        `json:"attempt"`
+	CreatedAt     string                     `json:"created_at"`
+	StartedAt     string                     `json:"started_at,omitempty"`
+	Status        string                     `json:"status"`
+	Error         *ArtifactError             `json:"error,omitempty"`
+	LLMProvider   string                     `json:"llm_provider,omitempty"`
+	LLMModel      string                     `json:"llm_model,omitempty"`
+	FinishReason  string                     `json:"finish_reason,omitempty"`
+	Completion    string                     `json:"completion,omitempty"`
+	UnknownFields map[string]json.RawMessage `json:"-"`
 }
 
 type SourceInfo struct {
@@ -194,6 +216,7 @@ type CheckpointMetadata struct {
 }
 
 type ChunksInfo struct {
+	VAD          *VADPlan    `json:"vad,omitempty"`
 	Format       string      `json:"format,omitempty"`
 	ChunkMinutes int         `json:"chunk_minutes"`
 	MaxUploadMB  float64     `json:"max_upload_mb"`
@@ -203,7 +226,14 @@ type ChunksInfo struct {
 	Items        []ChunkItem `json:"items"`
 }
 
+// ChunkItem is one audio chunk and its transcript. ASRProvider and ASRModel
+// record the engine that actually produced this chunk's transcript; they are
+// optional so manifests written before them keep loading, and a chunk
+// transcribed by an unknown engine stays unrecorded instead of being attributed
+// to a later configuration.
 type ChunkItem struct {
+	StartSample      int64   `json:"start_sample,omitempty"`
+	EndSample        int64   `json:"end_sample,omitempty"`
 	ID               string  `json:"id"`
 	AudioPath        string  `json:"audio_path"`
 	TranscriptPath   string  `json:"transcript_path"`
@@ -212,7 +242,27 @@ type ChunkItem struct {
 	SizeBytes        int64   `json:"size_bytes"`
 	AudioSHA256      string  `json:"audio_sha256,omitempty"`
 	TranscriptSHA256 string  `json:"transcript_sha256,omitempty"`
+	ASRProvider      string  `json:"asr_provider,omitempty"`
+	ASRModel         string  `json:"asr_model,omitempty"`
+	ModelVersion     string  `json:"model_version,omitempty"`
+	RuntimeID        string  `json:"runtime_id,omitempty"`
+	RuntimeVersion   string  `json:"runtime_version,omitempty"`
+	ASRLanguage      string  `json:"asr_language,omitempty"`
 	LastError        *string `json:"last_error,omitempty"`
+}
+
+// VADPlan and ChunkItem sample ranges are durable, independent of audio cache.
+// Artifact hashes commit time-aligned results before cache removal is allowed.
+type VADPlan struct {
+	Version       int    `json:"version"`
+	ModelSHA256   string `json:"model_sha256"`
+	Parameters    string `json:"parameters"`
+	Language      string `json:"language"`
+	SourceSHA256  string `json:"source_sha256"`
+	TotalSamples  int64  `json:"total_samples"`
+	Ready         bool   `json:"ready"`
+	ResultsSHA256 string `json:"results_sha256,omitempty"`
+	TimedSHA256   string `json:"timed_sha256,omitempty"`
 }
 
 type ArtifactError struct {
@@ -596,9 +646,10 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 		UserMetadata        *UserMetadata        `json:"user_metadata,omitempty"`
 		CanonicalTranscript *CanonicalTranscript `json:"canonical_transcript,omitempty"`
 		Generations         []GenerationRecord   `json:"generations,omitempty"`
+		CacheCleanup        *CacheCleanup        `json:"cache_cleanup,omitempty"`
 	}
 	var wire wireManifest
-	unknown, err := unmarshalWithUnknown(data, &wire, "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata", "canonical_transcript", "generations")
+	unknown, err := unmarshalWithUnknown(data, &wire, "schema_version", "task_id", "created_at", "updated_at", "execution", "input", "artifacts", "checkpoint", "user_metadata", "canonical_transcript", "generations", "cache_cleanup")
 	if err != nil {
 		return err
 	}
@@ -610,6 +661,7 @@ func (manifest *TaskManifest) UnmarshalJSON(data []byte) error {
 	manifest.UnknownFields = unknown
 	manifest.CanonicalTranscript = wire.CanonicalTranscript
 	manifest.Generations = wire.Generations
+	manifest.CacheCleanup = wire.CacheCleanup
 	manifest.Backend = wire.Execution.Backend
 	manifest.Provider = wire.Execution.Provider
 	manifest.OutputMode = wire.Execution.OutputMode
@@ -651,6 +703,7 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 		UserMetadata        *UserMetadata        `json:"user_metadata,omitempty"`
 		CanonicalTranscript *CanonicalTranscript `json:"canonical_transcript,omitempty"`
 		Generations         []GenerationRecord   `json:"generations,omitempty"`
+		CacheCleanup        *CacheCleanup        `json:"cache_cleanup,omitempty"`
 	}
 	wire := wireManifest{
 		SchemaVersion: manifest.SchemaVersion,
@@ -678,6 +731,7 @@ func (manifest TaskManifest) MarshalJSON() ([]byte, error) {
 		UserMetadata:        manifest.UserMetadata,
 		CanonicalTranscript: manifest.CanonicalTranscript,
 		Generations:         manifest.Generations,
+		CacheCleanup:        manifest.CacheCleanup,
 	}
 	return marshalWithUnknown(wire, manifest.UnknownFields)
 }
@@ -817,4 +871,28 @@ func (generation *GenerationRecord) UnmarshalJSON(data []byte) error {
 func (generation GenerationRecord) MarshalJSON() ([]byte, error) {
 	type plain GenerationRecord
 	return marshalWithUnknown(plain(generation), generation.UnknownFields)
+}
+
+func (attempt *GenerationAttempt) UnmarshalJSON(data []byte) error {
+	type plain GenerationAttempt
+	unknown, err := unmarshalWithUnknown(data, (*plain)(attempt), "attempt", "created_at", "started_at", "status", "error", "llm_provider", "llm_model", "finish_reason", "completion")
+	attempt.UnknownFields = unknown
+	return err
+}
+
+func (attempt GenerationAttempt) MarshalJSON() ([]byte, error) {
+	type plain GenerationAttempt
+	return marshalWithUnknown(plain(attempt), attempt.UnknownFields)
+}
+
+func (cleanup *CacheCleanup) UnmarshalJSON(data []byte) error {
+	type plain CacheCleanup
+	unknown, err := unmarshalWithUnknown(data, (*plain)(cleanup), "status", "started_at", "cleaned_at", "scope", "source_reference")
+	cleanup.UnknownFields = unknown
+	return err
+}
+
+func (cleanup CacheCleanup) MarshalJSON() ([]byte, error) {
+	type plain CacheCleanup
+	return marshalWithUnknown(plain(cleanup), cleanup.UnknownFields)
 }

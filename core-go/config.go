@@ -32,6 +32,10 @@ var supportedAudioSuffixes = map[string]bool{
 }
 
 type Settings struct {
+	UseVAD               bool
+	AutoCleanChunks      bool
+	LocalModelRoot       string
+	LocalASRLanguage     string
 	ASRProvider          string
 	MimoAPIKey           string
 	MimoEndpoint         string

@@ -1,6 +1,32 @@
 export type Locale = "zh" | "en";
 
 export interface Translations {
+  cacheScope: string;
+  cacheChunksOnly: string;
+  cacheTextOnly: string;
+  cacheTextOnlyDescription: string;
+  cacheTextOnlyConfirm: string;
+  cacheTextOnlyCleaned: string;
+  cacheNoAudio: string;
+
+  settingsNavigation: string;
+  settingsCategories: Record<"general" | "processing" | "connections" | "templates" | "storage" | "about", string>;
+  localVadEnabled: string;
+  localVadHelp: string;
+  artifactTimedTranscript: string;
+  artifactVADSegments: string;
+  localAsrLanguage: string;
+  localAsrChinese: string;
+  localAsrAuto: string;
+  localAsrLanguageHelp: string;
+  privacyLoading: string;
+  privacyLocalTranscript: string;
+  privacyCloudTranscript: string;
+  privacyLocalCloudGeneration: string;
+  privacyCloudGeneration: string;
+  privacyLocalGeneration: string;
+  privacyCloudLocalGeneration: string;
+  localModelStates: Record<string, string>;
   appTitle: string;
   appSubtitle: string;
   appKicker: string;
@@ -157,6 +183,51 @@ export interface Translations {
   filterByTag: string;
   allTasks: string;
   taskDetails: string;
+  storageTitle: string;
+  storageDescription: string;
+  storageTotal: string;
+  storageSource: string;
+  storageChunks: string;
+  storageTranscripts: string;
+  storageGenerated: string;
+  storageModels: string;
+  storageTemporary: string;
+  storageOther: string;
+  storageRefresh: string;
+  storageEstimate: string;
+  storageIssues: string;
+  storageAutoChunks: string;
+  storageAutoChunksHelp: string;
+  storageAutoTemporary: string;
+  storageAutoTemporaryHelp: string;
+  storageCleanTemporary: string;
+  storageTemporaryResult: string;
+  storageBatchPreview: string;
+  storageBatchConfirm: string;
+  storageBatchHelp: string;
+  storageSelectAll: string;
+  storageTask: string;
+  storageSize: string;
+  storageCleanedCount: string;
+  storageSkippedCount: string;
+  storageFailedCount: string;
+  storageNoTasks: string;
+  storageSaved: string;
+  cacheCleanup: string;
+  cachePreview: string;
+  cacheDescription: string;
+  cacheConfirm: string;
+  cacheWorking: string;
+  cacheReclaimable: string;
+  cacheCleaned: string;
+  cacheNoFiles: string;
+  cacheNotCompleted: string;
+  cacheBusy: string;
+  cacheSourceUnavailable: string;
+  cacheTranscriptUnverified: string;
+  cacheUnsafe: string;
+  cacheChanged: string;
+  cacheFailed: string;
   openTaskDetails: string;
   backToTaskLibrary: string;
   transcriptSummary: string;
@@ -166,8 +237,14 @@ export interface Translations {
   taskInformation: string;
   existingTags: string;
   available: string;
+  availablePartial: string;
   unavailable: string;
   artifactError: string;
+  generationIncomplete: string;
+  generationRefused: string;
+  generationUnverified: string;
+  generationEmpty: string;
+  generationCancelled: string;
   retryable: string;
   notRetryable: string;
   invalidDate: string;
@@ -176,6 +253,7 @@ export interface Translations {
   statusCompletedWithErrors: string;
   statusFailed: string;
   statusInterrupted: string;
+  statusCancelled: string;
   statusPending: string;
   statusProcessing: string;
   statusUnavailable: string;
@@ -231,10 +309,48 @@ export interface Translations {
   providerUnknown: string;
   providerNotReady: string;
   openSettings: string;
+  resumeTask: string;
+  resumeCancelled: string;
+  resumingTask: string;
+  stopTask: string;
+  stoppingTask: string;
+  pendingChunksHint: string;
+  blockedTaskLocked: string;
+  blockedSpeechProviderUnsupported: string;
+  blockedSpeechProviderUnavailable: string;
+  blockedSourceAudioMissing: string;
+  retryGeneration: string;
+  retryingGeneration: string;
+  retryKeepsIdentity: string;
+  newGenerationKeepsHistory: string;
+  uploadsAudioHint: string;
+  uploadsTextHint: string;
 }
 
 export const translations: Record<Locale, Translations> = {
   zh: {
+    localVadEnabled: "按讲话停顿分段（VAD）",
+    localVadHelp: "本地检测讲话区间，输出带时间的转写。长段仍会切分；时间与文字在清理音频缓存后保留。保存后用于新任务。",
+    artifactTimedTranscript: "带时间转写",
+    artifactVADSegments: "语音分段数据",
+    localAsrLanguage: "识别语言",
+    localAsrChinese: "中文（默认）",
+    localAsrAuto: "自动判断",
+    localAsrLanguageHelp: "中文访谈建议选中文；多语种录音可选自动判断，短句可能误判。保存后用于后续本地转写。",
+    privacyLoading: "正在读取语音识别配置…",
+    privacyLocalTranscript: "音频和转写文本均保存在本机，无需 API Key。",
+    privacyCloudTranscript: "音频将发送到所选云端语音识别服务；不会调用内容生成模型。",
+    privacyLocalCloudGeneration: "音频在本机转写；转写文本将发送到所选云端服务生成内容。",
+    privacyCloudGeneration: "音频将发送到云端转写，转写文本将发送到云端生成内容。",
+    privacyLocalGeneration: "转写和内容生成均在本机完成，音频与文本不会上传。",
+    privacyCloudLocalGeneration: "音频将发送到云端转写，后续内容生成在本机完成。",
+    localModelStates: {
+      ready: "已就绪，可离线转写", not_installed: "尚未安装模型",
+      runtime_missing: "模型已安装，但本地识别组件缺失或版本不兼容",
+      model_invalid: "模型校验未通过，请重新安装", unsupported_platform: "当前系统暂不支持此模型",
+      downloading: "正在下载模型…", verifying: "正在校验模型…", installing: "正在安装模型…",
+      storage_unavailable: "无法访问模型存储位置，请检查目录权限", error: "模型状态检查失败，请重试",
+    },
     appTitle: "声笺",
     appSubtitle: "本地语音工作台",
     appKicker: "Voxly",
@@ -329,10 +445,12 @@ export const translations: Record<Locale, Translations> = {
     preflightUnavailable: "运行就绪检查暂不可用。",
     preflightPrompt: "刷新后查看本机运行环境与配置状态。",
     chooseFileToBegin: "从一段会议录音开始",
-    chooseFileToBeginDesc: "选择本机音频文件，再选择转写、笔记准备或会议纪要。",
+    chooseFileToBeginDesc: "选择本机音频文件，直接转写，或按模板生成摘要、纪要等内容。",
     readyToRun: "已准备好开始",
     readyToRunDesc: "音频已选择。确认输出类型后即可开始处理。",
-    settingsIntro: "检查本机运行状态，并调整界面、处理后端与会话配置。",
+    settingsNavigation: "设置分类",
+    settingsCategories: { general: "通用", processing: "识别与生成", connections: "模型与连接", templates: "内容模板", storage: "存储", about: "关于与诊断" },
+    settingsIntro: "按分类调整工作台，管理识别、模型与本机文件。",
     settingsReadiness: "本机就绪状态",
     settingsReadinessDesc: "检查运行模式、后端和系统依赖，不发起在线请求。",
     settingsAppearance: "外观与语言",
@@ -392,6 +510,58 @@ export const translations: Record<Locale, Translations> = {
     filterByTag: "标签筛选",
     allTasks: "全部任务",
     taskDetails: "任务详情",
+    storageTitle: "存储管理",
+    storageDescription: "查看任务与模型占用，集中回收可再生成的处理缓存。",
+    storageTotal: "合计",
+    storageSource: "原音频",
+    storageChunks: "音频切片缓存",
+    storageTranscripts: "转写文件",
+    storageGenerated: "生成内容",
+    storageModels: "模型",
+    storageTemporary: "下载与解压临时文件",
+    storageOther: "其他及任务信息",
+    storageRefresh: "刷新存储统计",
+    storageEstimate: "按当前输出目录和应用数据目录中的文件大小估算；实际可用空间受文件系统影响。",
+    storageIssues: "未跟随链接、无法读取或格式异常的项目",
+    storageAutoChunks: "任务成功完成后自动清理音频切片",
+    storageAutoChunksHelp: "默认关闭。只用于此后新完成或继续完成的任务；失败或中断任务保留切片，不会追溯清理旧任务。",
+    storageAutoTemporary: "启动时回收过期临时文件",
+    storageAutoTemporaryHelp: "仅处理模型管理器生成、超过 7 天且未被占用的下载和解压残留；保留已安装模型与未知文件。",
+    storageCleanTemporary: "检查并清理过期临时文件",
+    storageTemporaryResult: "本次临时文件回收",
+    storageBatchPreview: "预览批量缓存清理",
+    storageBatchConfirm: "确认清理选中任务",
+    storageBatchHelp: "逐任务检查并选择，保留原音频和文本。任务或文件发生变化时跳过该任务，其余任务继续执行。",
+    storageSelectAll: "全选可清理任务",
+    storageTask: "任务",
+    storageSize: "任务占用",
+    storageCleanedCount: "已清理",
+    storageSkippedCount: "已跳过",
+    storageFailedCount: "未完成",
+    storageNoTasks: "当前输出位置没有可检查的任务。",
+    storageSaved: "清理偏好已保存",
+    cacheScope: "清理范围",
+    cacheChunksOnly: "仅清理音频切片",
+    cacheTextOnly: "仅保留文本（删除任务内音频）",
+    cacheTextOnlyDescription: "删除本任务的录音副本和音频切片，保留全文、时间转写、分段数据和所有生成版本。不删除导入的外部原文件。此操作无法撤销；删除后无法用本任务音频回听或重新识别，请先检查转写结果。",
+    cacheTextOnlyConfirm: "确认删除任务内音频，仅保留文本",
+    cacheTextOnlyCleaned: "任务内音频已删除，文本和时间结果已保留",
+    cacheNoAudio: "任务内已没有可清理的音频",
+    cacheCleanup: "音频与缓存",
+    cachePreview: "检查可清理空间",
+    cacheDescription: "仅回收已完成任务的音频切片。保留原音频、转写和所有生成版本；再次转写时会重新生成切片。",
+    cacheConfirm: "确认清理切片",
+    cacheWorking: "正在检查或清理…",
+    cacheReclaimable: "预计回收",
+    cacheCleaned: "处理缓存已清理",
+    cacheNoFiles: "没有可清理的音频切片",
+    cacheNotCompleted: "任务尚未完成，保留切片以便继续处理。",
+    cacheBusy: "任务正在使用中，请稍后重试。",
+    cacheSourceUnavailable: "原音频缺失或不符合校验要求，暂不能清理。",
+    cacheTranscriptUnverified: "完整转写未通过校验，暂不能清理。",
+    cacheUnsafe: "缓存目录包含异常文件，暂不能清理。",
+    cacheChanged: "任务或缓存已变化，请重新检查后再清理。",
+    cacheFailed: "操作未完成，请重新检查后再试。",
     openTaskDetails: "打开任务详情",
     backToTaskLibrary: "返回任务库",
     transcriptSummary: "转写",
@@ -401,8 +571,14 @@ export const translations: Record<Locale, Translations> = {
     taskInformation: "任务信息",
     existingTags: "已有标签",
     available: "可用",
+    availablePartial: "可查看（正文不完整）",
     unavailable: "不可用",
     artifactError: "生成出错",
+    generationIncomplete: "输出被截断，正文不完整",
+    generationRefused: "内容服务拒绝了本次生成",
+    generationUnverified: "无法确认输出是否完整",
+    generationEmpty: "内容服务未返回正文",
+    generationCancelled: "本次生成已被取消",
     retryable: "可重试",
     notRetryable: "不可重试",
     invalidDate: "时间未知",
@@ -411,6 +587,7 @@ export const translations: Record<Locale, Translations> = {
     statusCompletedWithErrors: "完成但有错误",
     statusFailed: "失败",
     statusInterrupted: "已中断",
+    statusCancelled: "已取消",
     statusPending: "等待中",
     statusProcessing: "处理中",
     statusUnavailable: "不可用",
@@ -435,7 +612,7 @@ export const translations: Record<Locale, Translations> = {
     legacyArtifact: "旧版输出",
     settingsProviders: "服务商与模型",
 	localModelTitle: "本地语音识别", localModelDescription: "管理声笺应用数据中的官方 SenseVoice 模型。模型安装不会写入任务目录。", localChineseFirst: "中文为主", localModelStatus: "状态",
-	localNotInstalled: "未安装", localRuntimeMissing: "模型已安装，运行时待提供", localModelInvalid: "模型无效，请重新安装", localUnsupported: "当前平台暂不支持",
+	localNotInstalled: "未安装", localRuntimeMissing: "模型已安装，但本地识别组件缺失或版本不兼容", localModelInvalid: "模型无效，请重新安装", localUnsupported: "当前平台暂不支持",
 	localDownload: "下载模型", localImport: "导入官方模型", localCancel: "取消", localDelete: "删除模型", localSource: "官方来源", localSize: "下载大小",
 	localAdvanced: "高级下载设置", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "测试连接", localEndpointReachable: "连接可用", localOperationFailed: "本地模型操作失败，现有模型未被修改。", localConfirmDelete: "删除已安装的 SenseVoice 模型？任务和历史记录不会被删除。", localPrivacyTitle: "隐私：", localPrivacyBody: "选择本地语音识别时，原始音频不会发送到云端。若使用云端内容生成，转写文本仍会发送给所选服务。",
 	localEndpointScope: "仅适用于未来由 Hugging Face 托管且目录声明兼容的模型。当前 SenseVoice 固定从 k2-fsa GitHub Release 下载；此设置和连接测试不会改变或测试 SenseVoice 下载源。",
@@ -465,8 +642,46 @@ export const translations: Record<Locale, Translations> = {
     providerUnknown: "旧版 / 未知",
     providerNotReady: "当前服务配置尚未就绪。",
     openSettings: "打开设置",
+    resumeTask: "继续处理",
+    resumeCancelled: "本次继续处理已取消",
+    resumingTask: "正在继续处理…",
+    stopTask: "停止任务",
+    stoppingTask: "正在停止…",
+    pendingChunksHint: "待处理的音频分片",
+    blockedTaskLocked: "另一个进程正在处理此任务，暂时无法继续。",
+    blockedSpeechProviderUnsupported: "此任务记录的语音识别服务已不受支持，无法继续。",
+    blockedSpeechProviderUnavailable: "此任务记录的语音识别运行时尚不可用，无法继续。",
+    blockedSourceAudioMissing: "此任务的原始音频已丢失，无法继续分割。",
+    retryGeneration: "重试此版本",
+    retryingGeneration: "正在重试…",
+    retryKeepsIdentity: "重试沿用原版本与服务商",
+    newGenerationKeepsHistory: "将生成新版本，已有版本保持不变。",
+    uploadsAudioHint: "继续处理会把音频发送到云端语音识别服务。",
+    uploadsTextHint: "此操作会把转写文本发送到云端内容服务。",
   },
   en: {
+    localVadEnabled: "Segment by speech pauses (VAD)",
+    localVadHelp: "Detect speech locally and save timed transcripts. Long speech is still split. Text and timing survive cache cleanup. Save to apply to new tasks.",
+    artifactTimedTranscript: "Timed transcript",
+    artifactVADSegments: "Speech segment data",
+    localAsrLanguage: "Recognition language",
+    localAsrChinese: "Chinese (default)",
+    localAsrAuto: "Detect automatically",
+    localAsrLanguageHelp: "Use Chinese for Chinese interviews. Auto detection supports multilingual recordings but may misidentify short phrases. Save to apply to subsequent local runs.",
+    privacyLoading: "Loading speech recognition settings…",
+    privacyLocalTranscript: "Audio and transcripts stay on this device. No API key is needed.",
+    privacyCloudTranscript: "Audio is sent to the selected cloud speech service. No content-generation model is called.",
+    privacyLocalCloudGeneration: "Audio is transcribed on this device; the transcript is sent to the selected cloud service for content generation.",
+    privacyCloudGeneration: "Audio is sent to the cloud for transcription, then the transcript is sent to the cloud for content generation.",
+    privacyLocalGeneration: "Transcription and content generation run on this device. Audio and text are not uploaded.",
+    privacyCloudLocalGeneration: "Audio is sent to the cloud for transcription; content generation runs on this device.",
+    localModelStates: {
+      ready: "Ready for offline transcription", not_installed: "Model not installed",
+      runtime_missing: "Model installed; local recognition component missing or incompatible",
+      model_invalid: "Model verification failed; reinstall required", unsupported_platform: "Model unsupported on this system",
+      downloading: "Downloading model…", verifying: "Verifying model…", installing: "Installing model…",
+      storage_unavailable: "Model storage unavailable; check directory permissions", error: "Could not check model status. Try again.",
+    },
     appTitle: "Voxly",
     appSubtitle: "Local Voice Workspace",
     appKicker: "声笺",
@@ -561,10 +776,12 @@ export const translations: Record<Locale, Translations> = {
     preflightUnavailable: "Runtime readiness check is unavailable.",
     preflightPrompt: "Refresh to inspect this Mac's runtime and configuration status.",
     chooseFileToBegin: "Start with a meeting recording",
-    chooseFileToBeginDesc: "Choose a local audio file, then select transcript, notes preparation, or meeting minutes.",
+    chooseFileToBeginDesc: "Choose an audio file to transcribe, or generate a summary, meeting minutes, or other content using a template.",
     readyToRun: "Ready to begin",
     readyToRunDesc: "Your audio is selected. Confirm the output type, then start processing.",
-    settingsIntro: "Inspect local readiness and adjust appearance, processing, and session configuration.",
+    settingsNavigation: "Settings categories",
+    settingsCategories: { general: "General", processing: "Transcription", connections: "Models & connections", templates: "Templates", storage: "Storage", about: "About & diagnostics" },
+    settingsIntro: "Manage your workspace, transcription, models, and local files.",
     settingsReadiness: "Local readiness",
     settingsReadinessDesc: "Checks runtime policy, backend, and system dependencies without making online requests.",
     settingsAppearance: "Appearance and language",
@@ -624,6 +841,58 @@ export const translations: Record<Locale, Translations> = {
     filterByTag: "Filter by tag",
     allTasks: "All tasks",
     taskDetails: "Task details",
+    storageTitle: "Storage management",
+    storageDescription: "Review task and model storage, and reclaim regenerable processing cache.",
+    storageTotal: "Total",
+    storageSource: "Original audio",
+    storageChunks: "Audio chunk cache",
+    storageTranscripts: "Transcripts",
+    storageGenerated: "Generated content",
+    storageModels: "Models",
+    storageTemporary: "Download and extraction temporary files",
+    storageOther: "Other files and task metadata",
+    storageRefresh: "Refresh storage usage",
+    storageEstimate: "Estimated from file sizes in the current output and app data folders; actual free space depends on the filesystem.",
+    storageIssues: "Unreadable, linked, overlapping or invalid entries",
+    storageAutoChunks: "Automatically clean audio chunks after successful task completion",
+    storageAutoChunksHelp: "Off by default. Applies to subsequent successful task completion or resume; failed and interrupted tasks keep chunks. Existing tasks are not swept.",
+    storageAutoTemporary: "Reclaim expired temporary files on startup",
+    storageAutoTemporaryHelp: "Only manager-owned download and extraction leftovers older than 7 days and not in use. Installed models and unknown files are kept.",
+    storageCleanTemporary: "Check and clean expired temporary files",
+    storageTemporaryResult: "Temporary entries reclaimed",
+    storageBatchPreview: "Preview batch cache cleanup",
+    storageBatchConfirm: "Confirm cleanup for selected tasks",
+    storageBatchHelp: "Review and select tasks. Original audio and text are kept. Changed tasks are skipped while others continue.",
+    storageSelectAll: "Select all eligible tasks",
+    storageTask: "Task",
+    storageSize: "Task size",
+    storageCleanedCount: "Cleaned",
+    storageSkippedCount: "Skipped",
+    storageFailedCount: "Failed",
+    storageNoTasks: "No tasks to inspect in the current output folder.",
+    storageSaved: "Cleanup preferences saved",
+    cacheScope: "Cleanup scope",
+    cacheChunksOnly: "Audio chunks only",
+    cacheTextOnly: "Keep text only (remove task audio)",
+    cacheTextOnlyDescription: "Remove this task’s recording copy and audio chunks. Keep transcripts, timing data and all generated versions. The external imported file is untouched. This cannot be undone; check the transcript first, because this task will no longer contain audio for playback or retranscription.",
+    cacheTextOnlyConfirm: "Confirm: remove task audio and keep text",
+    cacheTextOnlyCleaned: "Task audio removed; text and timing results retained",
+    cacheNoAudio: "No task audio remains to clean",
+    cacheCleanup: "Audio & cache",
+    cachePreview: "Check reclaimable space",
+    cacheDescription: "Remove audio chunks from completed tasks. Original audio, transcripts and all generated versions are kept; retranscription recreates chunks.",
+    cacheConfirm: "Confirm chunk cleanup",
+    cacheWorking: "Checking or cleaning…",
+    cacheReclaimable: "Estimated reclaimable space",
+    cacheCleaned: "Processing cache cleaned",
+    cacheNoFiles: "No audio chunks to clean",
+    cacheNotCompleted: "Keep chunks until the task completes so processing can continue.",
+    cacheBusy: "The task is in use. Try again later.",
+    cacheSourceUnavailable: "Original audio is missing or cannot be verified. Cleanup is unavailable.",
+    cacheTranscriptUnverified: "The complete transcript could not be verified. Cleanup is unavailable.",
+    cacheUnsafe: "The cache contains unexpected files. Cleanup is unavailable.",
+    cacheChanged: "The task or cache changed. Check again before cleaning.",
+    cacheFailed: "The operation did not complete. Check again and retry.",
     openTaskDetails: "Open task details",
     backToTaskLibrary: "Back to Task Library",
     transcriptSummary: "Transcript",
@@ -633,8 +902,14 @@ export const translations: Record<Locale, Translations> = {
     taskInformation: "Task information",
     existingTags: "Existing tags",
     available: "Available",
+    availablePartial: "Viewable (incomplete text)",
     unavailable: "Unavailable",
     artifactError: "Generation error",
+    generationIncomplete: "The output was truncated, so the text is incomplete",
+    generationRefused: "The content service declined this request",
+    generationUnverified: "The output could not be verified as complete",
+    generationEmpty: "The content service returned no text",
+    generationCancelled: "This generation was cancelled",
     retryable: "Retryable",
     notRetryable: "Not retryable",
     invalidDate: "Unknown time",
@@ -643,6 +918,7 @@ export const translations: Record<Locale, Translations> = {
     statusCompletedWithErrors: "Completed with errors",
     statusFailed: "Failed",
     statusInterrupted: "Interrupted",
+    statusCancelled: "Cancelled",
     statusPending: "Pending",
     statusProcessing: "Processing",
     statusUnavailable: "Unavailable",
@@ -667,7 +943,7 @@ export const translations: Record<Locale, Translations> = {
     legacyArtifact: "Legacy output",
     settingsProviders: "Providers and models",
 	localModelTitle: "Local speech recognition", localModelDescription: "Manage the official SenseVoice model in Voxly app data. Model installation never writes into Task folders.", localChineseFirst: "Chinese-first", localModelStatus: "Status",
-	localNotInstalled: "Not installed", localRuntimeMissing: "Model installed; runtime pending", localModelInvalid: "Model invalid; reinstall required", localUnsupported: "Unsupported on this platform",
+	localNotInstalled: "Not installed", localRuntimeMissing: "Model installed; local recognition component missing or incompatible", localModelInvalid: "Model invalid; reinstall required", localUnsupported: "Unsupported on this platform",
 	localDownload: "Download model", localImport: "Import official model", localCancel: "Cancel", localDelete: "Delete model", localSource: "Official source", localSize: "Download size",
 	localAdvanced: "Advanced download settings", localEndpoint: "Hugging Face Endpoint", localTestEndpoint: "Test connection", localEndpointReachable: "Endpoint is reachable", localOperationFailed: "The local model operation failed. Existing model data was not changed.", localConfirmDelete: "Delete the installed SenseVoice model? Tasks and history will remain unchanged.", localPrivacyTitle: "Privacy:", localPrivacyBody: "With local speech recognition, original audio is not sent to the cloud. If cloud content generation is selected, transcript text is still sent to that service.",
 	localEndpointScope: "Applies only to future Hugging Face-hosted models explicitly marked compatible by the catalog. The current SenseVoice model is pinned to the k2-fsa GitHub Release; this setting and connection test neither change nor test its download source.",
@@ -697,6 +973,22 @@ export const translations: Record<Locale, Translations> = {
     providerUnknown: "Legacy / unknown",
     providerNotReady: "The current provider configuration is not ready.",
     openSettings: "Open Settings",
+    resumeTask: "Continue processing",
+    resumeCancelled: "This continue request was cancelled",
+    resumingTask: "Continuing…",
+    stopTask: "Stop task",
+    stoppingTask: "Stopping…",
+    pendingChunksHint: "Pending audio chunks",
+    blockedTaskLocked: "Another process is working on this task, so it cannot continue right now.",
+    blockedSpeechProviderUnsupported: "The speech provider recorded on this task is no longer supported.",
+    blockedSpeechProviderUnavailable: "The speech runtime recorded on this task is not available yet.",
+    blockedSourceAudioMissing: "The task audio is missing, so it cannot be split again.",
+    retryGeneration: "Retry this version",
+    retryingGeneration: "Retrying…",
+    retryKeepsIdentity: "Retry keeps the same version and provider",
+    newGenerationKeepsHistory: "Generates a new version and leaves existing versions unchanged.",
+    uploadsAudioHint: "Continuing sends the audio to a cloud speech-recognition service.",
+    uploadsTextHint: "This action sends transcript text to a cloud content service.",
   },
 };
 

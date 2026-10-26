@@ -1,18 +1,6 @@
-# Local provider and managed-model foundation
+# Local recognition and model management
 
-This document describes the PR #48 foundation. It does not claim that local transcription is implemented.
-
-## Current architecture audit
-
-| Area | Finding | Decision |
-| --- | --- | --- |
-| Go provider catalog and Task snapshots | Provider/model identity already has one Go-owned catalog and additive Task snapshots | Extend: add provider execution, credential, model-source, installation and privacy metadata without changing TaskManifest 2.0 |
-| Go ASR execution | Chunk execution entered Mimo directly | Replace narrowly: route each chunk through a context-aware `ASRProvider`; preserve the Mimo adapter and make the local adapter return `runtime_not_implemented` |
-| Rust provider transport | Typed transport exists, but selection/readiness assumed every ASR provider was credential-backed | Extend: accept the catalog-owned local identity and keep it blocked while the runtime is absent |
-| Frontend provider UI | Catalog-driven selectors already exist | Reuse: render the additional provider and consume typed model state; do not duplicate model hashes or install rules |
-| Model installation | No existing managed-model owner | Add: Go owns catalog validation, download/import verification, receipt, readiness, lock, install and deletion |
-| Tauri process ownership | Async `spawn_blocking` and application-exit child cleanup already exist | Reuse: model mutations use the same single active-child ownership and cancellation boundary |
-| LLM execution | DeepSeek is separately abstracted as a content generator | Defer: no Ollama discovery or calls in this PR; the shared provider metadata can represent a future external local service |
+Voxly packages a native SenseVoice adapter with the Go desktop core. Model weights are installed separately. Both the verified files and the matching native worker are required before local recognition can start.
 
 ## Ownership and metadata
 
@@ -25,7 +13,7 @@ The human-reviewable catalog is [`core-go/modelcatalog/models.v1.json`](../../co
 - Provider: `local-sensevoice`
 - Model: `sensevoice-small-int8`
 - Model revision: `2024-07-17`
-- Runtime direction: `sherpa-onnx` (not included in this PR)
+- Runtime: packaged `sherpa-onnx` 1.13.8 adapter
 - Official archive: `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2`
 - Archive size: `163002883` bytes
 - Archive SHA-256: `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`
@@ -61,12 +49,16 @@ Manual import accepts one user-selected official archive, preserves the source f
 
 ## Readiness and privacy
 
-Computed model states are `not_installed`, `downloading`, `verifying`, `installing`, `model_invalid`, `storage_unavailable`, `unsupported_platform`, `runtime_missing`, `ready`, and `error`; the type vocabulary reserves future external-service states without exposing them in the current UI. Model verification and typed runtime readiness are separate inputs to `StatusWithRuntime`. The default PR #48 probe is `MissingRuntime`; a test-only matching runtime can exercise the composed `ready` path only after all receipt and installed-file verification succeeds. Transient progress is emitted by the sidecar and is not persisted. In production in this PR a valid installed model is always `runtime_missing`, never `ready`. New Task therefore cannot start local ASR and does not create a Task or fall back to Mimo.
+Computed model states are `not_installed`, `downloading`, `verifying`, `installing`, `model_invalid`, `storage_unavailable`, `unsupported_platform`, `runtime_missing`, `ready`, and `error`. Model verification and runtime readiness are separate inputs to `StatusWithRuntime`. The production probe invokes the sibling `voxly-sensevoice-wrapper --version` and checks its protocol, runtime ID and version. Readiness still requires the catalog, receipt and installed-file checks. A missing or incompatible worker blocks local recognition; Voxly does not silently switch to MiMo. Transient progress comes from the sidecar and is not persisted.
 
 Privacy state is provider-derived. Local SenseVoice requires no credential and does not send audio off-device. DeepSeek is cloud generation and sends transcript text off-device. The UI states that distinction and does not use a misleading “fully local” label when a cloud LLM is selected.
 
-## Current limitations and next stage
+## VAD and packaging
 
-PR #49 must add the Voxly-owned sherpa-onnx runtime and real SenseVoice adapter, then pass its typed runtime probe result to `StatusWithRuntime`; downloader, import, receipt, model verification and deletion do not need redesign. It must preserve this catalog/receipt boundary and snapshot actual runtime/model identity when a real local Task is created. This PR includes no model executable, inference, Whisper, Ollama, VAD, recording, packaging or release changes.
+The optional VAD path uses the bundled, hash-verified Silero model and the same native worker. Go records the original-audio sample ranges, language and model/parameter identity before transcription. The canonical transcript stays separate from timed results. Cache cleanup verifies those results before removing chunks; text-only cleanup also removes the task's own audio copy after explicit preview and confirmation.
 
-Unicode normalization collisions are rejected where exact byte and case-fold identity detects them; Go's standard library does not provide cross-platform Unicode normalization. Future open/runtime code must continue canonical containment checks at its own filesystem boundary.
+The macOS installer includes the Go core, native worker, FFmpeg and Silero VAD. SenseVoice weights stay outside the installer and are downloaded or imported through model management. The source and third-party notice scripts pin build inputs; release attachments carry FFmpeg/LAME sources and build instructions.
+
+There is no Ollama integration, streaming recognition, microphone capture or active speaker model. The reserved diarization interface does not enable CAM++. Its future implementation must finish and verify any speaker results before a user deletes the task audio.
+
+Unicode normalization collisions remain limited by Go's standard-library handling. Runtime and cleanup paths must continue checking filesystem containment rather than trusting manifest paths.

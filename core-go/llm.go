@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // ValidateMinutesProvider checks that the configured provider is supported.
 // Call this early (before expensive work) when output-mode=minutes.
@@ -15,6 +18,11 @@ func ValidateMinutesProvider(settings *Settings) error {
 // GenerateMinutes dispatches to the configured minutes provider.
 // This is the single entry point for meeting-minutes generation.
 func GenerateMinutes(notesInputPath string, settings *Settings) (string, error) {
+	return GenerateMinutesContext(context.Background(), notesInputPath, settings)
+}
+
+// GenerateMinutesContext is the cancellable form of the minutes entry point.
+func GenerateMinutesContext(ctx context.Context, notesInputPath string, settings *Settings) (string, error) {
 	if err := ValidateMinutesProvider(settings); err != nil {
 		return "", err
 	}
@@ -26,7 +34,7 @@ func GenerateMinutes(notesInputPath string, settings *Settings) (string, error) 
 
 	switch provider {
 	case "deepseek":
-		return generateDeepSeekMinutes(notesInputPath, settings)
+		return generateDeepSeekMinutesContext(ctx, notesInputPath, settings)
 	default:
 		return "", fmt.Errorf("output-mode=minutes requires MINUTES_PROVIDER=deepseek, got %q", provider)
 	}

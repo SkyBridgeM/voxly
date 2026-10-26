@@ -18,68 +18,120 @@ import (
 // ProgressFunc is called during transcription with status updates.
 type ProgressFunc func(action string, index, total int)
 
-// TranscribeChunks transcribes all chunks, skipping already-completed transcripts.
-func TranscribeChunks(chunks []string, transcriptsDir string, settings *Settings, progressFn ProgressFunc) ([]string, error) {
-	return TranscribeChunksContext(context.Background(), chunks, transcriptsDir, settings, progressFn)
-}
-
-func TranscribeChunksContext(ctx context.Context, chunks []string, transcriptsDir string, settings *Settings, progressFn ProgressFunc) ([]string, error) {
+// transcribeChunkItems executes one speech-recognition pass over the given chunk
+// items through a single resolved ASR provider. First execution and resume share
+// this step so provider dispatch, atomic transcript writes, hashing, completion
+// state and failure handling cannot drift apart. A chunk that is already
+// completed with a hash-matching transcript is skipped and never re-uploaded.
+//
+// The context is the cancellation boundary for a running pass; this work package
+// only preserves it, it does not wire user-facing cancellation yet.
+func transcribeChunkItems(ctx context.Context, taskDir string, m *Manifest, items []*ChunkItem, settings *Settings, progressFn ProgressFunc) error {
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
-		return nil, err
+		return err
 	}
 	apiKey := ""
 	if settings.ASRConfig().ProviderID == ASRProviderMimo {
 		var err error
 		apiKey, err = settings.RequireMimoAPIKey()
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	provider, err := ResolveASRProvider(settings.ASRConfig(), settings, apiKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	if err := os.MkdirAll(transcriptsDir, 0700); err != nil {
-		return nil, err
+		return err
 	}
 
-	var outputs []string
-	total := len(chunks)
-
-	for i, chunk := range chunks {
+	total := len(items)
+	for i, item := range items {
+		if item == nil {
+			continue
+		}
 		index := i + 1
-		transcriptPath := filepath.Join(transcriptsDir, strings.TrimSuffix(filepath.Base(chunk), filepath.Ext(chunk))+".txt")
 
-		if isCompleteFile(transcriptPath) {
+		if completedTranscriptValid(item) {
 			if progressFn != nil {
 				progressFn("skipped", index, total)
 			}
-			fmt.Printf("Skipping existing transcript: %s\n", filepath.Base(transcriptPath))
-			outputs = append(outputs, transcriptPath)
+			fmt.Printf("Skipping existing transcript: %s\n", filepath.Base(item.TranscriptPath))
 			continue
+		}
+
+		transcriptPath := item.TranscriptPath
+		if transcriptPath == "" {
+			transcriptPath = filepath.Join(transcriptsDir, item.ID+".txt")
+		}
+		item.TranscriptPath = transcriptPath
+		item.State = ChunkInProgress
+		item.Attempts++
+		item.LastError = nil
+		if err := SaveManifest(taskDir, m); err != nil {
+			return fmt.Errorf("saving manifest before transcription: %w", err)
 		}
 
 		if progressFn != nil {
 			progressFn("transcribing", index, total)
 		}
-		fmt.Printf("Transcribing %s...\n", filepath.Base(chunk))
+		fmt.Printf("Transcribing %s...\n", filepath.Base(item.AudioPath))
 
-		result, err := provider.Transcribe(ctx, ASRRequest{AudioPath: chunk, Language: "auto"})
+		result, err := provider.Transcribe(ctx, ASRRequest{AudioPath: item.AudioPath, Language: "auto", PCM16: m.Chunks.VAD != nil})
 		if err != nil {
-			return nil, fmt.Errorf("transcribing %s: %w", filepath.Base(chunk), err)
+			markChunkFailed(taskDir, m, item, err)
+			return fmt.Errorf("transcribing %s: %w", filepath.Base(item.AudioPath), err)
 		}
 
-		if err := os.WriteFile(transcriptPath, []byte(strings.TrimSpace(result.Text)+"\n"), 0600); err != nil {
-			return nil, err
+		if err := WriteFileAtomically(transcriptPath, []byte(strings.TrimSpace(result.Text)+"\n"), 0600); err != nil {
+			markChunkFailed(taskDir, m, item, err)
+			return fmt.Errorf("writing transcript for %s: %w", item.ID, err)
+		}
+
+		transcriptHash, err := fileSHA256(transcriptPath)
+		if err != nil {
+			markChunkFailed(taskDir, m, item, err)
+			return fmt.Errorf("hashing transcript for %s: %w", item.ID, err)
+		}
+		item.TranscriptSHA256 = transcriptHash
+		// Record the engine that produced this transcript so a Task resumed with
+		// a different configuration keeps per-chunk provenance.
+		item.ASRProvider, item.ASRModel = settings.ASRProvider, settings.MimoModel
+		item.RuntimeID, item.RuntimeVersion, item.ModelVersion = result.RuntimeID, result.RuntimeVersion, result.ModelVersion
+		item.ASRLanguage = result.Language
+		item.State = ChunkCompleted
+		item.LastError = nil
+		if err := SaveManifest(taskDir, m); err != nil {
+			return fmt.Errorf("saving manifest after transcription: %w", err)
 		}
 
 		if progressFn != nil {
 			progressFn("completed", index, total)
 		}
-		outputs = append(outputs, transcriptPath)
 	}
 
-	return outputs, nil
+	return nil
+}
+
+// completedTranscriptValid reports whether a chunk already holds a completed,
+// hash-matching transcript on disk.
+func completedTranscriptValid(item *ChunkItem) bool {
+	if item.State != ChunkCompleted || item.TranscriptPath == "" || item.TranscriptSHA256 == "" {
+		return false
+	}
+	hash, err := fileSHA256(item.TranscriptPath)
+	return err == nil && hash == item.TranscriptSHA256
+}
+
+// markChunkFailed records a chunk failure on its manifest before the caller
+// returns the error.
+func markChunkFailed(taskDir string, m *Manifest, item *ChunkItem, err error) {
+	item.State = ChunkFailed
+	message := err.Error()
+	item.LastError = &message
+	_ = SaveManifest(taskDir, m)
 }
 
 type mimoASRProvider struct {

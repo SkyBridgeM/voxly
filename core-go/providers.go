@@ -149,7 +149,7 @@ func ResolveASRCapabilities(config ASRProviderConfig) (ASRProviderCapabilities, 
 	if config.ProviderID == ASRProviderMimo {
 		return MimoCapabilities(string(config.ModelID)), nil
 	}
-	return ASRProviderCapabilities{}, &ASRExecutionError{Code: "runtime_not_implemented", Message: "The local speech runtime is not available yet."}
+	return LocalSenseVoiceCapabilities(), nil
 }
 
 func ResolveLLMContentGenerator(config LLMProviderConfig) (ContentGenerator, error) {
@@ -200,8 +200,17 @@ type ASRExecutionError struct{ Code, Message string }
 
 func (e *ASRExecutionError) Error() string { return e.Code + ": " + e.Message }
 
-type ASRRequest struct{ AudioPath, Language string }
-type ASRResult struct{ Text string }
+type ASRRequest struct {
+	AudioPath, Language string
+	PCM16               bool
+}
+type ASRResult struct {
+	Language       string
+	Text           string
+	RuntimeID      string
+	RuntimeVersion string
+	ModelVersion   string
+}
 type ASRProvider interface {
 	Transcribe(context.Context, ASRRequest) (ASRResult, error)
 }
@@ -211,15 +220,13 @@ func ResolveASRProvider(config ASRProviderConfig, settings *Settings, apiKey str
 		return nil, err
 	}
 	if config.ProviderID == ASRProviderLocalSenseVoice {
-		return unavailableLocalASRProvider{}, nil
+		language, err := normalizeLocalASRLanguage(settings.LocalASRLanguage)
+		if err != nil {
+			return nil, err
+		}
+		return localASRProvider{root: settings.LocalModelRoot, language: language}, nil
 	}
 	return mimoASRProvider{settings: settings, apiKey: apiKey}, nil
-}
-
-type unavailableLocalASRProvider struct{}
-
-func (unavailableLocalASRProvider) Transcribe(context.Context, ASRRequest) (ASRResult, error) {
-	return ASRResult{}, &ASRExecutionError{Code: "runtime_not_implemented", Message: "The local speech runtime is not available yet."}
 }
 
 func EvaluateLLMReadiness(config LLMProviderConfig, credentialAvailable bool) ProviderReadiness {

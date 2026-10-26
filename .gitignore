@@ -11,11 +11,24 @@ __pycache__/
 dist/
 build/
 output/
+.runtime-build/
 
 # Go spike
 core-go/meeting-asr-go
 core-go/core-go
 core-go/*.test
+core-go/sensevoice-runtime/
+core-go/voxly-sensevoice-wrapper
 
 # Generated Tauri sidecar binaries
 desktop/src-tauri/binaries/meeting-asr-go-*
+desktop/src-tauri/binaries/voxly-sensevoice-wrapper-*
+desktop/src-tauri/resources/
+
+# Pinned VAD model copied by the runtime build
+core-go/silero_vad.onnx
+desktop/src-tauri/binaries/silero_vad.onnx
+
+# Generated portable FFmpeg runtime
+core-go/ffmpeg
+desktop/src-tauri/binaries/ffmpeg-*

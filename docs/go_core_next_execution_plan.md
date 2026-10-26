@@ -1,5 +1,10 @@
 # Go Core Backend Next Execution Plan
 
+> **Archived execution plan.** Its Go parity, Tauri integration, and packaging
+> milestones have since been implemented on `main`. The remaining text records
+> the original migration rationale and must not be treated as the current
+> backlog or runtime status.
+
 Audience: opencode / implementation agent
 Project: `meet-asr` experimental Go core branch
 Goal: turn the current Go spike into the practical backend for the local MiMo meeting transcription desktop tool.

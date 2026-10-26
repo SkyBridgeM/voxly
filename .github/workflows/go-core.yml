@@ -5,12 +5,14 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "core-go/**"
+      - ".github/actions/setup-go-toolchain/**"
       - ".github/workflows/go-core.yml"
   push:
     branches:
       - main
     paths:
       - "core-go/**"
+      - ".github/actions/setup-go-toolchain/**"
       - ".github/workflows/go-core.yml"
 
 permissions:
@@ -26,9 +28,9 @@ jobs:
         working-directory: core-go
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go-toolchain
         with:
-          go-version-file: core-go/go.mod
+          cache: "true"
           cache-dependency-path: core-go/go.sum
       - run: go test ./...
       - run: go vet ./...
@@ -42,9 +44,9 @@ jobs:
         working-directory: core-go
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go-toolchain
         with:
-          go-version-file: core-go/go.mod
+          cache: "true"
           cache-dependency-path: core-go/go.sum
       - run: go test -race ./...
       - name: Compile macOS tests

@@ -19,7 +19,10 @@ import {
   parseBackendError,
   listPromptTemplates,
   listProviders,
+  cancelTask,
   getProviderSettings,
+  runStorageMaintenance,
+  type TemporaryCleanup,
   setProviderSettings,
   type BackendKind,
   type RuntimeMode,
@@ -38,6 +41,7 @@ import { LogPanel } from "./components/LogPanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { TaskLibrary } from "./components/TaskLibrary";
 import { TemplateManager } from "./components/TemplateManager";
+import { StorageManager } from "./components/StorageManager";
 import { LocalModelManager } from "./components/LocalModelManager";
 import voxlyAppIcon from "./assets/voxly-app-icon.png";
 import "./App.css";
@@ -46,6 +50,8 @@ type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
 const DEVELOPMENT_BACKEND_OPTIONS = ["go", "python"] as const satisfies readonly BackendKind[];
 const DEFAULT_PROVIDER_SETTINGS: ProviderSettingsInfo = {
+  local_asr_language: "zh",
+  local_vad_enabled: false,
   asr: { provider_id: "mimo", model_id: "mimo-v2.5-asr" },
   llm: { provider_id: "deepseek", model_id: "deepseek-v4-flash" },
 };
@@ -76,6 +82,7 @@ function App() {
     resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
   );
   const [isRunning, setIsRunning] = useState(false);
+  const [stoppingRun, setStoppingRun] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [taskFolder, setTaskFolder] = useState<string | null>(null);
   const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
@@ -85,6 +92,19 @@ function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [statusOk, setStatusOk] = useState<boolean | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState<"general" | "processing" | "connections" | "templates" | "storage" | "about">("general");
+  const settingsContentRef = useRef<HTMLDivElement>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const storageBusyRef = useRef(false);
+  storageBusyRef.current = storageBusy;
+  const [startupMaintenance, setStartupMaintenance] = useState<TemporaryCleanup | null>(null);
+  const [startupMaintenanceFailed, setStartupMaintenanceFailed] = useState(false);
+  const maintenanceStarted = useRef(false);
+  useEffect(() => {
+    if (maintenanceStarted.current) return;
+    maintenanceStarted.current = true;
+    void runStorageMaintenance(true).then(setStartupMaintenance).catch(() => setStartupMaintenanceFailed(true));
+  }, []);
   const [showError, setShowError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -259,6 +279,7 @@ function App() {
     const handleSettingsKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (storageBusyRef.current) return;
         setShowSettings(false);
         return;
       }
@@ -271,7 +292,7 @@ function App() {
         )
       ).filter(
         (element) =>
-          !element.hasAttribute("hidden") &&
+          !element.closest("[hidden]") &&
           element.getAttribute("aria-hidden") !== "true"
       );
 
@@ -357,14 +378,21 @@ function App() {
       if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } catch (e) {
       const error = parseBackendError(String(e));
-      setErrorMessage(error.message);
-      setShowError(true);
-      setStatus(error.message);
-      setStatusOk(false);
+      if (error.category === "interrupted") {
+        // A stop the user asked for is not a workflow failure.
+        setStatus(t.statusCancelled);
+        setStatusOk(false);
+      } else {
+        setErrorMessage(error.message);
+        setShowError(true);
+        setStatus(error.message);
+        setStatusOk(false);
+      }
       if (libraryOpened) setLibraryRefreshToken((token) => token + 1);
     } finally {
       flushPendingLogs();
       setIsRunning(false);
+      setStoppingRun(false);
       setProgress(null);
     }
   }, [
@@ -415,6 +443,7 @@ function App() {
   }, [taskFolder]);
 
   const handleCloseSettings = () => {
+    if (storageBusy) return;
     setShowSettings(false);
     setProviderSaveMessage(null);
     void getProviderSettings().then(setProviderSettingsState).catch(() => {});
@@ -559,7 +588,7 @@ function App() {
     setProviderSavePending(true);
     setProviderSaveMessage(null);
     try {
-      const saved = await setProviderSettings(providerSettings.asr, providerSettings.llm);
+      const saved = await setProviderSettings(providerSettings.asr, providerSettings.llm, providerSettings.local_asr_language, providerSettings.local_vad_enabled);
       setProviderSettingsState(saved);
       setProviderSaveMessage(t.savedSuccessfully);
       await refreshPreflight();
@@ -614,18 +643,30 @@ function App() {
 
   const asrDescriptor = providerCatalog?.asr.find((provider) => provider.id === providerSettings.asr.provider_id);
   const llmDescriptor = providerCatalog?.llm.find((provider) => provider.id === providerSettings.llm.provider_id);
-  const asrProviderLabel = asrDescriptor?.display_name[locale] ?? "Mimo";
-  const llmProviderLabel = llmDescriptor?.display_name[locale] ?? "DeepSeek";
+  const asrProviderLabel = asrDescriptor?.display_name[locale] ?? t.checking;
+  const llmProviderLabel = llmDescriptor?.display_name[locale] ?? t.checking;
   const asrModelLabel = asrDescriptor?.models.find((model) => model.id === providerSettings.asr.model_id)?.display_name[locale] ?? providerSettings.asr.model_id;
   const llmModelLabel = llmDescriptor?.models.find((model) => model.id === providerSettings.llm.model_id)?.display_name[locale] ?? providerSettings.llm.model_id;
-	const privacySummary = (() => {
-		const audioCloud = asrDescriptor?.privacy.sends_audio_off_device ?? true;
-		const textCloud = llmDescriptor?.privacy.sends_text_off_device ?? true;
-		if (!audioCloud && !textCloud) return locale === "zh" ? "音频与转写文本均留在本机。" : "Audio and transcript text stay on this device.";
-		if (!audioCloud && textCloud) return locale === "zh" ? "音频留在本机；生成内容时转写文本会发送到云端。" : "Audio stays local; transcript text is sent to the cloud for content generation.";
-		if (audioCloud && !textCloud) return locale === "zh" ? "音频会发送到云端；内容生成在本机完成。" : "Audio is sent to the cloud; content generation stays local.";
-		return locale === "zh" ? "音频和生成内容所需的转写文本会发送到所选云端服务。" : "Audio and transcript text used for generation are sent to the selected cloud services.";
-	})();
+  const privacySummary = (() => {
+    if (!asrDescriptor || (outputMode === "transcript_and_generate" && !llmDescriptor)) return t.privacyLoading;
+    const audioCloud = asrDescriptor.privacy.sends_audio_off_device;
+    if (outputMode === "transcript_only") return audioCloud ? t.privacyCloudTranscript : t.privacyLocalTranscript;
+    const textCloud = llmDescriptor?.privacy.sends_text_off_device;
+    if (!audioCloud) return textCloud ? t.privacyLocalCloudGeneration : t.privacyLocalGeneration;
+    return textCloud ? t.privacyCloudGeneration : t.privacyCloudLocalGeneration;
+  })();
+
+  /** Requests a cooperative stop of the running workflow. The runtime forces a
+   * stop only after its grace period, so finished artifacts stay usable. */
+  const stopRun = useCallback(async () => {
+    setStoppingRun(true);
+    try {
+      const outcome = await cancelTask();
+      if (outcome.state !== "stopping") setStoppingRun(false);
+    } catch {
+      setStoppingRun(false);
+    }
+  }, []);
 
   const hasActivity = isRunning || logs.length > 0 || taskFolder || status;
 
@@ -760,8 +801,8 @@ function App() {
                     templateLabel: t.templateLabel,
                     start: t.start,
                     processing: t.processing,
-                    llmWarning: t.llmWarning,
-                    transcriptWarning: t.transcriptWarning,
+                    llmWarning: privacySummary,
+                    transcriptWarning: privacySummary,
                     speechRecognitionProvider: t.speechRecognitionProvider,
                     generatedWithProvider: t.generatedWithProvider,
                     providerNotReady: t.providerNotReady,
@@ -770,6 +811,7 @@ function App() {
                     myTemplates: t.myTemplates,
                   }}
                 />
+				{isRunning && <div className="form-action-row"><button type="button" className="btn-secondary" onClick={() => void stopRun()} disabled={stoppingRun}>{stoppingRun ? t.stoppingTask : t.stopTask}</button></div>}
 				<p className="privacy-summary">{privacySummary}</p>
               </div>
             </div>
@@ -911,120 +953,17 @@ function App() {
               </button>
             </div>
 
-            <div className="modal-body settings-body">
-              <section className="settings-section">
-                <div className="settings-section-header settings-section-header-action">
-                  <div className="settings-section-title">
-                    <span>01</span>
-                    <div>
-                      <h3>{t.settingsReadiness}</h3>
-                      <p>{t.settingsReadinessDesc}</p>
-                    </div>
-                  </div>
-                  <button
-                    className="btn-secondary preflight-refresh"
-                    onClick={() => void refreshPreflight()}
-                    disabled={preflightLoading}
-                  >
-                    {preflightLoading ? t.checking : t.refresh}
-                  </button>
-                </div>
-
-                {preflightError && (
-                  <div className="preflight-error">{preflightError}</div>
-                )}
-                {!preflight && !preflightError && (
-                  <div className="preflight-empty">{t.preflightPrompt}</div>
-                )}
-                {preflight && (
-                  <div className="preflight-panel">
-                    <div
-                      className={`preflight-summary ${
-                        preflightReadyForMode ? "ready" : "not-ready"
-                      }`}
-                    >
-                      <span aria-hidden="true">
-                        {preflightReadyForMode ? "✓" : "!"}
-                      </span>
-                      <strong>
-                        {preflightReadyForMode ? t.ready : t.notReady}
-                      </strong>
-                      <span>{outputModeLabel(outputMode)}</span>
-                    </div>
-                    <div className="preflight-grid">
-                      <div className="preflight-item">
-                        <span className="preflight-label">{t.runtimeMode}</span>
-                        <span className="preflight-value">
-                          {preflight.runtime_mode === "production"
-                            ? t.production
-                            : t.development}
-                        </span>
-                      </div>
-                      <div className="preflight-item">
-                        <span className="preflight-label">{t.backend}</span>
-                        <span className="preflight-value">
-                          {backendLabel(
-                            preflight.runtime_mode,
-                            preflight.backend
-                          )}
-                        </span>
-                      </div>
-                      <div className="preflight-item preflight-item-diagnostic">
-                        <div className="preflight-item-row">
-                          <span className="preflight-label">{t.sidecar}</span>
-                          <span
-                            className={
-                              preflight.sidecar.ready
-                                ? "preflight-value ready"
-                                : "preflight-value not-ready"
-                            }
-                          >
-                            {preflight.sidecar.ready ? t.ready : t.notReady}
-                          </span>
-                        </div>
-                        <span className="preflight-detail">
-                          {preflight.sidecar.message}
-                        </span>
-                      </div>
-                      <div className="preflight-item preflight-item-diagnostic">
-                        <div className="preflight-item-row">
-                          <span className="preflight-label">ffmpeg</span>
-                          <span
-                            className={
-                              preflight.ffmpeg.ready
-                                ? "preflight-value ready"
-                                : "preflight-value not-ready"
-                            }
-                          >
-                            {preflight.ffmpeg.ready ? t.ready : t.notReady}
-                          </span>
-                        </div>
-                        <span className="preflight-detail">
-                          {preflight.ffmpeg.message}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <section className="settings-section about-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span aria-hidden="true">V</span>
-                    <div>
-                      <h3>{t.aboutTitle}</h3>
-                      <p>{t.aboutDescription}</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="about-card">
-                  <strong>{t.aboutProductNames}</strong>
-                  <span>{t.aboutSubtitles}</span>
-                  <span>{t.aboutVersion}</span>
-                </div>
-              </section>
-
+            <div className="settings-layout">
+              <nav className="settings-navigation" aria-label={t.settingsNavigation}>
+                {(["general", "processing", "connections", "templates", "storage", "about"] as const).map((category) => (
+                  <button key={category} type="button" id={`settings-nav-${category}`} aria-current={settingsCategory === category ? "page" : undefined} aria-controls={`settings-panel-${category}`} disabled={storageBusy} onClick={() => {
+                    setSettingsCategory(category);
+                    if (settingsContentRef.current) settingsContentRef.current.scrollTop = 0;
+                  }}>{t.settingsCategories[category]}</button>
+                ))}
+              </nav>
+              <div className="modal-body settings-body" ref={settingsContentRef}>
+                <div className="settings-panel" id="settings-panel-general" role="region" aria-labelledby="settings-nav-general" hidden={settingsCategory !== "general"}>
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
@@ -1063,47 +1002,41 @@ function App() {
                   </div>
                 </div>
               </section>
-
+                </div>
+                <div className="settings-panel" id="settings-panel-processing" role="region" aria-labelledby="settings-nav-processing" hidden={settingsCategory !== "processing"}>
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
-                    <span>03</span>
+                    <span>05</span>
                     <div>
-                      <h3>{t.settingsBackend}</h3>
-                      <p>{t.settingsBackendDesc}</p>
+                      <h3>{t.settingsProviders}</h3>
+                      <p>{t.settingsProvidersDesc}</p>
                     </div>
                   </div>
                 </div>
-                {runtimeMode === "production" ? (
-                  <div className="readonly-field">
-                    <span className="readonly-dot" aria-hidden="true"></span>
-                    {t.backendGoProduction}
+                <div className="provider-settings-grid">
+                  <div className="provider-settings-card">
+                    <h4>{t.speechRecognition}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
+                    {providerSettings.asr.provider_id === "local-sensevoice" && <div className="form-group form-group-compact"><label htmlFor="settings-asr-language">{t.localAsrLanguage}</label><select id="settings-asr-language" value={providerSettings.local_asr_language} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({ ...current, local_asr_language: event.target.value as "zh" | "auto" }))}><option value="zh">{t.localAsrChinese}</option><option value="auto">{t.localAsrAuto}</option></select><p className="form-group-help">{t.localAsrLanguageHelp}</p></div>}
+                    {providerSettings.asr.provider_id === "local-sensevoice" && <div className="form-group form-group-compact"><label className="form-checkbox"><input type="checkbox" checked={providerSettings.local_vad_enabled} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({ ...current, local_vad_enabled: event.target.checked }))} /> {t.localVadEnabled}</label><p className="form-group-help">{t.localVadHelp}</p></div>}
+                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
                   </div>
-                ) : (
-                  <div className="form-group form-group-compact">
-                    <label htmlFor="settings-backend">{t.backend}</label>
-                    <select
-                      id="settings-backend"
-                      value={backend}
-                      onChange={(e) => {
-                        const selectedBackend =
-                          e.target.value === "go" ? "go" : "python";
-                        setBackend(selectedBackend);
-                        void refreshPreflight(selectedBackend);
-                      }}
-                    >
-                      {DEVELOPMENT_BACKEND_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option === "go"
-                            ? t.backendGoExperimental
-                            : t.backendPython}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="provider-settings-card">
+                    <h4>{t.generatedContentProvider}</h4>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-provider">{t.provider}</label><select id="settings-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
+                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-model">{t.model}</label><select id="settings-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
+                    <p className={preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
                   </div>
-                )}
+                </div>
+                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
               </section>
-
+                </div>
+                <div className="settings-panel" id="settings-panel-connections" role="region" aria-labelledby="settings-nav-connections" hidden={settingsCategory !== "connections"}>
+              <section className="settings-section">
+                <LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ states: t.localModelStates, checking: t.checking, title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} />
+              </section>
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
@@ -1221,41 +1154,15 @@ function App() {
                   </div>
                 </div>
               </section>
-
-              <section className="settings-section">
-                <div className="settings-section-header">
-                  <div className="settings-section-title">
-                    <span>05</span>
-                    <div>
-                      <h3>{t.settingsProviders}</h3>
-                      <p>{t.settingsProvidersDesc}</p>
-                    </div>
-                  </div>
                 </div>
-                <div className="provider-settings-grid">
-                  <div className="provider-settings-card">
-                    <h4>{t.speechRecognition}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-provider">{t.provider}</label><select id="settings-asr-provider" value={providerSettings.asr.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.asr.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, asr: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.asr.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="mimo">Mimo</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-asr-model">{t.model}</label><select id="settings-asr-model" value={providerSettings.asr.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, asr: {...current.asr, model_id: event.target.value}}))}>{asrDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="mimo-v2.5-asr">Mimo v2.5 ASR</option>}</select></div>
-                    <p className={asrPreflightMatchesSelection && preflight?.asr_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{asrPreflightMatchesSelection && preflight?.asr_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                  <div className="provider-settings-card">
-                    <h4>{t.generatedContentProvider}</h4>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-provider">{t.provider}</label><select id="settings-llm-provider" value={providerSettings.llm.provider_id} disabled={isRunning || providerSavePending} onChange={(event) => { const provider = providerCatalog?.llm.find((item) => item.id === event.target.value); if (provider) setProviderSettingsState((current) => ({...current, llm: {provider_id: provider.id, model_id: provider.default_model}})); }}>{providerCatalog?.llm.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name[locale]}</option>) ?? <option value="deepseek">DeepSeek</option>}</select></div>
-                    <div className="form-group form-group-compact"><label htmlFor="settings-llm-model">{t.model}</label><select id="settings-llm-model" value={providerSettings.llm.model_id} disabled={isRunning || providerSavePending} onChange={(event) => setProviderSettingsState((current) => ({...current, llm: {...current.llm, model_id: event.target.value}}))}>{llmDescriptor?.models.map((model) => <option key={model.id} value={model.id}>{model.display_name[locale]}</option>) ?? <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>}</select></div>
-                    <p className={preflight?.llm_provider.ready ? "provider-readiness ready" : "provider-readiness not-ready"}>{preflight?.llm_provider.ready ? t.ready : t.notReady}</p>
-                  </div>
-                </div>
-                <div className="provider-settings-actions"><button className="btn-secondary" onClick={() => void handleSaveProviderSettings()} disabled={isRunning || providerSavePending}>{providerSavePending ? t.checking : t.save}</button>{providerSaveMessage && <span className="save-status">{providerSaveMessage}</span>}</div>
-                <LocalModelManager locale={locale} disabled={isRunning} onStatusChanged={() => void refreshPreflight()} labels={{ title: t.localModelTitle, description: t.localModelDescription, chineseFirst: t.localChineseFirst, status: t.localModelStatus, notInstalled: t.localNotInstalled, runtimeMissing: t.localRuntimeMissing, invalid: t.localModelInvalid, unsupported: t.localUnsupported, download: t.localDownload, import: t.localImport, cancel: t.localCancel, delete: t.localDelete, source: t.localSource, size: t.localSize, advanced: t.localAdvanced, endpoint: t.localEndpoint, save: t.save, test: t.localTestEndpoint, endpointReachable: t.localEndpointReachable, operationFailed: t.localOperationFailed, confirmDelete: t.localConfirmDelete, privacyTitle: t.localPrivacyTitle, privacyBody: t.localPrivacyBody, technicalDetails: t.technicalDetails, endpointScope: t.localEndpointScope }} />
-              </section>
-
+                <div className="settings-panel" id="settings-panel-templates" role="region" aria-labelledby="settings-nav-templates" hidden={settingsCategory !== "templates"}>
               <section className="settings-section">
                 <div className="settings-section-header"><div className="settings-section-title"><span>06</span><div><h3>{t.settingsTemplates}</h3><p>{t.settingsTemplatesDesc}</p></div></div></div>
                 {templateIssues.map((issue) => <p className="template-manager-error" key={issue}>{issue}</p>)}
                 <TemplateManager templates={templates} locale={locale} disabled={isRunning} onChanged={refreshTemplates} labels={{ builtInTemplates: t.builtInTemplates, myTemplates: t.myTemplates, newTemplate: t.newTemplate, editTemplate: t.editTemplate, deleteTemplate: t.deleteTemplate, templateName: t.templateName, templateDescription: t.templateDescription, templateInstructions: t.templateInstructions, technicalDetails: t.technicalDetails, revision: t.revision, saveCreatesRevision: t.saveCreatesRevision, confirmDeleteTemplate: t.confirmDeleteTemplate, templateSaveFailed: t.templateSaveFailed, noCustomTemplates: t.noCustomTemplates, save: t.save, cancel: t.cancel }} />
               </section>
-
+                </div>
+                <div className="settings-panel" id="settings-panel-storage" role="region" aria-labelledby="settings-nav-storage" hidden={settingsCategory !== "storage"}>
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div className="settings-section-title">
@@ -1290,7 +1197,7 @@ function App() {
                         className="btn-secondary"
                         onClick={() => void handleChangeOutputFolder()}
                         disabled={
-                          isRunning || outputPickerPending || outputMutationPending
+                          isRunning || storageBusy || outputPickerPending || outputMutationPending
                         }
                         title={isRunning ? t.outputFolderChangeBlocked : undefined}
                       >
@@ -1300,7 +1207,7 @@ function App() {
                         className="btn-secondary"
                         onClick={() => void handleOpenOutputFolder()}
                         disabled={
-                          outputOpenPending ||
+                          storageBusy || outputOpenPending ||
                           outputPickerPending ||
                           outputMutationPending
                         }
@@ -1311,7 +1218,7 @@ function App() {
                         className="btn-secondary"
                         onClick={() => void handleResetOutputFolder()}
                         disabled={
-                          isRunning ||
+                          isRunning || storageBusy ||
                           outputPickerPending ||
                           outputMutationPending ||
                           !outputRootInfo?.configured
@@ -1335,10 +1242,165 @@ function App() {
                   <div className="preflight-empty">{t.preflightPrompt}</div>
                 )}
               </section>
+              <StorageManager key={outputRootInfo?.output_root ?? preflight?.output_root.path ?? ""} locale={locale} labels={t} disabled={isRunning || outputMutationPending || outputPickerPending} onBusyChange={setStorageBusy} onChanged={() => setLibraryRefreshToken((token) => token + 1)} startupResult={startupMaintenance} startupFailed={startupMaintenanceFailed} />
+                </div>
+                <div className="settings-panel" id="settings-panel-about" role="region" aria-labelledby="settings-nav-about" hidden={settingsCategory !== "about"}>
+              <section className="settings-section about-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span aria-hidden="true">V</span>
+                    <div>
+                      <h3>{t.aboutTitle}</h3>
+                      <p>{t.aboutDescription}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="about-card">
+                  <strong>{t.aboutProductNames}</strong>
+                  <span>{t.aboutSubtitles}</span>
+                  <span>{t.aboutVersion}</span>
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-header settings-section-header-action">
+                  <div className="settings-section-title">
+                    <span>01</span>
+                    <div>
+                      <h3>{t.settingsReadiness}</h3>
+                      <p>{t.settingsReadinessDesc}</p>
+                    </div>
+                  </div>
+                  <button
+                    className="btn-secondary preflight-refresh"
+                    onClick={() => void refreshPreflight()}
+                    disabled={preflightLoading}
+                  >
+                    {preflightLoading ? t.checking : t.refresh}
+                  </button>
+                </div>
+
+                {preflightError && (
+                  <div className="preflight-error">{preflightError}</div>
+                )}
+                {!preflight && !preflightError && (
+                  <div className="preflight-empty">{t.preflightPrompt}</div>
+                )}
+                {preflight && (
+                  <div className="preflight-panel">
+                    <div
+                      className={`preflight-summary ${
+                        preflightReadyForMode ? "ready" : "not-ready"
+                      }`}
+                    >
+                      <span aria-hidden="true">
+                        {preflightReadyForMode ? "✓" : "!"}
+                      </span>
+                      <strong>
+                        {preflightReadyForMode ? t.ready : t.notReady}
+                      </strong>
+                      <span>{outputModeLabel(outputMode)}</span>
+                    </div>
+                    <div className="preflight-grid">
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.runtimeMode}</span>
+                        <span className="preflight-value">
+                          {preflight.runtime_mode === "production"
+                            ? t.production
+                            : t.development}
+                        </span>
+                      </div>
+                      <div className="preflight-item">
+                        <span className="preflight-label">{t.backend}</span>
+                        <span className="preflight-value">
+                          {backendLabel(
+                            preflight.runtime_mode,
+                            preflight.backend
+                          )}
+                        </span>
+                      </div>
+                      <div className="preflight-item preflight-item-diagnostic">
+                        <div className="preflight-item-row">
+                          <span className="preflight-label">{t.sidecar}</span>
+                          <span
+                            className={
+                              preflight.sidecar.ready
+                                ? "preflight-value ready"
+                                : "preflight-value not-ready"
+                            }
+                          >
+                            {preflight.sidecar.ready ? t.ready : t.notReady}
+                          </span>
+                        </div>
+                        <span className="preflight-detail">
+                          {preflight.sidecar.message}
+                        </span>
+                      </div>
+                      <div className="preflight-item preflight-item-diagnostic">
+                        <div className="preflight-item-row">
+                          <span className="preflight-label">ffmpeg</span>
+                          <span
+                            className={
+                              preflight.ffmpeg.ready
+                                ? "preflight-value ready"
+                                : "preflight-value not-ready"
+                            }
+                          >
+                            {preflight.ffmpeg.ready ? t.ready : t.notReady}
+                          </span>
+                        </div>
+                        <span className="preflight-detail">
+                          {preflight.ffmpeg.message}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-header">
+                  <div className="settings-section-title">
+                    <span>03</span>
+                    <div>
+                      <h3>{t.settingsBackend}</h3>
+                      <p>{t.settingsBackendDesc}</p>
+                    </div>
+                  </div>
+                </div>
+                {runtimeMode === "production" ? (
+                  <div className="readonly-field">
+                    <span className="readonly-dot" aria-hidden="true"></span>
+                    {t.backendGoProduction}
+                  </div>
+                ) : (
+                  <div className="form-group form-group-compact">
+                    <label htmlFor="settings-backend">{t.backend}</label>
+                    <select
+                      id="settings-backend"
+                      value={backend}
+                      onChange={(e) => {
+                        const selectedBackend =
+                          e.target.value === "go" ? "go" : "python";
+                        setBackend(selectedBackend);
+                        void refreshPreflight(selectedBackend);
+                      }}
+                    >
+                      {DEVELOPMENT_BACKEND_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option === "go"
+                            ? t.backendGoExperimental
+                            : t.backendPython}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </section>
+                </div>
+              </div>
             </div>
 
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={handleCloseSettings}>
+              <button className="btn-secondary" onClick={handleCloseSettings} disabled={storageBusy}>
                 {t.close}
               </button>
             </div>

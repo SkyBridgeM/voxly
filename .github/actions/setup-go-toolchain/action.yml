@@ -1,0 +1,29 @@
+name: Set up the pinned Go toolchain
+description: >-
+  Installs the single Go toolchain version shared by every workflow so the
+  version cannot drift between them.
+
+  Version policy: core-go/go.mod declares the minimum supported Go version
+  (currently 1.21) and scripts/build_desktop_sidecar.sh accepts "1.21 or newer".
+  This action owns the CI toolchain pin, which is intentionally newer than the
+  declared minimum. Change the pin here only, never in an individual workflow.
+
+inputs:
+  cache:
+    description: Enable Go module caching, as in actions/setup-go.
+    required: false
+    default: "false"
+  cache-dependency-path:
+    description: Path to go.sum, used when caching is enabled.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.26.5"
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}

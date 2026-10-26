@@ -2,15 +2,16 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 mod app_namespace;
 mod credentials;
+mod process_control;
 use app_namespace::{migrate_app_namespace, AppNamespacePaths};
 use credentials::{
     resolve_credential, status_for, CredentialError, CredentialKey, CredentialSource,
@@ -20,6 +21,10 @@ use credentials::{
 // ---------------------------------------------------------------------------
 // Shared event payloads
 // ---------------------------------------------------------------------------
+
+/// Exit status the Go sidecar uses for a run that stopped because a stop was
+/// requested. It keeps a user cancel distinguishable from a provider failure.
+const CANCELLED_EXIT_CODE: i32 = 130;
 
 #[derive(Clone, serde::Serialize)]
 struct LogEvent {
@@ -95,6 +100,7 @@ struct ParsedOutput {
     notes_input_path: Option<String>,
     minutes_path: Option<String>,
     generated_content_path: Option<String>,
+    generation_status: Option<String>,
 }
 
 impl ParsedOutput {
@@ -128,6 +134,11 @@ impl ParsedOutput {
                 let v = v.trim();
                 if !v.is_empty() {
                     out.generated_content_path = Some(v.to_string());
+                }
+            } else if let Some(v) = trimmed.strip_prefix("Generation status:") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    out.generation_status = Some(v.to_string());
                 }
             }
         }
@@ -275,6 +286,37 @@ impl From<CredentialError> for BackendError {
 // Stderr-based error classification
 // ---------------------------------------------------------------------------
 
+/// cancelled_failure reports a run that stopped because a stop was requested.
+/// Every command funnels its exit status through it, so a cancel is never shown
+/// as a provider or workflow failure.
+fn cancelled_failure(code: Option<i32>, message: &str) -> Option<BackendError> {
+    if code == Some(CANCELLED_EXIT_CODE) {
+        return Some(BackendError::Interrupted {
+            message: message.to_string(),
+        });
+    }
+    None
+}
+
+/// classify_process_failure maps a finished process to a safe error, keeping a
+/// requested stop distinguishable from a provider failure.
+fn classify_process_failure(
+    code: Option<i32>,
+    stderr_lines: &[String],
+    secrets: &[String],
+    cancelled_message: &str,
+) -> BackendError {
+    if let Some(error) = cancelled_failure(code, cancelled_message) {
+        return error;
+    }
+    match code {
+        Some(c) => classify_stderr(stderr_lines, Some(c), secrets),
+        None => BackendError::Interrupted {
+            message: "Process was terminated by a signal.".to_string(),
+        },
+    }
+}
+
 fn classify_stderr(
     stderr_lines: &[String],
     exit_code: Option<i32>,
@@ -396,6 +438,43 @@ struct ArtifactSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TaskBlockingReason {
+    code: String,
+    message: String,
+}
+
+/// TaskActions is what the runtime allows for one Task right now. It is derived
+/// by the Go core from durable state, the Task lock, and provider support; the
+/// desktop only reads it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TaskActions {
+    #[serde(default)]
+    locked: bool,
+    #[serde(default)]
+    next_stage: String,
+    #[serde(default)]
+    can_resume: bool,
+    #[serde(default)]
+    can_resume_transcribe: bool,
+    #[serde(default)]
+    can_resume_generation: bool,
+    #[serde(default)]
+    can_retry_generation: bool,
+    #[serde(default)]
+    pending_chunks: u32,
+    #[serde(default)]
+    blocking_reasons: Vec<TaskBlockingReason>,
+}
+
+impl TaskActions {
+    fn has_reason(&self, code: &str) -> bool {
+        self.blocking_reasons
+            .iter()
+            .any(|reason| reason.code == code)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct TaskSummary {
     task_id: String,
     title: String,
@@ -416,6 +495,8 @@ struct TaskSummary {
     generated_content: Vec<GenerationGroup>,
     #[serde(default)]
     can_generate: bool,
+    #[serde(default)]
+    actions: Option<TaskActions>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -437,6 +518,10 @@ struct GenerationSummary {
     created_at: String,
     reference: Option<String>,
     has_error: bool,
+    #[serde(default)]
+    error_code: String,
+    #[serde(default)]
+    partial_output: bool,
     retryable: Option<bool>,
     legacy: bool,
     #[serde(default)]
@@ -724,6 +809,8 @@ impl ProviderSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct ProviderSettingsInfo {
+    local_asr_language: String,
+    local_vad_enabled: bool,
     asr: ProviderSelection,
     llm: ProviderSelection,
 }
@@ -885,12 +972,33 @@ fn check_ffmpeg_at(binary: &Path) -> PreflightCheck {
         .stderr(Stdio::null())
         .status()
     {
-        Ok(status) if status.success() => preflight_check(true, "ffmpeg is available on PATH."),
+        Ok(status) if status.success() => preflight_check(
+            true,
+            if binary.is_absolute() {
+                "Bundled ffmpeg is ready."
+            } else {
+                "ffmpeg is available on PATH."
+            },
+        ),
         _ => preflight_check(
             false,
-            "ffmpeg is a system prerequisite and is not installed or not on PATH.",
+            "ffmpeg is unavailable; reinstall Voxly, or install ffmpeg for development.",
         ),
     }
+}
+
+fn ffmpeg_binary_for(
+    runtime_mode: RuntimeMode,
+    executable_dir: Option<&Path>,
+) -> Result<PathBuf, BackendError> {
+    if runtime_mode == RuntimeMode::Development {
+        return Ok(PathBuf::from("ffmpeg"));
+    }
+    let dir = match executable_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => packaged_go_executable_dir()?,
+    };
+    Ok(dir.join("ffmpeg"))
 }
 
 fn output_root_preflight_for(path: &Path, configured: bool) -> OutputRootPreflight {
@@ -1052,6 +1160,8 @@ fn runtime_preflight_for(
     deepseek_api_key: CredentialPreflight,
 ) -> RuntimePreflight {
     let settings = ProviderSettingsInfo {
+        local_asr_language: "zh".to_string(),
+        local_vad_enabled: false,
         asr: ProviderSelection::default_asr(),
         llm: ProviderSelection::default_llm(),
     };
@@ -1118,7 +1228,10 @@ fn get_runtime_preflight_blocking(
     let backend = resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let sidecar = preflight_sidecar(runtime_mode, backend);
-    let ffmpeg = check_ffmpeg_at(Path::new("ffmpeg"));
+    let ffmpeg = match ffmpeg_binary_for(runtime_mode, None) {
+        Ok(binary) => check_ffmpeg_at(&binary),
+        Err(_) => preflight_check(false, "Could not resolve packaged FFmpeg."),
+    };
     let output_root = output_root_preflight(&app).map_err(String::from)?;
     let store = KeyringCredentialStore;
     let mimo_api_key = preflight_credential_status(
@@ -1152,6 +1265,8 @@ fn get_runtime_preflight_blocking(
         mimo_api_key,
         deepseek_api_key,
         ProviderSettingsInfo {
+            local_asr_language: settings.local_asr_language,
+            local_vad_enabled: settings.local_vad_enabled,
             asr: settings.asr,
             llm: settings.llm,
         },
@@ -1187,6 +1302,10 @@ const DESKTOP_SETTINGS_FILE: &str = "desktop-settings.json";
 // never silently accepted and later persisted. Future schema changes require
 // an explicit, reviewed migration rather than implicit forward compatibility.
 struct DesktopSettings {
+    auto_clean_chunks: bool,
+    cleanup_temporary_on_startup: bool,
+    local_asr_language: String,
+    local_vad_enabled: bool,
     output_root: Option<String>,
     language: Option<String>,
     theme: Option<String>,
@@ -1199,6 +1318,10 @@ struct DesktopSettings {
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
+            auto_clean_chunks: false,
+            cleanup_temporary_on_startup: true,
+            local_asr_language: "zh".to_string(),
+            local_vad_enabled: false,
             output_root: None,
             language: None,
             theme: None,
@@ -1213,6 +1336,10 @@ impl Default for DesktopSettings {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct DesktopSettingsWire {
+    auto_clean_chunks: Option<bool>,
+    cleanup_temporary_on_startup: Option<bool>,
+    local_asr_language: Option<String>,
+    local_vad_enabled: Option<bool>,
     output_root: Option<String>,
     language: Option<String>,
     theme: Option<String>,
@@ -1291,7 +1418,13 @@ fn load_desktop_settings(path: &Path) -> Result<DesktopSettings, BackendError> {
     });
     validate_asr_selection(&asr)?;
     validate_llm_selection(&llm)?;
+    let local_asr_language = wire.local_asr_language.unwrap_or_else(|| "zh".to_string());
+    validate_local_asr_language(&local_asr_language)?;
     Ok(DesktopSettings {
+        local_vad_enabled: wire.local_vad_enabled.unwrap_or(false),
+        auto_clean_chunks: wire.auto_clean_chunks.unwrap_or(false),
+        cleanup_temporary_on_startup: wire.cleanup_temporary_on_startup.unwrap_or(true),
+        local_asr_language,
         output_root: wire.output_root,
         language: wire.language,
         theme: wire.theme,
@@ -1326,9 +1459,20 @@ fn get_provider_settings(app: AppHandle) -> Result<ProviderSettingsInfo, String>
     let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
         .map_err(String::from)?;
     Ok(ProviderSettingsInfo {
+        local_asr_language: settings.local_asr_language,
+        local_vad_enabled: settings.local_vad_enabled,
         asr: settings.asr,
         llm: settings.llm,
     })
+}
+
+fn validate_local_asr_language(language: &str) -> Result<(), BackendError> {
+    match language {
+        "zh" | "auto" => Ok(()),
+        _ => Err(BackendError::InvalidInput {
+            message: "Local ASR language must be zh or auto.".to_string(),
+        }),
+    }
 }
 
 fn set_provider_settings_at(
@@ -1336,15 +1480,25 @@ fn set_provider_settings_at(
     active: &ActiveProcess,
     asr: ProviderSelection,
     llm: ProviderSelection,
+    local_asr_language: String,
+    local_vad_enabled: bool,
 ) -> Result<ProviderSettingsInfo, BackendError> {
     ensure_output_root_mutation_allowed(active)?;
     validate_asr_selection(&asr)?;
     validate_llm_selection(&llm)?;
+    validate_local_asr_language(&local_asr_language)?;
     let mut settings = load_desktop_settings(path)?;
+    settings.local_asr_language = local_asr_language.clone();
+    settings.local_vad_enabled = local_vad_enabled;
     settings.asr = asr.clone();
     settings.llm = llm.clone();
     save_desktop_settings(path, &settings)?;
-    Ok(ProviderSettingsInfo { asr, llm })
+    Ok(ProviderSettingsInfo {
+        asr,
+        llm,
+        local_asr_language,
+        local_vad_enabled,
+    })
 }
 
 #[tauri::command]
@@ -1353,11 +1507,21 @@ async fn set_provider_settings(
     active: State<'_, ActiveProcess>,
     asr: ProviderSelection,
     llm: ProviderSelection,
+    local_asr_language: String,
+    local_vad_enabled: bool,
 ) -> Result<ProviderSettingsInfo, String> {
     let active = active.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let path = desktop_settings_path(&app).map_err(String::from)?;
-        set_provider_settings_at(&path, &active, asr, llm).map_err(String::from)
+        set_provider_settings_at(
+            &path,
+            &active,
+            asr,
+            llm,
+            local_asr_language,
+            local_vad_enabled,
+        )
+        .map_err(String::from)
     })
     .await
     .map_err(|_| {
@@ -1681,14 +1845,21 @@ fn missing_api_key(key: CredentialKey) -> BackendError {
 fn resolve_run_credentials<S: CredentialStore>(
     store: &S,
     output_mode: &str,
+    asr_provider: &str,
     runtime_mode: RuntimeMode,
     mimo_session: Option<&str>,
     deepseek_session: Option<&str>,
     environment: &EnvironmentValues,
 ) -> Result<RunCredentials, BackendError> {
-    let mimo_key = CredentialKey::MimoApiKey;
-    let mimo = resolve_credential(store, mimo_key, mimo_session, runtime_mode, environment)?
-        .ok_or_else(|| missing_api_key(mimo_key))?;
+    // Offline ASR must neither require nor read a cloud speech credential.
+    let mimo = if asr_provider == LOCAL_ASR_PROVIDER {
+        String::new()
+    } else {
+        let key = CredentialKey::MimoApiKey;
+        resolve_credential(store, key, mimo_session, runtime_mode, environment)?
+            .ok_or_else(|| missing_api_key(key))?
+            .value
+    };
 
     let should_resolve_deepseek = output_mode == "minutes"
         || output_mode == "transcript_and_generate"
@@ -1705,10 +1876,24 @@ fn resolve_run_credentials<S: CredentialStore>(
         None
     };
 
-    Ok(RunCredentials {
-        mimo: mimo.value,
-        deepseek,
-    })
+    Ok(RunCredentials { mimo, deepseek })
+}
+
+fn validate_local_asr_start(
+    backend: BackendKind,
+    status: &LocalModelStatus,
+) -> Result<(), BackendError> {
+    if backend != BackendKind::Go {
+        return Err(BackendError::InvalidInput {
+            message: "Local speech recognition requires the Go backend.".to_string(),
+        });
+    }
+    if status.model_id != LOCAL_ASR_MODEL || status.state != "ready" {
+        return Err(BackendError::InvalidInput {
+            message: format!("Local speech recognition is not ready: {}", status.message),
+        });
+    }
+    Ok(())
 }
 
 fn parse_credential_key(value: &str) -> Result<CredentialKey, String> {
@@ -1975,32 +2160,175 @@ fn find_env_file() -> Option<PathBuf> {
 // Shared process runner
 // ---------------------------------------------------------------------------
 
+/// ActiveRun is the one child process this app currently owns. Its identity binds
+/// every control action to that exact run, so a stop request or a watchdog that
+/// outlives its run can never act on a later one.
+struct ActiveRun {
+    id: u64,
+    child: Child,
+    control: Option<ChildStdin>,
+}
+
+/// NEXT_RUN_ID hands out process-unique run ids.
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Default)]
 struct ActiveProcess {
-    child: Arc<Mutex<Option<Child>>>,
+    run: Arc<Mutex<Option<ActiveRun>>>,
+    stopping: Arc<Mutex<Option<u64>>>,
     model_operation: Arc<AtomicBool>,
+}
+
+/// CancelOutcome reports what a stop request did.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CancelOutcome {
+    /// "idle" when nothing was running, "stopping" when a stop was requested.
+    state: String,
 }
 
 impl ActiveProcess {
     fn is_active(&self) -> bool {
-        match self.child.lock() {
+        match self.run.lock() {
             Ok(guard) => guard.is_some(),
             Err(_) => true,
         }
     }
 
-    fn terminate(&self) {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
+    /// is_run_active reports whether one specific run still owns the slot.
+    fn is_run_active(&self, run_id: u64) -> bool {
+        matches!(self.run.lock(), Ok(guard) if guard.as_ref().is_some_and(|run| run.id == run_id))
+    }
+
+    /// is_stopping reports whether a cooperative stop is in progress. The UI
+    /// shows "stopping" instead of letting a new operation start on top of the
+    /// process that is still winding down.
+    fn is_stopping(&self) -> bool {
+        matches!(self.stopping.lock(), Ok(guard) if guard.is_some())
+    }
+
+    /// register installs a freshly spawned child, refusing a second one.
+    fn register(&self, mut child: Child, control: Option<ChildStdin>) -> Result<u64, BackendError> {
+        let mut guard = self.run.lock().unwrap();
+        if guard.is_some() {
+            let _ = child.kill();
+            // A run that is still winding down must not be overlapped by a new
+            // one; the distinct message lets the UI say "still stopping".
+            let message = if self.is_stopping() {
+                "The previous operation is still stopping.".to_string()
+            } else {
+                "A meeting transcription process is already running.".to_string()
+            };
+            return Err(BackendError::ProcessFailed {
+                message,
+                code: None,
+            });
+        }
+        let id = NEXT_RUN_ID.fetch_add(1, Ordering::AcqRel);
+        *guard = Some(ActiveRun { id, child, control });
+        *self.stopping.lock().unwrap() = None;
+        Ok(id)
+    }
+
+    /// finish clears the run slot once its child has exited. A stale id (a run
+    /// that was already replaced) is ignored instead of clearing a later run.
+    fn finish(&self, run_id: u64) {
+        {
+            let mut guard = self.run.lock().unwrap();
+            if guard.as_ref().is_some_and(|run| run.id == run_id) {
+                *guard = None;
             }
+        }
+        let mut stopping = self.stopping.lock().unwrap();
+        if *stopping == Some(run_id) {
+            *stopping = None;
         }
     }
 
-    fn cancel_model_operation(&self) {
-        if self.model_operation.load(Ordering::Acquire) {
-            self.terminate();
+    /// request_stop asks the running process to stop and schedules a forced stop
+    /// when it has not exited after the grace period.
+    fn request_stop(&self) -> CancelOutcome {
+        // The run identity is captured under the same lock as the control write,
+        // so the watchdog below can only ever act on the run it was asked about.
+        let run_id = {
+            let mut guard = self.run.lock().unwrap();
+            let run = match guard.as_mut() {
+                Some(run) => run,
+                None => {
+                    return CancelOutcome {
+                        state: "idle".to_string(),
+                    }
+                }
+            };
+            let mut stopping = self.stopping.lock().unwrap();
+            if *stopping == Some(run.id) {
+                return CancelOutcome {
+                    state: "stopping".to_string(),
+                };
+            }
+            *stopping = Some(run.id);
+            // Cooperative phase: the sidecar stops at the next step boundary,
+            // aborts in-flight requests, and terminates the ffmpeg it owns.
+            // Without a control channel the watchdog is the only stop.
+            if let Some(stdin) = run.control.as_mut() {
+                let _ = stdin.write_all(b"cancel\n");
+                let _ = stdin.flush();
+            }
+            run.id
+        };
+
+        let active = self.clone();
+        thread::spawn(move || {
+            let deadline = Instant::now() + process_control::GRACE_PERIOD;
+            while Instant::now() < deadline {
+                if !active.is_run_active(run_id) {
+                    // This watchdog's run already exited; a later run must never
+                    // be stopped by it.
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            active.terminate_run(run_id);
+        });
+
+        CancelOutcome {
+            state: "stopping".to_string(),
         }
+    }
+
+    /// terminate_run force-stops one specific run. The identity check and the
+    /// stop happen under the same lock, so no replacement run can be killed.
+    fn terminate_run(&self, run_id: u64) -> bool {
+        let mut guard = self.run.lock().unwrap();
+        match guard.as_mut() {
+            Some(run) if run.id == run_id => {
+                let _ = process_control::force_stop(&mut run.child);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// terminate stops the current run's process tree immediately. It is the
+    /// last resort on the app-exit path.
+    fn terminate(&self) {
+        let run_id = match self.run.lock() {
+            Ok(guard) => guard.as_ref().map(|run| run.id),
+            Err(_) => None,
+        };
+        if let Some(run_id) = run_id {
+            self.terminate_run(run_id);
+        }
+    }
+
+    fn cancel_model_operation(&self) -> CancelOutcome {
+        if !self.model_operation.load(Ordering::Acquire) {
+            return CancelOutcome {
+                state: "idle".to_string(),
+            };
+        }
+        // Model work carries the same control channel as every other run, so it
+        // stops cooperatively first and is only forced after the grace period.
+        self.request_stop()
     }
 }
 
@@ -2026,6 +2354,7 @@ fn validate_output_root_mutation_state(is_active: bool) -> Result<(), BackendErr
 
 struct ProcessRunner {
     active: ActiveProcess,
+    run_id: u64,
     stdout_lines: Arc<Mutex<Vec<String>>>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
     stdout_handle: Option<JoinHandle<()>>,
@@ -2056,7 +2385,15 @@ fn spawn_and_watch(
     active: &ActiveProcess,
     mut cmd: Command,
     secrets: &[String],
+    control_stdin: bool,
 ) -> Result<ProcessRunner, BackendError> {
+    if control_stdin {
+        // The control channel doubles as an ownership signal: when the desktop
+        // disappears, the sidecar sees end-of-file and stops instead of running
+        // unattended.
+        cmd.stdin(Stdio::piped());
+    }
+    process_control::isolate_process_group(&mut cmd);
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2076,18 +2413,8 @@ fn spawn_and_watch(
 
     let stdout_stream = child.stdout.take().unwrap();
     let stderr_stream = child.stderr.take().unwrap();
-
-    {
-        let mut guard = active.child.lock().unwrap();
-        if guard.is_some() {
-            let _ = child.kill();
-            return Err(BackendError::ProcessFailed {
-                message: "A meeting transcription process is already running.".to_string(),
-                code: None,
-            });
-        }
-        *guard = Some(child);
-    }
+    let control = child.stdin.take();
+    let run_id = active.register(child, control)?;
 
     let stdout_lines = Arc::new(Mutex::new(Vec::new()));
     let stderr_lines = Arc::new(Mutex::new(Vec::new()));
@@ -2185,6 +2512,7 @@ fn spawn_and_watch(
 
     Ok(ProcessRunner {
         active: active.clone(),
+        run_id,
         stdout_lines,
         stderr_lines,
         stdout_handle: Some(stdout_handle),
@@ -2197,14 +2525,16 @@ impl ProcessRunner {
     fn wait(mut self) -> Result<(Option<i32>, Vec<String>, Vec<String>), BackendError> {
         let status = loop {
             let status = {
-                let mut guard = self.active.child.lock().unwrap();
-                let child = guard.as_mut().ok_or_else(|| BackendError::Interrupted {
+                let mut guard = self.active.run.lock().unwrap();
+                let run = guard.as_mut().ok_or_else(|| BackendError::Interrupted {
                     message: "Process was no longer available.".to_string(),
                 })?;
-                child.try_wait().map_err(|e| BackendError::ProcessFailed {
-                    message: format!("Process error: {}", e),
-                    code: None,
-                })?
+                run.child
+                    .try_wait()
+                    .map_err(|e| BackendError::ProcessFailed {
+                        message: format!("Process error: {}", e),
+                        code: None,
+                    })?
             };
             if let Some(status) = status {
                 break status;
@@ -2218,7 +2548,7 @@ impl ProcessRunner {
         let code = status.code();
         let stdout = self.stdout_lines.lock().unwrap().clone();
         let stderr = self.stderr_lines.lock().unwrap().clone();
-        let _ = self.active.child.lock().unwrap().take();
+        self.active.finish(self.run_id);
 
         Ok((code, stdout, stderr))
     }
@@ -2320,6 +2650,11 @@ fn build_go_command(
     if let Some(template_id) = template_id {
         cmd.arg("--template-id").arg(template_id);
     }
+    if providers.asr.provider_id == LOCAL_ASR_PROVIDER {
+        cmd.arg(format!("--vad={}", providers.local_vad_enabled));
+    }
+    cmd.arg("--local-asr-language")
+        .arg(&providers.local_asr_language);
     cmd.arg("--asr-provider")
         .arg(&providers.asr.provider_id)
         .arg("--asr-model")
@@ -2327,7 +2662,10 @@ fn build_go_command(
         .arg("--llm-provider")
         .arg(&providers.llm.provider_id)
         .arg("--llm-model")
-        .arg(&providers.llm.model_id);
+        .arg(&providers.llm.model_id)
+        // The run listens on the control channel, so the desktop can stop it and
+        // an app exit closes the channel instead of leaving the work running.
+        .arg("--control-stdin");
 
     if runtime_mode == RuntimeMode::Development {
         if let Some(env) = env_file {
@@ -2373,7 +2711,7 @@ fn run_and_check(
     expected_task_root: &Path,
     secrets: &[String],
 ) -> Result<RunResult, String> {
-    let runner = spawn_and_watch(app, active, cmd, secrets).map_err(String::from)?;
+    let runner = spawn_and_watch(app, active, cmd, secrets, true).map_err(String::from)?;
     let (code, stdout_lines, stderr_lines) = runner.wait()?;
 
     // Always emit process-done so the UI stops its progress view.
@@ -2403,10 +2741,13 @@ fn run_and_check(
                 generated_content_path: output.generated_content_path,
             })
         }
-        Some(c) => {
-            let err = classify_stderr(&stderr_lines, Some(c), secrets);
-            Err(err.into())
-        }
+        Some(c) => Err(classify_process_failure(
+            Some(c),
+            &stderr_lines,
+            secrets,
+            "The task was cancelled before it finished.",
+        )
+        .into()),
     }
 }
 
@@ -2485,16 +2826,14 @@ fn run_meeting_asr_blocking(
         load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
             .map_err(String::from)?;
     validate_asr_selection(&asr_config).map_err(String::from)?;
-    if asr_config.provider_id == LOCAL_ASR_PROVIDER {
-        return Err(String::from(BackendError::InvalidInput {
-            message: "The local speech runtime is not available yet. No Task was created."
-                .to_string(),
-        }));
-    }
     if asr_config != desktop_settings.asr {
         return Err(String::from(BackendError::InvalidInput {
             message: "Speech-recognition settings changed. Refresh and try again.".to_string(),
         }));
+    }
+    if asr_config.provider_id == LOCAL_ASR_PROVIDER {
+        let status = run_model_read(&app, "model-status", true).map_err(String::from)?;
+        validate_local_asr_start(backend_kind, &status).map_err(String::from)?;
     }
     let effective_llm = llm_config.unwrap_or_else(|| desktop_settings.llm.clone());
     if output_mode == "transcript_and_generate" {
@@ -2506,6 +2845,8 @@ fn run_meeting_asr_blocking(
         }
     }
     let providers = ProviderSettingsInfo {
+        local_asr_language: desktop_settings.local_asr_language.clone(),
+        local_vad_enabled: desktop_settings.local_vad_enabled,
         asr: asr_config,
         llm: effective_llm,
     };
@@ -2514,6 +2855,7 @@ fn run_meeting_asr_blocking(
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
         backend_output_mode,
+        &providers.asr.provider_id,
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -2548,6 +2890,12 @@ fn run_meeting_asr_blocking(
         .map_err(String::from)?,
     };
     if backend_kind == BackendKind::Go {
+        cmd.arg(format!(
+            "--auto-clean-chunks={}",
+            desktop_settings.auto_clean_chunks
+        ));
+        cmd.arg("--app-data-root")
+            .arg(model_app_data_root(&app).map_err(String::from)?);
         cmd.arg("--templates-file")
             .arg(custom_templates_path(&app).map_err(String::from)?);
     }
@@ -2725,6 +3073,11 @@ fn resume_meeting_asr_blocking(
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
         &effective_mode,
+        if backend_kind == BackendKind::Python {
+            DEFAULT_ASR_PROVIDER
+        } else {
+            &desktop_settings.asr.provider_id
+        },
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -2749,7 +3102,9 @@ fn resume_meeting_asr_blocking(
             }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
-            c.env("MIMO_API_KEY", &credentials.mimo);
+            if !credentials.mimo.is_empty() {
+                c.env("MIMO_API_KEY", &credentials.mimo);
+            }
             if let Some(key) = credentials.deepseek.as_deref() {
                 c.env("DEEPSEEK_API_KEY", key);
             }
@@ -2765,6 +3120,10 @@ fn resume_meeting_asr_blocking(
 
             let mut c = Command::new(binary);
             c.arg("resume").arg(abs_task_dir.as_os_str());
+            c.arg("--local-asr-language")
+                .arg(&desktop_settings.local_asr_language);
+            c.arg("--app-data-root")
+                .arg(model_app_data_root(&app).map_err(String::from)?);
             c.arg("--templates-file")
                 .arg(custom_templates_path(&app).map_err(String::from)?);
             c.arg("--asr-provider")
@@ -2793,7 +3152,9 @@ fn resume_meeting_asr_blocking(
             }
             c.env_remove("MIMO_API_KEY");
             c.env_remove("DEEPSEEK_API_KEY");
-            c.env("MIMO_API_KEY", &credentials.mimo);
+            if !credentials.mimo.is_empty() {
+                c.env("MIMO_API_KEY", &credentials.mimo);
+            }
             if let Some(key) = credentials.deepseek.as_deref() {
                 c.env("DEEPSEEK_API_KEY", key);
             }
@@ -2944,6 +3305,287 @@ async fn list_tasks(app: AppHandle) -> Result<DiscoveryResult, String> {
                 code: None,
             })
         })?
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct CacheFile {
+    reference: String,
+    size_bytes: u64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct CachePreview {
+    #[serde(default)]
+    scope: String,
+    can_clean: bool,
+    #[serde(default)]
+    reason: String,
+    files: Vec<CacheFile>,
+    total_bytes: u64,
+    #[serde(default)]
+    token: String,
+    cache_status: String,
+    removed_bytes: u64,
+}
+
+fn task_cache_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    task_folder: String,
+    expected_token: Option<String>,
+    text_only: bool,
+) -> Result<CachePreview, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    let root = task_metadata_root(&app).map_err(String::from)?;
+    let binary = go_sidecar_binary().map_err(String::from)?;
+    let mut command = Command::new(binary);
+    command
+        .arg(if expected_token.is_some() {
+            "clean-task-cache"
+        } else {
+            "preview-task-cache"
+        })
+        .arg("--output-root")
+        .arg(root)
+        .arg("--task-folder")
+        .arg(task_folder)
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    if text_only {
+        command.arg("--scope").arg("text_only");
+    }
+    if let Some(token) = expected_token {
+        command.arg("--expected-token").arg(token);
+    }
+    let output = command
+        .output()
+        .map_err(|_| "Cache worker could not start.".to_string())?;
+    decode_cache_output(output.status.success(), &output.stdout)
+}
+
+fn decode_cache_output(success: bool, stdout: &[u8]) -> Result<CachePreview, String> {
+    if !success {
+        return Err("Cache operation failed; refresh the preview and try again.".to_string());
+    }
+    serde_json::from_slice(stdout).map_err(|_| "Cache worker returned invalid data.".to_string())
+}
+
+#[tauri::command]
+async fn preview_task_cache(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_folder: String,
+    text_only: Option<bool>,
+) -> Result<CachePreview, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        task_cache_blocking(app, active, task_folder, None, text_only.unwrap_or(false))
+    })
+    .await
+    .map_err(|_| "Cache worker failed.".to_string())?
+}
+
+#[tauri::command]
+async fn clean_task_cache(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_folder: String,
+    expected_token: String,
+    text_only: Option<bool>,
+) -> Result<CachePreview, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        task_cache_blocking(
+            app,
+            active,
+            task_folder,
+            Some(expected_token),
+            text_only.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|_| "Cache worker failed.".to_string())?
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StorageSettings {
+    auto_clean_chunks: bool,
+    cleanup_temporary_on_startup: bool,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct TemporaryCleanup {
+    removed_bytes: u64,
+    removed_count: u64,
+    skipped_count: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StorageTask {
+    folder: String,
+    title: String,
+    status: String,
+    total_bytes: u64,
+    chunk_bytes: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StorageSummary {
+    output_root: String,
+    categories: std::collections::BTreeMap<String, u64>,
+    total_bytes: u64,
+    tasks: Vec<StorageTask>,
+    issue_count: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BatchCacheTask {
+    folder: String,
+    title: String,
+    preview: CachePreview,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BatchCacheResult {
+    output_root: String,
+    tasks: Vec<BatchCacheTask>,
+    removed_bytes: u64,
+    cleaned_count: u64,
+    skipped_count: u64,
+    failed_count: u64,
+}
+
+fn storage_settings_at(path: &Path) -> Result<StorageSettings, BackendError> {
+    let settings = load_desktop_settings(path)?;
+    Ok(StorageSettings {
+        auto_clean_chunks: settings.auto_clean_chunks,
+        cleanup_temporary_on_startup: settings.cleanup_temporary_on_startup,
+    })
+}
+
+#[tauri::command]
+fn get_storage_settings(app: AppHandle) -> Result<StorageSettings, String> {
+    storage_settings_at(&desktop_settings_path(&app).map_err(String::from)?).map_err(String::from)
+}
+
+#[tauri::command]
+fn set_storage_settings(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    auto_clean_chunks: bool,
+    cleanup_temporary_on_startup: bool,
+) -> Result<StorageSettings, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    let path = desktop_settings_path(&app).map_err(String::from)?;
+    let mut settings = load_desktop_settings(&path).map_err(String::from)?;
+    settings.auto_clean_chunks = auto_clean_chunks;
+    settings.cleanup_temporary_on_startup = cleanup_temporary_on_startup;
+    save_desktop_settings(&path, &settings).map_err(String::from)?;
+    storage_settings_at(&path).map_err(String::from)
+}
+
+fn run_storage_sidecar<T: serde::de::DeserializeOwned>(
+    app: &AppHandle,
+    name: &str,
+    request: Option<serde_json::Value>,
+) -> Result<T, String> {
+    let binary = go_sidecar_binary().map_err(String::from)?;
+    let mut command = Command::new(binary);
+    command
+        .arg(name)
+        .arg("--app-data-root")
+        .arg(model_app_data_root(app).map_err(String::from)?);
+    if name != "cleanup-model-temporary" {
+        if let Some(root) = resolve_task_library_output_root(app).map_err(String::from)? {
+            command.arg("--output-root").arg(root);
+        }
+    }
+    command
+        .env_remove("MIMO_API_KEY")
+        .env_remove("DEEPSEEK_API_KEY")
+        .stdin(if request.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Storage worker could not start.".to_string())?;
+    if let Some(request) = request {
+        let data =
+            serde_json::to_vec(&request).map_err(|_| "Storage request is invalid.".to_string())?;
+        child
+            .stdin
+            .take()
+            .ok_or("Storage input is unavailable.")?
+            .write_all(&data)
+            .map_err(|_| "Storage request failed.".to_string())?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|_| "Storage worker failed.".to_string())?;
+    if !output.status.success() {
+        return Err("Storage operation failed; refresh and retry.".to_string());
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Storage worker returned invalid data.".to_string())
+}
+
+#[tauri::command]
+async fn get_storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || run_storage_sidecar(&app, "storage-summary", None))
+        .await
+        .map_err(|_| "Storage worker failed.".to_string())?
+}
+
+#[tauri::command]
+async fn preview_cache_batch(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+) -> Result<BatchCacheResult, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_storage_sidecar(&app, "preview-cache-batch", None)
+    })
+    .await
+    .map_err(|_| "Storage worker failed.".to_string())?
+}
+
+#[tauri::command]
+async fn clean_cache_batch(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    request: serde_json::Value,
+) -> Result<BatchCacheResult, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_storage_sidecar(&app, "clean-cache-batch", Some(request))
+    })
+    .await
+    .map_err(|_| "Storage worker failed.".to_string())?
+}
+
+#[tauri::command]
+async fn run_storage_maintenance(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    startup: bool,
+) -> Result<TemporaryCleanup, String> {
+    validate_task_metadata_mutation_state(active.is_active()).map_err(String::from)?;
+    let settings = storage_settings_at(&desktop_settings_path(&app).map_err(String::from)?)
+        .map_err(String::from)?;
+    if startup && !settings.cleanup_temporary_on_startup {
+        return Ok(TemporaryCleanup::default());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        run_storage_sidecar(&app, "cleanup-model-temporary", None)
+    })
+    .await
+    .map_err(|_| "Storage worker failed.".to_string())?
 }
 
 fn decode_task_metadata_output(
@@ -3511,13 +4153,17 @@ fn run_model_mutation(
         .arg(model_app_data_root(&app).map_err(String::from)?)
         .arg("--model-id")
         .arg(LOCAL_ASR_MODEL)
+        .arg("--control-stdin")
         .env_remove("MIMO_API_KEY")
         .env_remove("DEEPSEEK_API_KEY");
     if let Some(source) = source {
         process.arg("--source-archive").arg(source);
     }
-    let runner = spawn_and_watch(&app, &active, process, &[]).map_err(String::from)?;
+    let runner = spawn_and_watch(&app, &active, process, &[], true).map_err(String::from)?;
     let (code, stdout, _) = runner.wait().map_err(String::from)?;
+    if let Some(error) = cancelled_failure(code, "The model operation was cancelled.") {
+        return Err(String::from(error));
+    }
     if code != Some(0) {
         return Err(String::from(BackendError::ProcessFailed {
             message: "Local model operation failed safely.".to_string(),
@@ -3576,9 +4222,262 @@ async fn delete_local_model(
 ) -> Result<LocalModelStatus, String> {
     model_mutation_command(app, active.inner().clone(), "delete-model", None).await
 }
+/// cancel_task asks the running operation to stop. The sidecar stops
+/// cooperatively and the runtime forces a stop only after the grace period, so a
+/// cancel cannot destroy an artifact that was already completed.
 #[tauri::command]
-fn cancel_model_download(active: State<'_, ActiveProcess>) {
-    active.cancel_model_operation();
+fn cancel_task(active: State<'_, ActiveProcess>) -> CancelOutcome {
+    active.request_stop()
+}
+
+fn resume_task_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    task_folder: String,
+    output_mode: Option<String>,
+) -> Result<RunResult, String> {
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(String::from)?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    let task_dir = resolve_resumable_task(&output_root, &discovery, &task_folder, true)
+        .map_err(String::from)?;
+
+    if let Some(ref mode) = output_mode {
+        validate_output_mode(mode).map_err(String::from)?;
+    }
+    // The manifest already records the mode and the requested template. The
+    // override is forwarded only when the caller asked for it, so resuming never
+    // rewrites the Task's own processing selection.
+    let mode_override = output_mode.clone();
+    let effective_mode = match output_mode {
+        Some(mode) => mode,
+        None => read_manifest_output_mode(&task_dir).unwrap_or_else(|| "transcript".to_string()),
+    };
+
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    // Resume may only need one of the two credentials, so both are resolved
+    // leniently here: the runtime validates the credential its next stage
+    // actually needs and reports the precise failure itself.
+    let mimo = resolve_credential(
+        &KeyringCredentialStore,
+        CredentialKey::MimoApiKey,
+        None,
+        runtime_mode,
+        &environment,
+    )
+    .map_err(BackendError::from)
+    .map_err(String::from)?
+    .map(|credential| credential.value);
+    let deepseek = resolve_credential(
+        &KeyringCredentialStore,
+        CredentialKey::DeepseekApiKey,
+        None,
+        runtime_mode,
+        &environment,
+    )
+    .map_err(BackendError::from)
+    .map_err(String::from)?
+    .map(|credential| credential.value);
+    let settings = load_desktop_settings(&desktop_settings_path(&app).map_err(String::from)?)
+        .map_err(String::from)?;
+    let mut cmd = Command::new(go_sidecar_binary().map_err(String::from)?);
+    cmd.arg("resume")
+        .arg(task_dir.as_os_str())
+        .arg("--local-asr-language")
+        .arg(&settings.local_asr_language)
+        .arg("--app-data-root")
+        .arg(model_app_data_root(&app).map_err(String::from)?)
+        .arg("--templates-file")
+        .arg(custom_templates_path(&app).map_err(String::from)?)
+        // The speech identity belongs to the Task: resume adopts the identity the
+        // manifest recorded instead of the current selection.
+        .arg("--llm-provider")
+        .arg(&settings.llm.provider_id)
+        .arg("--llm-model")
+        .arg(&settings.llm.model_id)
+        .arg("--control-stdin");
+    cmd.arg(format!(
+        "--auto-clean-chunks={}",
+        settings.auto_clean_chunks
+    ));
+    if let Some(mode) = mode_override.as_deref() {
+        cmd.arg("--output-mode").arg(mode);
+    }
+    let isolated_root = isolated_go_project_root()?;
+    cmd.arg("--project-root")
+        .arg(&isolated_root)
+        .current_dir(&isolated_root);
+    cmd.env_remove("MIMO_API_KEY");
+    cmd.env_remove("DEEPSEEK_API_KEY");
+    let mut secrets: Vec<String> = Vec::new();
+    if let Some(key) = mimo.as_deref() {
+        if !key.is_empty() {
+            cmd.env("MIMO_API_KEY", key);
+            secrets.push(key.to_string());
+        }
+    }
+    if let Some(key) = deepseek.as_deref() {
+        if !key.is_empty() {
+            cmd.env("DEEPSEEK_API_KEY", key);
+            secrets.push(key.to_string());
+        }
+    }
+    run_and_check(&app, &active, cmd, &effective_mode, &task_dir, &secrets)
+}
+
+/// resume_task continues an interrupted Task from the Task Library. It takes a
+/// Task folder, revalidates membership, containment and the Task lock in Rust,
+/// and lets the runtime decide which work is left.
+#[tauri::command]
+async fn resume_task(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_folder: String,
+    output_mode: Option<String>,
+) -> Result<RunResult, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        resume_task_blocking(app, active, task_folder, output_mode)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task resume worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+/// RetryGenerationResult reports which generation was retried and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct RetryGenerationResult {
+    generation_id: String,
+    status: String,
+}
+
+fn retry_task_generation_blocking(
+    app: AppHandle,
+    active: ActiveProcess,
+    task_folder: String,
+    generation_id: String,
+    deepseek_api_key: Option<String>,
+) -> Result<RetryGenerationResult, String> {
+    if generation_id.trim().is_empty() {
+        return Err(String::from(BackendError::InvalidInput {
+            message: "A generation id is required.".to_string(),
+        }));
+    }
+    let output_root = resolve_task_library_output_root(&app)
+        .map_err(String::from)?
+        .ok_or_else(|| {
+            String::from(BackendError::ArtifactUnavailable {
+                message: "Task Library is empty.".to_string(),
+            })
+        })?;
+    let discovery = list_tasks_from_existing_root(&output_root).map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Task Library discovery failed.".to_string(),
+            code: None,
+        })
+    })?;
+    let task_dir =
+        resolve_retryable_generation(&output_root, &discovery, &task_folder, &generation_id)
+            .map_err(String::from)?;
+
+    let runtime_mode = RuntimeMode::current();
+    let environment = credential_environment(runtime_mode).map_err(String::from)?;
+    let credential = resolve_credential(
+        &KeyringCredentialStore,
+        CredentialKey::DeepseekApiKey,
+        deepseek_api_key.as_deref(),
+        runtime_mode,
+        &environment,
+    )
+    .map_err(BackendError::from)
+    .map_err(String::from)?
+    .ok_or_else(|| String::from(missing_api_key(CredentialKey::DeepseekApiKey)))?;
+    let mut cmd = Command::new(go_sidecar_binary().map_err(String::from)?);
+    cmd.arg("retry-generation")
+        .arg("--task-dir")
+        .arg(task_dir.as_os_str())
+        .arg("--generation-id")
+        .arg(&generation_id)
+        // The retried generation keeps its recorded provider and model, so no
+        // provider selection is passed here.
+        .arg("--control-stdin");
+    let isolated_root = isolated_go_project_root()?;
+    cmd.arg("--project-root")
+        .arg(&isolated_root)
+        .current_dir(&isolated_root);
+    cmd.env_remove("MIMO_API_KEY");
+    cmd.env_remove("DEEPSEEK_API_KEY");
+    cmd.env("DEEPSEEK_API_KEY", &credential.value);
+    let secrets = vec![credential.value];
+
+    let runner = spawn_and_watch(&app, &active, cmd, &secrets, true).map_err(String::from)?;
+    let (code, stdout_lines, stderr_lines) = runner.wait()?;
+    let _ = app.emit("process-done", DoneEvent { code });
+    match code {
+        Some(0) => {
+            let parsed = ParsedOutput::parse_lines(&stdout_lines);
+            let status = parsed
+                .generation_status
+                .unwrap_or_else(|| "completed".to_string());
+            Ok(RetryGenerationResult {
+                generation_id,
+                status,
+            })
+        }
+        Some(c) => Err(String::from(classify_process_failure(
+            Some(c),
+            &stderr_lines,
+            &secrets,
+            "The generation was cancelled before it finished.",
+        ))),
+        None => Err(String::from(BackendError::Interrupted {
+            message: "Process was terminated by a signal.".to_string(),
+        })),
+    }
+}
+
+/// retry_task_generation retries one user-selected failed generation under its
+/// original identity. It never creates a new generation and never retries a
+/// different record than the one requested.
+#[tauri::command]
+async fn retry_task_generation(
+    app: AppHandle,
+    active: State<'_, ActiveProcess>,
+    task_folder: String,
+    generation_id: String,
+    deepseek_api_key: Option<String>,
+) -> Result<RetryGenerationResult, String> {
+    let active = active.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        retry_task_generation_blocking(app, active, task_folder, generation_id, deepseek_api_key)
+    })
+    .await
+    .map_err(|_| {
+        String::from(BackendError::ProcessFailed {
+            message: "Generation retry worker failed.".to_string(),
+            code: None,
+        })
+    })?
+}
+
+#[tauri::command]
+fn cancel_model_download(active: State<'_, ActiveProcess>) -> CancelOutcome {
+    active.cancel_model_operation()
 }
 
 #[tauri::command]
@@ -3684,6 +4583,15 @@ fn resolve_generation_task(
         .ok_or_else(|| BackendError::ArtifactUnavailable {
             message: "Task is not eligible for generation. Refresh the Task Library.".to_string(),
         })?;
+    // A Task another process is working on must not be overlapped, even when the
+    // frontend believes generation is available.
+    if let Some(actions) = summary.actions.as_ref() {
+        if actions.locked || actions.has_reason("task_locked") {
+            return Err(BackendError::TaskLocked {
+                message: "Task is locked by another process.".to_string(),
+            });
+        }
+    }
     let root = output_root
         .canonicalize()
         .map_err(|_| BackendError::ArtifactValidationFailed {
@@ -3785,7 +4693,8 @@ fn generate_task_content_blocking(
         .arg("--llm-provider")
         .arg(&llm_config.provider_id)
         .arg("--llm-model")
-        .arg(&llm_config.model_id);
+        .arg(&llm_config.model_id)
+        .arg("--control-stdin");
     let isolated = isolated_go_project_root().map_err(String::from)?;
     cmd.arg("--project-root")
         .arg(&isolated)
@@ -3794,11 +4703,16 @@ fn generate_task_content_blocking(
         .env_remove("DEEPSEEK_API_KEY")
         .env("DEEPSEEK_API_KEY", &credential.value);
     let secrets = vec![credential.value];
-    let runner = spawn_and_watch(&app, &active, cmd, &secrets).map_err(String::from)?;
+    let runner = spawn_and_watch(&app, &active, cmd, &secrets, true).map_err(String::from)?;
     let (code, stdout, stderr) = runner.wait()?;
     let _ = app.emit("process-done", DoneEvent { code });
     if code != Some(0) {
-        return Err(String::from(classify_stderr(&stderr, code, &secrets)));
+        return Err(String::from(classify_process_failure(
+            code,
+            &stderr,
+            &secrets,
+            "The generation was cancelled before it finished.",
+        )));
     }
     let generation_id = stdout
         .iter()
@@ -3914,8 +4828,11 @@ fn resolve_validated_task_artifact(
         .iter()
         .flat_map(|group| group.versions.iter())
         .any(|version| {
-            version.status == "completed"
-                && version.reference.as_deref() == Some(artifact_reference)
+            // A completed generation is a deliverable. A failed generation is only
+            // openable when the runtime explicitly preserved a usable partial
+            // output for it, and it stays labelled as incomplete in the UI.
+            version.reference.as_deref() == Some(artifact_reference)
+                && (version.status == "completed" || version.partial_output)
         });
     if !listed_primary && !listed_canonical && !listed_generation {
         return Err(BackendError::ArtifactUnavailable {
@@ -4039,6 +4956,98 @@ fn perform_task_artifact_action(
         });
     }
     Ok(())
+}
+
+/// resolve_resumable_task revalidates everything the runtime owns before a
+/// resume is dispatched: current membership in the Task Library, directory
+/// containment, and the Task lock. A path handed over by the frontend is never
+/// trusted on its own.
+fn resolve_resumable_task(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    require_can_resume: bool,
+) -> Result<PathBuf, BackendError> {
+    let hint = validated_relative_hint(task_folder, "Task folder", false)?;
+    let summary = discovery
+        .tasks
+        .iter()
+        .find(|task| task.task_folder == task_folder)
+        .ok_or_else(|| BackendError::ArtifactUnavailable {
+            message: "Task is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    if let Some(actions) = summary.actions.as_ref() {
+        if actions.locked || actions.has_reason("task_locked") {
+            return Err(BackendError::TaskLocked {
+                message: "Task is locked by another process.".to_string(),
+            });
+        }
+        // The runtime already decided this action is unavailable; re-checking it
+        // here keeps a stale Task Library view from dispatching doomed work.
+        if require_can_resume && !actions.can_resume {
+            let message = actions
+                .blocking_reasons
+                .first()
+                .map(|reason| reason.message.clone())
+                .unwrap_or_else(|| {
+                    "Task cannot continue right now. Refresh the Task Library.".to_string()
+                });
+            return Err(BackendError::ArtifactUnavailable { message });
+        }
+    }
+    let root = output_root
+        .canonicalize()
+        .map_err(|_| BackendError::ArtifactValidationFailed {
+            message: "Task Library output root is unavailable.".to_string(),
+        })?;
+    if !root.is_dir() {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Task Library output root is unavailable.".to_string(),
+        });
+    }
+    let task = root
+        .join(hint)
+        .canonicalize()
+        .map_err(|_| BackendError::ArtifactUnavailable {
+            message: "Task is no longer available.".to_string(),
+        })?;
+    if !task.is_dir() || !task.starts_with(&root) {
+        return Err(BackendError::ArtifactValidationFailed {
+            message: "Task folder failed containment validation.".to_string(),
+        });
+    }
+    Ok(task)
+}
+
+/// resolve_retryable_generation finds one generation that the runtime currently
+/// reports as retryable for this Task.
+fn resolve_retryable_generation(
+    output_root: &Path,
+    discovery: &DiscoveryResult,
+    task_folder: &str,
+    generation_id: &str,
+) -> Result<PathBuf, BackendError> {
+    // A retry only needs the Task itself and its lock; the speech-side reasons
+    // that may block a resume do not apply to a generation retry.
+    let task = resolve_resumable_task(output_root, discovery, task_folder, false)?;
+    let summary = discovery
+        .tasks
+        .iter()
+        .find(|task| task.task_folder == task_folder)
+        .ok_or_else(|| BackendError::ArtifactUnavailable {
+            message: "Task is no longer available. Refresh the Task Library.".to_string(),
+        })?;
+    let retryable = summary
+        .generated_content
+        .iter()
+        .flat_map(|group| group.versions.iter())
+        .any(|version| version.generation_id == generation_id && version.retryable == Some(true));
+    if !retryable {
+        return Err(BackendError::ArtifactUnavailable {
+            message: "Generation is not retryable. Refresh the Task Library.".to_string(),
+        });
+    }
+    Ok(task)
 }
 
 fn run_validated_task_artifact_action<F>(
@@ -4295,6 +5304,14 @@ pub fn run() {
             run_meeting_asr,
             resume_meeting_asr,
             list_tasks,
+            preview_task_cache,
+            get_storage_settings,
+            set_storage_settings,
+            get_storage_summary,
+            preview_cache_batch,
+            clean_cache_batch,
+            run_storage_maintenance,
+            clean_task_cache,
             get_task_metadata,
             update_task_metadata,
             list_prompt_templates,
@@ -4312,6 +5329,9 @@ pub fn run() {
             update_model_download_settings,
             test_huggingface_endpoint,
             generate_task_content,
+            retry_task_generation,
+            resume_task,
+            cancel_task,
             open_task_artifact,
             reveal_task_artifact,
             get_credential_status,
@@ -4324,7 +5344,19 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if matches!(event, RunEvent::ExitRequested { .. }) {
-            app_handle.state::<ActiveProcess>().terminate();
+            // Leaving the app must end the processes this app owns. The stop is
+            // cooperative first, so the sidecar can finish its current atomic
+            // write and stop the ffmpeg it started; only a run that ignores the
+            // request within the exit grace period is forced down.
+            let active = app_handle.state::<ActiveProcess>();
+            active.request_stop();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline && active.is_active() {
+                thread::sleep(Duration::from_millis(50));
+            }
+            if active.is_active() {
+                active.terminate();
+            }
         }
     });
 }
@@ -4568,6 +5600,34 @@ mod tests {
     }
 
     #[test]
+    fn test_cancel_exit_code_is_never_a_provider_failure() {
+        let stderr =
+            vec!["Error: task cancelled: the task was cancelled before it finished".to_string()];
+        let cancelled = classify_process_failure(
+            Some(CANCELLED_EXIT_CODE),
+            &stderr,
+            &[],
+            "The generation was cancelled before it finished.",
+        );
+        match cancelled {
+            BackendError::Interrupted { .. } => {}
+            other => panic!("expected Interrupted, got {:?}", other),
+        }
+
+        // A real failure still classifies from stderr.
+        let failed = classify_process_failure(
+            Some(1),
+            &["Error: ffmpeg was not found on PATH".to_string()],
+            &[],
+            "The generation was cancelled before it finished.",
+        );
+        match failed {
+            BackendError::DependencyMissing { .. } => {}
+            other => panic!("expected DependencyMissing, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_classify_dependency_missing() {
         let err = classify_stderr(
             &["Error: ffmpeg was not found on PATH".to_string()],
@@ -4634,6 +5694,7 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "notes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4655,6 +5716,7 @@ mod tests {
         let missing = match resolve_run_credentials(
             &store,
             "minutes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4677,6 +5739,7 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "minutes",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4703,6 +5766,7 @@ mod tests {
         let credentials = resolve_run_credentials(
             &store,
             "transcript_and_generate",
+            DEFAULT_ASR_PROVIDER,
             RuntimeMode::Development,
             None,
             None,
@@ -4711,6 +5775,92 @@ mod tests {
         .unwrap();
         assert_eq!(credentials.mimo, "mimo");
         assert_eq!(credentials.deepseek.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    fn test_run_credentials_local_transcript_needs_no_cloud_keys() {
+        let store = TestCredentialStore::default();
+        let credentials = resolve_run_credentials(
+            &store,
+            "transcript_only",
+            LOCAL_ASR_PROVIDER,
+            RuntimeMode::Production,
+            Some("unused-mimo"),
+            None,
+            &EnvironmentValues::default(),
+        )
+        .unwrap();
+        assert!(credentials.mimo.is_empty());
+        assert!(credentials.deepseek.is_none());
+    }
+
+    #[test]
+    fn test_run_credentials_local_generation_requires_only_deepseek() {
+        let store = TestCredentialStore::default();
+        let environment = EnvironmentValues::default();
+        let missing = resolve_run_credentials(
+            &store,
+            "transcript_and_generate",
+            LOCAL_ASR_PROVIDER,
+            RuntimeMode::Production,
+            None,
+            None,
+            &environment,
+        )
+        .err()
+        .expect("generation needs a key");
+        assert!(
+            matches!(missing, BackendError::MissingApiKey { message } if message.contains("DEEPSEEK_API_KEY"))
+        );
+        let credentials = resolve_run_credentials(
+            &store,
+            "transcript_and_generate",
+            LOCAL_ASR_PROVIDER,
+            RuntimeMode::Production,
+            None,
+            Some("deepseek-session"),
+            &environment,
+        )
+        .unwrap();
+        assert!(credentials.mimo.is_empty());
+        assert_eq!(credentials.deepseek.as_deref(), Some("deepseek-session"));
+    }
+
+    #[test]
+    fn test_run_credentials_cloud_transcript_still_requires_mimo() {
+        let missing = resolve_run_credentials(
+            &TestCredentialStore::default(),
+            "transcript_only",
+            DEFAULT_ASR_PROVIDER,
+            RuntimeMode::Production,
+            None,
+            None,
+            &EnvironmentValues::default(),
+        )
+        .err()
+        .expect("cloud ASR needs a key");
+        assert!(
+            matches!(missing, BackendError::MissingApiKey { message } if message.contains("MIMO_API_KEY"))
+        );
+    }
+
+    #[test]
+    fn test_local_asr_start_checks_real_readiness() {
+        let mut status = LocalModelStatus {
+            model_id: LOCAL_ASR_MODEL.to_string(),
+            model_version: "2024-07-17".to_string(),
+            state: "ready".to_string(),
+            message: "Ready.".to_string(),
+            installed_size_bytes: 1,
+            runtime_id: Some("sherpa-onnx".to_string()),
+            runtime_version: Some("1.13.8".to_string()),
+        };
+        assert!(validate_local_asr_start(BackendKind::Go, &status).is_ok());
+        assert!(validate_local_asr_start(BackendKind::Python, &status).is_err());
+        for state in ["not_installed", "model_invalid", "runtime_missing"] {
+            status.state = state.to_string();
+            assert!(validate_local_asr_start(BackendKind::Go, &status).is_err());
+        }
     }
 
     #[test]
@@ -4916,11 +6066,24 @@ mod tests {
     }
 
     #[test]
+    fn test_ffmpeg_production_path_never_uses_host_path() {
+        let dir = Path::new("/Applications/Voxly.app/Contents/MacOS");
+        assert_eq!(
+            ffmpeg_binary_for(RuntimeMode::Production, Some(dir)).unwrap(),
+            dir.join("ffmpeg")
+        );
+        assert_eq!(
+            ffmpeg_binary_for(RuntimeMode::Development, Some(dir)).unwrap(),
+            PathBuf::from("ffmpeg")
+        );
+    }
+
+    #[test]
     fn test_preflight_missing_ffmpeg_is_not_ready() {
         let missing = test_dir("meeting-asr-preflight-ffmpeg-missing").join("ffmpeg");
         let check = check_ffmpeg_at(&missing);
         assert!(!check.ready);
-        assert!(check.message.contains("system prerequisite"));
+        assert!(check.message.contains("reinstall Voxly"));
     }
 
     #[test]
@@ -5048,11 +6211,75 @@ mod tests {
             &ActiveProcess::default(),
             ProviderSelection::default_asr(),
             ProviderSelection::default_llm(),
+            "zh".to_string(),
+            false,
         )
         .unwrap();
         assert_eq!(saved.asr, ProviderSelection::default_asr());
         assert_eq!(saved.llm, ProviderSelection::default_llm());
         fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn test_provider_settings_local_language_persists_and_validates() {
+        let base = test_dir("voxly-local-language");
+        let path = base.join(DESKTOP_SETTINGS_FILE);
+        assert_eq!(
+            load_desktop_settings(&path).unwrap().local_asr_language,
+            "zh"
+        );
+        let saved = set_provider_settings_at(
+            &path,
+            &ActiveProcess::default(),
+            ProviderSelection::default_asr(),
+            ProviderSelection::default_llm(),
+            "auto".to_string(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(saved.local_asr_language, "auto");
+        assert_eq!(
+            load_desktop_settings(&path).unwrap().local_asr_language,
+            "auto"
+        );
+        assert!(set_provider_settings_at(
+            &path,
+            &ActiveProcess::default(),
+            ProviderSelection::default_asr(),
+            ProviderSelection::default_llm(),
+            "invalid".to_string(),
+            false,
+        )
+        .is_err());
+        assert_eq!(
+            load_desktop_settings(&path).unwrap().local_asr_language,
+            "auto"
+        );
+    }
+
+    #[test]
+    fn test_provider_settings_vad_preserves_storage_preferences() {
+        let base = test_dir("voxly-vad-settings");
+        let path = base.join(DESKTOP_SETTINGS_FILE);
+        let mut initial = DesktopSettings::default();
+        initial.auto_clean_chunks = true;
+        save_desktop_settings(&path, &initial).unwrap();
+        let saved = set_provider_settings_at(
+            &path,
+            &ActiveProcess::default(),
+            ProviderSelection {
+                provider_id: LOCAL_ASR_PROVIDER.to_string(),
+                model_id: LOCAL_ASR_MODEL.to_string(),
+            },
+            ProviderSelection::default_llm(),
+            "zh".to_string(),
+            true,
+        )
+        .unwrap();
+        assert!(saved.local_vad_enabled);
+        let reloaded = load_desktop_settings(&path).unwrap();
+        assert!(reloaded.local_vad_enabled && reloaded.auto_clean_chunks);
+        assert!(reloaded.cleanup_temporary_on_startup);
     }
 
     #[test]
@@ -5833,6 +7060,46 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_preferences_migrate_old_settings_and_roundtrip() {
+        let base = test_dir("voxly-storage-settings");
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join(DESKTOP_SETTINGS_FILE);
+        fs::write(&path, r#"{"output_root":null,"theme":"dark"}"#).unwrap();
+        let defaults = storage_settings_at(&path).unwrap();
+        assert!(!defaults.auto_clean_chunks);
+        assert!(defaults.cleanup_temporary_on_startup);
+        let mut settings = load_desktop_settings(&path).unwrap();
+        settings.auto_clean_chunks = true;
+        settings.cleanup_temporary_on_startup = false;
+        save_desktop_settings(&path, &settings).unwrap();
+        let stored = storage_settings_at(&path).unwrap();
+        assert!(stored.auto_clean_chunks);
+        assert!(!stored.cleanup_temporary_on_startup);
+        assert_eq!(
+            load_desktop_settings(&path).unwrap().theme.as_deref(),
+            Some("dark")
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn test_cache_transport_preserves_preview_and_blocking_reason() {
+        let preview = br#"{"can_clean":true,"files":[{"reference":"chunks/part_001.wav","size_bytes":4096}],"total_bytes":4096,"token":"preview-token","cache_status":"present","removed_bytes":0}"#;
+        let result = decode_cache_output(true, preview).unwrap();
+        assert!(result.can_clean);
+        assert_eq!(result.token, "preview-token");
+        assert_eq!(result.files[0].reference, "chunks/part_001.wav");
+        assert_eq!(result.total_bytes, 4096);
+        let blocked = br#"{"can_clean":false,"reason":"task_busy","files":[],"total_bytes":0,"cache_status":"unknown","removed_bytes":0}"#;
+        assert_eq!(
+            decode_cache_output(true, blocked).unwrap().reason,
+            "task_busy"
+        );
+        assert!(decode_cache_output(false, b"secret or internal path").is_err());
+        assert!(decode_cache_output(true, b"{}").is_err());
+    }
+
+    #[test]
     fn test_task_library_malformed_json_is_safe_error() {
         let error = decode_task_library_process_output(true, Some(0), b"not-json").unwrap_err();
         let encoded = error.to_json_string();
@@ -5933,6 +7200,7 @@ mod tests {
                 canonical_transcript: None,
                 generated_content: Vec::new(),
                 can_generate: false,
+                actions: None,
             }],
             issues: Vec::new(),
         }
@@ -5962,6 +7230,187 @@ mod tests {
             task_dir.canonicalize().unwrap()
         );
         assert!(resolve_generation_task(&root, &discovery, "../task").is_err());
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_resume_requires_free_task_and_retryable_generation() {
+        let base = test_dir("meeting-asr-resume-lock-and-retry");
+        let root = base.join("root");
+        let task_dir = root.join("task");
+        fs::create_dir_all(&task_dir).unwrap();
+        fs::write(task_dir.join("transcript.md"), "text").unwrap();
+
+        let mut discovery = artifact_discovery("task", "transcript.md");
+        discovery.tasks[0].actions = Some(TaskActions {
+            locked: false,
+            next_stage: "TRANSCRIBING".to_string(),
+            can_resume: true,
+            can_resume_transcribe: true,
+            can_resume_generation: false,
+            can_retry_generation: true,
+            pending_chunks: 1,
+            blocking_reasons: Vec::new(),
+        });
+        assert_eq!(
+            resolve_resumable_task(&root, &discovery, "task", true).unwrap(),
+            task_dir.canonicalize().unwrap()
+        );
+        // A path the frontend invented is never trusted on its own.
+        assert!(resolve_resumable_task(&root, &discovery, "../task", true).is_err());
+        assert!(resolve_resumable_task(&root, &discovery, "missing-task", true).is_err());
+
+        // Another process owning the Task blocks the action before it spawns.
+        discovery.tasks[0].actions = Some(TaskActions {
+            locked: true,
+            next_stage: "TRANSCRIBING".to_string(),
+            can_resume: false,
+            can_resume_transcribe: false,
+            can_resume_generation: false,
+            can_retry_generation: false,
+            pending_chunks: 1,
+            blocking_reasons: vec![TaskBlockingReason {
+                code: "task_locked".to_string(),
+                message: "Another process is working on this task.".to_string(),
+            }],
+        });
+        let locked = resolve_resumable_task(&root, &discovery, "task", true).unwrap_err();
+        assert!(matches!(locked, BackendError::TaskLocked { .. }));
+
+        // Only a generation the runtime reports as retryable may be retried.
+        discovery.tasks[0].actions = None;
+        discovery.tasks[0].generated_content = vec![GenerationGroup {
+            template_id: "structured-notes".to_string(),
+            display_name: "Structured notes".to_string(),
+            latest: None,
+            versions: vec![GenerationSummary {
+                generation_id: "gen_retry".to_string(),
+                template_revision: 1,
+                template_display_name: "Structured notes".to_string(),
+                status: "failed".to_string(),
+                created_at: "2026-07-16T01:00:00Z".to_string(),
+                reference: None,
+                has_error: true,
+                error_code: "generation_failed".to_string(),
+                partial_output: false,
+                retryable: Some(false),
+                legacy: false,
+                provider: "deepseek".to_string(),
+                model: "model".to_string(),
+            }],
+        }];
+        assert!(resolve_retryable_generation(&root, &discovery, "task", "gen_retry").is_err());
+        discovery.tasks[0].generated_content[0].versions[0].retryable = Some(true);
+        assert_eq!(
+            resolve_retryable_generation(&root, &discovery, "task", "gen_retry").unwrap(),
+            task_dir.canonicalize().unwrap()
+        );
+        assert!(resolve_retryable_generation(&root, &discovery, "task", "gen_other").is_err());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_stale_watchdog_identity_cannot_stop_a_later_run() {
+        let active = ActiveProcess::default();
+
+        let first = Command::new("sleep").arg("0.2").spawn().unwrap();
+        let first_id = active.register(first, None).unwrap();
+        let outcome = active.request_stop();
+        assert_eq!(outcome.state, "stopping");
+
+        // The cancelled run exits well before the watchdog deadline.
+        thread::sleep(Duration::from_millis(400));
+        active.finish(first_id);
+        assert!(!active.is_run_active(first_id));
+
+        // A new run takes the slot; the stale watchdog must not be able to reach it.
+        let second = Command::new("sleep").arg("30").spawn().unwrap();
+        let second_id = active.register(second, None).unwrap();
+        assert_ne!(first_id, second_id);
+        assert!(active.is_run_active(second_id));
+        assert!(
+            !active.terminate_run(first_id),
+            "a stale run identity must not stop the current run"
+        );
+        assert!(
+            active.is_run_active(second_id),
+            "the current run must survive"
+        );
+
+        assert!(active.terminate_run(second_id));
+        active.finish(second_id);
+        assert!(!active.is_active());
+    }
+
+    #[test]
+    fn test_cancel_without_a_running_process_is_idle() {
+        let active = ActiveProcess::default();
+        assert_eq!(active.request_stop().state, "idle");
+        assert!(!active.is_active());
+        assert!(!active.is_stopping());
+    }
+
+    #[test]
+    fn test_task_artifact_allows_preserved_partial_generation_only() {
+        let base = test_dir("meeting-asr-partial-generation-artifact");
+        let root = base.join("root");
+        let task_dir = root.join("task");
+        let generated = task_dir.join("generated");
+        fs::create_dir_all(&generated).unwrap();
+        fs::write(generated.join("partial.md"), "truncated").unwrap();
+        fs::write(generated.join("failed.md"), "nothing usable").unwrap();
+
+        let mut discovery = artifact_discovery("task", "transcript.md");
+        discovery.tasks[0].generated_content = vec![GenerationGroup {
+            template_id: "structured-notes".to_string(),
+            display_name: "Structured notes".to_string(),
+            latest: None,
+            versions: vec![
+                GenerationSummary {
+                    generation_id: "gen_partial".to_string(),
+                    template_revision: 1,
+                    template_display_name: "Structured notes".to_string(),
+                    status: "failed".to_string(),
+                    created_at: "2026-07-16T01:00:00Z".to_string(),
+                    reference: Some("generated/partial.md".to_string()),
+                    has_error: true,
+                    error_code: "output_incomplete".to_string(),
+                    partial_output: true,
+                    retryable: Some(true),
+                    legacy: false,
+                    provider: "deepseek".to_string(),
+                    model: "model".to_string(),
+                },
+                GenerationSummary {
+                    generation_id: "gen_failed".to_string(),
+                    template_revision: 1,
+                    template_display_name: "Structured notes".to_string(),
+                    status: "failed".to_string(),
+                    created_at: "2026-07-16T01:05:00Z".to_string(),
+                    reference: Some("generated/failed.md".to_string()),
+                    has_error: true,
+                    error_code: "generation_failed".to_string(),
+                    partial_output: false,
+                    retryable: Some(true),
+                    legacy: false,
+                    provider: "deepseek".to_string(),
+                    model: "model".to_string(),
+                },
+            ],
+        }];
+
+        assert_eq!(
+            resolve_validated_task_artifact(&root, &discovery, "task", "generated/partial.md")
+                .unwrap(),
+            generated.join("partial.md").canonicalize().unwrap()
+        );
+        // A failed generation without preserved output stays unopenable.
+        assert!(
+            resolve_validated_task_artifact(&root, &discovery, "task", "generated/failed.md")
+                .is_err()
+        );
         let _ = fs::remove_dir_all(base);
     }
 

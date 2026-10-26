@@ -5,6 +5,8 @@
 package tasklibrary
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +43,7 @@ type TaskSummary struct {
 	CanonicalTranscript *ArtifactSummary  `json:"canonical_transcript,omitempty"`
 	GeneratedContent    []GenerationGroup `json:"generated_content"`
 	CanGenerate         bool              `json:"can_generate"`
+	Actions             *TaskActions      `json:"actions,omitempty"`
 }
 
 // ArtifactSummary contains only information useful for output presentation.
@@ -69,10 +72,33 @@ type GenerationSummary struct {
 	CreatedAt           string `json:"created_at"`
 	Reference           string `json:"reference,omitempty"`
 	HasError            bool   `json:"has_error"`
+	ErrorCode           string `json:"error_code,omitempty"`
+	PartialOutput       bool   `json:"partial_output,omitempty"`
 	Retryable           *bool  `json:"retryable,omitempty"`
 	Legacy              bool   `json:"legacy"`
 	Provider            string `json:"provider,omitempty"`
 	Model               string `json:"model,omitempty"`
+}
+
+// TaskActions describes what the desktop may do with a Task right now, and why
+// anything else is blocked. The runtime derives it from durable manifest state,
+// the Task lock, and provider support; it is never taken from the caller.
+type TaskActions struct {
+	Locked              bool                 `json:"locked"`
+	NextStage           string               `json:"next_stage,omitempty"`
+	CanResume           bool                 `json:"can_resume"`
+	CanResumeTranscribe bool                 `json:"can_resume_transcribe"`
+	CanResumeGeneration bool                 `json:"can_resume_generation"`
+	CanRetryGeneration  bool                 `json:"can_retry_generation"`
+	PendingChunks       int                  `json:"pending_chunks"`
+	BlockingReasons     []TaskBlockingReason `json:"blocking_reasons"`
+}
+
+// TaskBlockingReason is one reason an action is currently unavailable. The code
+// is stable so the UI can localize it; the message is a safe fallback.
+type TaskBlockingReason struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // DiscoveryIssue reports one task folder that could not be represented safely.
@@ -91,6 +117,16 @@ type DiscoveryResult struct {
 // Discover scans direct child directories of root for canonical Task manifests.
 // Directories without a manifest are ignored. No files are created or modified.
 func Discover(root string) (DiscoveryResult, error) {
+	return DiscoverWithDescriber(root, nil)
+}
+
+// TaskDescriber annotates one discovered Task in place. The runtime supplies it
+// so facts that depend on the process environment (the Task lock, provider
+// runtime support) stay out of this package.
+type TaskDescriber func(taskDir string, manifest *taskmanifest.TaskManifest, summary *TaskSummary)
+
+// DiscoverWithDescriber is Discover plus a runtime-supplied annotation step.
+func DiscoverWithDescriber(root string, describe TaskDescriber) (DiscoveryResult, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return DiscoveryResult{}, fmt.Errorf("read task root: %w", err)
@@ -119,7 +155,12 @@ func Discover(root string) (DiscoveryResult, error) {
 			result.Issues = append(result.Issues, issueFor(taskFolder, err))
 			continue
 		}
-		result.Tasks = append(result.Tasks, summarize(filepath.Join(root, taskFolder), taskFolder, manifest))
+		taskDir := filepath.Join(root, taskFolder)
+		summary := summarize(taskDir, taskFolder, manifest)
+		if describe != nil {
+			describe(taskDir, manifest, &summary)
+		}
+		result.Tasks = append(result.Tasks, summary)
 	}
 
 	sort.Slice(result.Tasks, func(i, j int) bool {
@@ -194,6 +235,21 @@ func canonicalTranscriptSummary(taskDir string, manifest *taskmanifest.TaskManif
 	return &artifact
 }
 
+// partialOutputCodes lists the generation failure codes whose usable text is
+// deliberately preserved on disk by the generation runtime. They are the only
+// failed generations a reader may open, and always as incomplete output.
+var partialOutputCodes = map[string]struct{}{
+	"output_incomplete": {},
+	"output_refused":    {},
+	"output_unverified": {},
+	"output_empty":      {},
+}
+
+func preservesPartialOutput(errorCode string) bool {
+	_, ok := partialOutputCodes[errorCode]
+	return ok
+}
+
 func generationGroups(taskDir string, manifest *taskmanifest.TaskManifest) []GenerationGroup {
 	groups := make(map[string]*GenerationGroup)
 	for _, record := range manifest.Generations {
@@ -211,13 +267,23 @@ func generationGroups(taskDir string, manifest *taskmanifest.TaskManifest) []Gen
 			value := *record.Error.Retryable
 			retryable = &value
 		}
+		errorCode := ""
+		if record.Error != nil {
+			errorCode = record.Error.Code
+		}
 		status := record.Status
 		reference := safeRelativeReference(taskDir, record.ArtifactReference)
-		if status == "completed" && (reference == "" || !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(reference)))) {
-			status = "unavailable"
+		if reference != "" && !isRegularFile(filepath.Join(taskDir, filepath.FromSlash(reference))) {
 			reference = ""
 		}
-		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, TemplateRevision: record.TemplateRevision, TemplateDisplayName: record.TemplateDisplayName, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, Retryable: retryable, Provider: record.LLMProvider, Model: record.LLMModel})
+		if status == "completed" && reference == "" {
+			status = "unavailable"
+		}
+		// Reading a preserved partial output and treating it as a complete result
+		// are separate facts: only failed generations whose text was deliberately
+		// preserved are readable, and they stay marked as incomplete.
+		partialOutput := status == "failed" && reference != "" && preservesPartialOutput(errorCode)
+		group.Versions = append(group.Versions, GenerationSummary{GenerationID: record.GenerationID, TemplateRevision: record.TemplateRevision, TemplateDisplayName: record.TemplateDisplayName, Status: status, CreatedAt: record.CreatedAt, Reference: reference, HasError: record.Error != nil, ErrorCode: errorCode, PartialOutput: partialOutput, Retryable: retryable, Provider: record.LLMProvider, Model: record.LLMModel})
 	}
 	appendLegacy := func(id, name string, artifact taskmanifest.Artifact) {
 		if artifact.State == "unavailable" && artifact.Path == "" {
@@ -282,7 +348,27 @@ func taskTitle(manifest *taskmanifest.TaskManifest) (string, string) {
 
 func primaryArtifacts(taskDir string, manifest *taskmanifest.TaskManifest) []ArtifactSummary {
 	if manifest.SchemaVersion == taskmanifest.LatestSchemaVersion {
-		return []ArtifactSummary{*canonicalTranscriptSummary(taskDir, manifest)}
+		artifacts := []ArtifactSummary{*canonicalTranscriptSummary(taskDir, manifest)}
+		if plan := manifest.Chunks.VAD; plan != nil && plan.Ready {
+			for _, entry := range []struct{ kind, reference, hash string }{
+				{"timed_transcript", "transcripts/transcript-timed.md", plan.TimedSHA256},
+				{"vad_segments", "transcripts/vad-segments.json", plan.ResultsSHA256},
+			} {
+				status := "unavailable"
+				dirInfo, dirErr := os.Lstat(filepath.Join(taskDir, "transcripts"))
+				fileInfo, fileErr := os.Lstat(filepath.Join(taskDir, entry.reference))
+				if dirErr == nil && dirInfo.IsDir() && dirInfo.Mode()&os.ModeSymlink == 0 && fileErr == nil && fileInfo.Mode().IsRegular() && entry.hash != "" {
+					if data, err := os.ReadFile(filepath.Join(taskDir, entry.reference)); err == nil {
+						sum := sha256.Sum256(data)
+						if hex.EncodeToString(sum[:]) == entry.hash {
+							status = "completed"
+						}
+					}
+				}
+				artifacts = append(artifacts, ArtifactSummary{Kind: entry.kind, Reference: entry.reference, Status: status})
+			}
+		}
+		return artifacts
 	}
 	artifacts := make([]ArtifactSummary, 0, 3)
 	if manifest.OutputMode == "minutes" {

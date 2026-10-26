@@ -9,13 +9,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yudi/meet-asr/core-go/modelcatalog"
 	"github.com/yudi/meet-asr/core-go/tasklibrary"
+	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
 const version = "0.2.0-minutes"
@@ -29,18 +29,24 @@ func main() {
 	switch os.Args[1] {
 	case "transcribe":
 		if err := runTranscribe(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			exitWithError(err)
 		}
 	case "resume":
 		if err := RunResume(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			exitWithError(err)
 		}
 	case "list-tasks":
 		if err := runListTasks(os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+	case "storage-summary", "preview-cache-batch", "clean-cache-batch", "cleanup-model-temporary":
+		if err := runStorageCommand(os.Args[1], os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			exitWithError(err)
+		}
+	case "preview-task-cache", "clean-task-cache":
+		if err := runTaskCache(os.Args[1], os.Args[2:], os.Stdout); err != nil {
+			exitWithError(err)
 		}
 	case "get-task-metadata":
 		if err := runGetTaskMetadata(os.Args[2:], os.Stdout); err != nil {
@@ -84,8 +90,11 @@ func main() {
 		}
 	case "generate-content":
 		if err := runGenerateContent(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			exitWithError(err)
+		}
+	case "retry-generation":
+		if err := runRetryGeneration(os.Args[2:], os.Stdout); err != nil {
+			exitWithError(err)
 		}
 	case "version":
 		fmt.Printf("meeting-asr-go %s\n", version)
@@ -98,12 +107,24 @@ func main() {
 	}
 }
 
+// exitWithError reports a failure with the exit status the desktop uses to tell
+// a requested stop apart from a workflow or provider failure.
+func exitWithError(err error) {
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if errors.Is(err, errTaskCancelled) {
+		os.Exit(cancelledExitCode)
+	}
+	os.Exit(1)
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `meeting-asr-go %s — experimental Go CLI for meeting-asr
 
 Usage:
   meeting-asr-go transcribe <audio_path> [flags]
   meeting-asr-go resume <task_dir> [flags]
+  meeting-asr-go preview-task-cache --output-root <path> --task-folder <folder>
+  meeting-asr-go clean-task-cache --output-root <path> --task-folder <folder> --expected-token <token>
   meeting-asr-go list-tasks --output-root <path>
   meeting-asr-go get-task-metadata --output-root <path> --task-id <id>
   meeting-asr-go update-task-metadata --output-root <path> --task-id <id>
@@ -118,6 +139,7 @@ Usage:
 	meeting-asr-go import-model --app-data-root <path> --model-id sensevoice-small-int8 --source-archive <path>
 	meeting-asr-go delete-model --app-data-root <path> --model-id sensevoice-small-int8
   meeting-asr-go generate-content --task-dir <path> --template-id <id>
+  meeting-asr-go retry-generation --task-dir <path> --generation-id <id>
 
 Flags:
   --output-mode transcript_only   Output mode: transcript_only or transcript_and_generate
@@ -197,6 +219,7 @@ func runModelCommand(command string, args []string, stdout, stderr io.Writer) er
 	root := fs.String("app-data-root", "", "Voxly app data root")
 	modelID := fs.String("model-id", "sensevoice-small-int8", "Managed model ID")
 	source := fs.String("source-archive", "", "Official archive selected for import")
+	controlStdin := fs.Bool("control-stdin", false, "Accept a graceful stop request on stdin")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || !filepath.IsAbs(*root) {
 		return fmt.Errorf("--app-data-root must be absolute")
 	}
@@ -207,7 +230,7 @@ func runModelCommand(command string, args []string, stdout, stderr io.Writer) er
 	if command == "model-status" {
 		return json.NewEncoder(stdout).Encode(modelcatalog.Status(*root, catalog.CatalogRevision, model))
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := watchCancellation(*controlStdin)
 	defer stop()
 	progress := func(state string, completed, total int64) {
 		fmt.Fprintf(stderr, "Model-Progress: %s %d %d\n", state, completed, total)
@@ -251,12 +274,15 @@ func runGenerateContent(args []string) error {
 	envFile := fs.String("env-file", "", "Explicit .env path")
 	projectRoot := fs.String("project-root", "", "Project root")
 	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
+	controlStdin := fs.Bool("control-stdin", false, "Accept a graceful stop request on stdin")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || !filepath.IsAbs(*taskDir) {
 		return fmt.Errorf("--task-dir must be an absolute path")
 	}
+	ctx, stop := watchCancellation(*controlStdin)
+	defer stop()
 	lock, err := AcquireTaskLock(*taskDir)
 	if err != nil {
 		return err
@@ -290,14 +316,89 @@ func runGenerateContent(args []string) error {
 	if err != nil {
 		return err
 	}
-	record, err := GenerateContent(*taskDir, m, *templateID, settings, generator)
+	record, err := GenerateContentContext(ctx, *taskDir, m, *templateID, settings, generator)
 	if record != nil {
 		fmt.Printf("Generation ID: %s\n", record.GenerationID)
 	}
 	if err != nil {
+		markTaskCancelledIfRequested(ctx, *taskDir, m, err)
 		return err
 	}
 	fmt.Printf("Generated artifact: %s\n", record.ArtifactReference)
+	return nil
+}
+
+// runRetryGeneration retries exactly one generation the user selected. Unlike
+// generate-content it creates no new generation, and unlike resume it does not
+// touch other pending work; the record keeps its provider, model, template
+// snapshot and source transcript revision.
+func runRetryGeneration(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("retry-generation", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	taskDir := fs.String("task-dir", "", "Validated task directory")
+	generationID := fs.String("generation-id", "", "Generation identity to retry")
+	envFile := fs.String("env-file", "", "Explicit .env path")
+	projectRoot := fs.String("project-root", "", "Project root")
+	controlStdin := fs.Bool("control-stdin", false, "Accept a graceful stop request on stdin")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || !filepath.IsAbs(*taskDir) {
+		return fmt.Errorf("--task-dir must be an absolute path")
+	}
+	if strings.TrimSpace(*generationID) == "" {
+		return fmt.Errorf("--generation-id is required")
+	}
+	ctx, stop := watchCancellation(*controlStdin)
+	defer stop()
+	lock, err := AcquireTaskLock(*taskDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	m, err := LoadManifest(*taskDir)
+	if err != nil {
+		return err
+	}
+	target := generationIndex(m, *generationID)
+	if target < 0 {
+		return fmt.Errorf("generation %s was not found in this task", *generationID)
+	}
+	if !generationRetryable(&m.Generations[target]) {
+		return fmt.Errorf("generation %s is not retryable", *generationID)
+	}
+	settings, err := loadResumeSettings(*envFile, *projectRoot)
+	if err != nil {
+		return err
+	}
+	// The retried generation owns its provider and model; the current
+	// configuration never overrides them.
+	effective, err := generationExecutionSettings(&m.Generations[target], settings)
+	if err != nil {
+		return err
+	}
+	if err := ValidateLLMProviderConfig(effective.LLMConfig()); err != nil {
+		return err
+	}
+	if _, err := effective.RequireDeepSeekAPIKey(); err != nil {
+		return err
+	}
+	generator, err := ResolveLLMContentGenerator(effective.LLMConfig())
+	if err != nil {
+		return err
+	}
+	fmt.Println("Status: Retrying generation")
+	fmt.Fprintf(stdout, "Generation ID: %s\n", *generationID)
+	fmt.Printf("LLM provider=%s model=%s\n", effective.LLMProvider, effective.DeepSeekModel)
+	if err := RetryGeneration(ctx, *taskDir, m, *generationID, settings, generator); err != nil {
+		markTaskCancelledIfRequested(ctx, *taskDir, m, err)
+		return err
+	}
+	record := m.Generations[target]
+	fmt.Fprintf(stdout, "Generation status: %s\n", record.Status)
+	if record.ArtifactReference != "" {
+		fmt.Fprintf(stdout, "Generated artifact: %s\n", record.ArtifactReference)
+	}
 	return nil
 }
 
@@ -411,7 +512,7 @@ func runListTasks(args []string, stdout io.Writer) error {
 		return fmt.Errorf("--output-root must be absolute")
 	}
 
-	result, err := tasklibrary.Discover(*outputRoot)
+	result, err := tasklibrary.DiscoverWithDescriber(*outputRoot, taskActionDescriber())
 	if err != nil {
 		return fmt.Errorf("discovering tasks: %w", err)
 	}
@@ -461,6 +562,28 @@ func runUpdateTaskMetadata(args []string, stdin io.Reader, stdout io.Writer) err
 	if decoder.Decode(&struct{}{}) != io.EOF {
 		return fmt.Errorf("metadata update must contain exactly one JSON document")
 	}
+	discovery, err := tasklibrary.Discover(root)
+	if err != nil {
+		return err
+	}
+	var folder string
+	for _, task := range discovery.Tasks {
+		if task.TaskID == taskID {
+			if folder != "" {
+				return errors.New("task identity is ambiguous")
+			}
+			folder = task.TaskFolder
+		}
+	}
+	dir, err := cacheTaskDirectory(root, folder)
+	if err != nil {
+		return err
+	}
+	lock, err := AcquireTaskLock(dir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 	metadata, err := tasklibrary.UpdateMetadata(root, taskID, update)
 	if err != nil {
 		return err
@@ -483,7 +606,7 @@ func reorderArgs(args []string) []string {
 		if strings.HasPrefix(arg, "-") {
 			flags = append(flags, arg)
 			// If this flag takes a value (not a boolean flag), consume the next arg.
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			if !strings.Contains(arg, "=") && arg != "--auto-clean-chunks" && arg != "--vad" && arg != "--control-stdin" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				flags = append(flags, args[i])
 			}
@@ -513,6 +636,11 @@ func runTranscribe(args []string) error {
 	obsidianTemplatePath := fs.String("obsidian-template-path", "", "Path to Obsidian template")
 	asrProvider := fs.String("asr-provider", string(ASRProviderMimo), "Speech-recognition provider")
 	asrModel := fs.String("asr-model", string(ASRModelMimoV25), "Speech-recognition model")
+	useVAD := fs.Bool("vad", false, "Use Silero VAD for local ASR")
+	localLanguage := fs.String("local-asr-language", "zh", "Local ASR language: zh or auto")
+	appDataRoot := fs.String("app-data-root", "", "Managed local model storage (absolute path)")
+	controlStdin := fs.Bool("control-stdin", false, "Accept a graceful stop request on stdin")
+	autoCleanChunks := fs.Bool("auto-clean-chunks", false, "Clean chunks after successful completion")
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 
@@ -601,6 +729,10 @@ func runTranscribe(args []string) error {
 	if *obsidianTemplatePath != "" {
 		settings.ObsidianTemplatePath = resolveCLIPath(*obsidianTemplatePath)
 	}
+	settings.AutoCleanChunks = *autoCleanChunks
+	settings.LocalModelRoot = *appDataRoot
+	settings.LocalASRLanguage = *localLanguage
+	settings.UseVAD = *useVAD
 	settings.ASRProvider = *asrProvider
 	settings.MimoModel = *asrModel
 	settings.LLMProvider = *llmProvider
@@ -640,8 +772,11 @@ func runTranscribe(args []string) error {
 			return err
 		}
 	}
-	// Run the workflow.
-	return runWorkflowV2(absAudio, absOutput, settings, *outputMode, *templateID)
+	// Run the workflow under a cancellable context: a signal, a control-channel
+	// stop request, or the desktop disappearing all end the run gracefully.
+	ctx, stop := watchCancellation(*controlStdin)
+	defer stop()
+	return runWorkflowV2(ctx, absAudio, absOutput, settings, *outputMode, *templateID)
 }
 
 func normalizeProcessingSelection(mode, templateID string) (string, string, error) {
@@ -662,14 +797,36 @@ func normalizeProcessingSelection(mode, templateID string) (string, string, erro
 	}
 }
 
-func runWorkflowV2(audioPath, outputDir string, settings *Settings, outputMode, templateID string) error {
-	return runWorkflow(audioPath, outputDir, settings, outputMode, templateID)
+func runWorkflowV2(ctx context.Context, audioPath, outputDir string, settings *Settings, outputMode, templateID string) error {
+	return runWorkflowContext(ctx, audioPath, outputDir, settings, outputMode, templateID)
 }
 
 func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode string, selectedTemplate ...string) error {
+	return runWorkflowContext(context.Background(), audioPath, outputDir, settings, outputMode, selectedTemplate...)
+}
+
+// runWorkflowContext runs first execution under the run's cancellation context.
+func runWorkflowContext(ctx context.Context, audioPath, outputDir string, settings *Settings, outputMode string, selectedTemplate ...string) error {
 	capabilities, err := ResolveASRCapabilities(settings.ASRConfig())
 	if err != nil {
 		return err
+	}
+	// Local readiness must fail before creating a Task or copying audio.
+	if settings.ASRConfig().ProviderID == ASRProviderLocalSenseVoice {
+		if _, err := normalizeLocalASRLanguage(settings.LocalASRLanguage); err != nil {
+			return err
+		}
+		if _, err := localASRStatus(settings.LocalModelRoot); err != nil {
+			return err
+		}
+	}
+	if settings.UseVAD {
+		if settings.ASRConfig().ProviderID != ASRProviderLocalSenseVoice {
+			return fmt.Errorf("VAD requires local SenseVoice ASR")
+		}
+		if _, err := vadModelPath(); err != nil {
+			return err
+		}
 	}
 	// 1. Create task directory.
 	audioStem := filepath.Base(audioPath)
@@ -680,6 +837,14 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		return fmt.Errorf("creating task dir: %w", err)
 	}
 
+	// Hold the Task lock for the whole run so discovery can tell "being
+	// processed" from "abandoned", and so two operations cannot share one Task.
+	lock, err := AcquireTaskLock(taskDir)
+	if err != nil {
+		return fmt.Errorf("acquiring task lock: %w", err)
+	}
+	defer lock.Release()
+
 	// 2. Copy source audio to task/audio/.
 	sourceCopy := filepath.Join(taskDir, "audio", filepath.Base(audioPath))
 	if err := CopyFile(audioPath, sourceCopy); err != nil {
@@ -688,6 +853,9 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 
 	// 3. Create manifest.
 	manifest := CreateManifest(taskDir, sourceCopy, outputMode, settings.DefaultChunkMin, settings.MaxUploadMB, settings.ASRProvider, settings.MimoModel)
+	if settings.UseVAD {
+		manifest.Chunks.VAD = &taskmanifest.VADPlan{Version: 1, Language: settings.LocalASRLanguage}
+	}
 	if outputMode == "transcript_and_generate" && len(selectedTemplate) > 0 {
 		manifest.RequestedTemplateID = selectedTemplate[0]
 	}
@@ -704,71 +872,74 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		return fmt.Errorf("updating task state: %w", err)
 	}
 	fmt.Println("Status: Splitting audio")
-	chunks, err := SplitAudioWithCapabilities(
-		sourceCopy,
-		filepath.Join(taskDir, "chunks"),
-		settings.DefaultChunkMin,
-		settings.MaxUploadBytes(),
-		capabilities,
-	)
-	if err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
-		return fmt.Errorf("splitting audio: %w", err)
-	}
+	if manifest.Chunks.VAD != nil {
+		if err := prepareVADChunks(ctx, taskDir, manifest, settings); err != nil {
+			if stopErr := stopIfCancelled(ctx, taskDir, manifest, err); stopErr != nil {
+				return stopErr
+			}
+			_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, false)
+			return err
+		}
+	} else {
+		chunks, err := SplitAudioWithCapabilities(
+			ctx,
+			sourceCopy,
+			filepath.Join(taskDir, "chunks"),
+			settings.DefaultChunkMin,
+			settings.MaxUploadBytes(),
+			capabilities,
+		)
+		if err != nil {
+			if stopErr := stopIfCancelled(ctx, taskDir, manifest, err); stopErr != nil {
+				return stopErr
+			}
+			_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
+			return fmt.Errorf("splitting audio: %w", err)
+		}
 
-	// Build chunk items from split results.
-	chunkItems, err := buildChunkItems(taskDir, chunks)
-	if err != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
-		return err
-	}
-	chunkFormat := ""
-	if len(chunks) > 0 {
-		chunkFormat = strings.TrimPrefix(filepath.Ext(chunks[0]), ".")
-	}
-	manifest.Chunks.Format = chunkFormat
-	manifest.Chunks.Total = len(chunkItems)
-	manifest.Chunks.Items = chunkItems
-	if err := SaveManifest(taskDir, manifest); err != nil {
-		return fmt.Errorf("saving chunk info: %w", err)
+		// Build chunk items from split results.
+		chunkItems, err := buildChunkItems(taskDir, chunks)
+		if err != nil {
+			_ = RecordTaskError(taskDir, manifest, TaskSplitting, err, IsRetryableError(err))
+			return err
+		}
+		chunkFormat := ""
+		if len(chunks) > 0 {
+			chunkFormat = strings.TrimPrefix(filepath.Ext(chunks[0]), ".")
+		}
+		manifest.Chunks.Format = chunkFormat
+		manifest.Chunks.Total = len(chunkItems)
+		manifest.Chunks.Items = chunkItems
+		if err := SaveManifest(taskDir, manifest); err != nil {
+			return fmt.Errorf("saving chunk info: %w", err)
+		}
+
 	}
 
 	// 5. Transcribe chunks.
 	if err := SetTaskState(taskDir, manifest, TaskTranscribing); err != nil {
 		return fmt.Errorf("updating task state: %w", err)
 	}
-	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(chunks))
-	transcriptsDir := filepath.Join(taskDir, "transcripts")
-	var progressErr error
+	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(manifest.Chunks.Items))
 	progressFn := func(action string, index, total int) {
 		if action == "transcribing" || action == "completed" {
 			fmt.Printf("Progress: %d/%d\n", index, total)
 		}
-		if action == "completed" {
-			if progressErr != nil || index < 1 || index > len(manifest.Chunks.Items) {
-				return
-			}
-			item := &manifest.Chunks.Items[index-1]
-			hash, err := fileSHA256(item.TranscriptPath)
-			if err != nil {
-				progressErr = fmt.Errorf("hashing transcript for %s: %w", item.ID, err)
-				return
-			}
-			item.State = ChunkCompleted
-			item.TranscriptSHA256 = hash
-			item.LastError = nil
-			if err := SaveManifest(taskDir, manifest); err != nil {
-				progressErr = fmt.Errorf("saving transcript progress for %s: %w", item.ID, err)
-			}
-		}
 	}
-	if _, err := TranscribeChunks(chunks, transcriptsDir, settings, progressFn); err != nil {
+	// First execution and resume share one chunk executor, which owns chunk
+	// state, transcript hashing and manifest persistence. The context is the
+	// future cancellation boundary; wiring user-facing cancellation is out of
+	// scope for this work package.
+	pendingItems := make([]*ChunkItem, 0, len(manifest.Chunks.Items))
+	for i := range manifest.Chunks.Items {
+		pendingItems = append(pendingItems, &manifest.Chunks.Items[i])
+	}
+	if err := transcribeChunkItems(ctx, taskDir, manifest, pendingItems, settings, progressFn); err != nil {
+		if stopErr := stopIfCancelled(ctx, taskDir, manifest, err); stopErr != nil {
+			return stopErr
+		}
 		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, err, IsRetryableError(err))
 		return fmt.Errorf("transcribing: %w", err)
-	}
-	if progressErr != nil {
-		_ = RecordTaskError(taskDir, manifest, TaskTranscribing, progressErr, IsRetryableError(progressErr))
-		return progressErr
 	}
 
 	// 6. Merge transcripts.
@@ -781,7 +952,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 	fmt.Println("Status: Merging transcript")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
-	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
+	if err := mergeTaskTranscript(taskDir, manifest, transcriptPath); err != nil {
 		_ = RecordTaskError(taskDir, manifest, TaskMerging, err, IsRetryableError(err))
 		return fmt.Errorf("merging transcripts: %w", err)
 	}
@@ -795,6 +966,10 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	}
 	if err := SaveManifest(taskDir, manifest); err != nil {
 		return fmt.Errorf("saving manifest: %w", err)
+	}
+
+	if manifest.Chunks.VAD != nil && len(manifest.Chunks.Items) == 0 && outputMode != "transcript_only" {
+		return fmt.Errorf("no speech detected; content generation was not started")
 	}
 
 	// 7. Legacy notes/minutes branches are retained only for direct internal
@@ -835,8 +1010,11 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 		if resolveErr != nil {
 			return resolveErr
 		}
-		record, err := GenerateContent(taskDir, manifest, templateID, settings, generator)
+		record, err := GenerateContentContext(ctx, taskDir, manifest, templateID, settings, generator)
 		if err != nil {
+			if stopErr := stopIfCancelled(ctx, taskDir, manifest, err); stopErr != nil {
+				return stopErr
+			}
 			// Transcript remains valid; failed generation metadata is durable.
 			manifest.State = TaskCompleted
 			_ = SaveManifest(taskDir, manifest)
@@ -856,7 +1034,7 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 			return fmt.Errorf("saving minutes artifact state: %w", err)
 		}
 		fmt.Println("Status: Generating meeting minutes")
-		rawMinutes, err := GenerateMinutes(notesInputPath, settings)
+		rawMinutes, err := GenerateMinutesContext(ctx, notesInputPath, settings)
 		if err != nil {
 			_ = RecordTaskError(taskDir, manifest, TaskMinutesGenerating, err, IsRetryableError(err))
 			return fmt.Errorf("generating meeting minutes: %w", err)
@@ -903,6 +1081,8 @@ func runWorkflow(audioPath, outputDir string, settings *Settings, outputMode str
 	if err := MarkTaskCompleted(taskDir, manifest); err != nil {
 		return fmt.Errorf("marking task completed: %w", err)
 	}
+
+	autoCleanTaskCacheLocked(taskDir, manifest, settings.AutoCleanChunks)
 
 	// 10. Done.
 	fmt.Println("Status: Done")

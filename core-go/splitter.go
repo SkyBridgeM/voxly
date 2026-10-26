@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,9 +33,12 @@ func CalculateRetryChunkSeconds(initialSeconds int) []int {
 }
 
 // SplitAudio splits an audio file into chunks using ffmpeg.
-// Returns the sorted list of chunk file paths.
+// Returns the sorted list of chunk file paths. It keeps the uncancellable
+// entry point used by direct callers and tests; workflow paths use
+// SplitAudioWithCapabilities with the run's context.
 func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes int64) ([]string, error) {
 	return SplitAudioWithCapabilities(
+		context.Background(),
 		inputPath,
 		chunksDir,
 		chunkMinutes,
@@ -47,7 +51,10 @@ func SplitAudio(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes in
 // The planner owns chunk duration, overlap, concurrency, and retry durations;
 // this function only realizes that plan with ffmpeg and validates produced
 // chunk sizes.
-func SplitAudioWithCapabilities(inputPath, chunksDir string, chunkMinutes int, maxUploadBytes int64, capabilities ASRProviderCapabilities) ([]string, error) {
+func SplitAudioWithCapabilities(ctx context.Context, inputPath, chunksDir string, chunkMinutes int, maxUploadBytes int64, capabilities ASRProviderCapabilities) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := ensureFFmpeg(); err != nil {
 		return nil, err
 	}
@@ -93,7 +100,7 @@ func SplitAudioWithCapabilities(inputPath, chunksDir string, chunkMinutes int, m
 		if err := clearChunks(chunksDir, chunkFormat); err != nil {
 			return nil, err
 		}
-		if err := splitOnce(inputPath, chunksDir, inputFormat, chunkSeconds); err != nil {
+		if err := splitOnce(ctx, inputPath, chunksDir, inputFormat, chunkSeconds); err != nil {
 			return nil, err
 		}
 
@@ -163,7 +170,7 @@ func clearChunks(chunksDir, format string) error {
 	return nil
 }
 
-func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error {
+func splitOnce(ctx context.Context, inputPath, chunksDir, inputFormat string, chunkSeconds int) error {
 	chunkFmt := chunkAudioFormat(inputFormat)
 	outputPattern := filepath.Join(chunksDir, fmt.Sprintf("part_%%03d.%s", chunkFmt))
 
@@ -187,7 +194,7 @@ func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error
 			"-c", "copy",
 			outputPattern,
 		}
-		if err := runFFmpeg(args); err == nil {
+		if err := runFFmpeg(ctx, args); err == nil {
 			return renumberChunks(chunksDir, chunkFmt)
 		}
 		// Fallback: re-encode.
@@ -200,7 +207,7 @@ func splitOnce(inputPath, chunksDir, inputFormat string, chunkSeconds int) error
 		}
 	}
 
-	if err := runFFmpeg(args); err != nil {
+	if err := runFFmpeg(ctx, args); err != nil {
 		return err
 	}
 	return renumberChunks(chunksDir, chunkFmt)
@@ -290,7 +297,7 @@ func filterOversize(chunks []string, maxBytes int64) []string {
 }
 
 func ensureFFmpeg() error {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
+	if _, err := exec.LookPath(ffmpegBinary()); err != nil {
 		return fmt.Errorf("ffmpeg was not found on PATH. Install it:\n" +
 			"  macOS:   brew install ffmpeg\n" +
 			"  Ubuntu:  sudo apt install ffmpeg\n" +
@@ -300,10 +307,15 @@ func ensureFFmpeg() error {
 	return nil
 }
 
-func runFFmpeg(args []string) error {
-	cmd := exec.Command("ffmpeg", args...)
+// runFFmpeg runs one ffmpeg invocation under the run's context, so a cancelled
+// run stops the encoder instead of leaving it behind.
+func runFFmpeg(ctx context.Context, args []string) error {
+	cmd := exec.CommandContext(ctx, ffmpegBinary(), args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return fmt.Errorf("ffmpeg failed: %s\n%s", err, string(output))
 	}
 	return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,15 +28,26 @@ func RunResume(args []string) error {
 	llmProvider := fs.String("llm-provider", string(LLMProviderDeepSeek), "Generated-content provider")
 	llmModel := fs.String("llm-model", string(LLMModelDeepSeekV4), "Generated-content model")
 	templatesFile := fs.String("templates-file", "", "Application-owned custom template storage")
+	localLanguage := fs.String("local-asr-language", "zh", "Local ASR language: zh or auto")
+	appDataRoot := fs.String("app-data-root", "", "Managed local model storage (absolute path)")
+	controlStdin := fs.Bool("control-stdin", false, "Accept a graceful stop request on stdin")
+	autoCleanChunks := fs.Bool("auto-clean-chunks", false, "Clean chunks after successful completion")
 
 	reordered := reorderArgs(args)
 	if err := fs.Parse(reordered); err != nil {
 		return err
 	}
 	outputModeExplicit := false
+	asrIdentityExplicit := false
+	templateExplicit := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "output-mode" {
+		switch f.Name {
+		case "output-mode":
 			outputModeExplicit = true
+		case "template-id":
+			templateExplicit = true
+		case "asr-provider", "asr-model":
+			asrIdentityExplicit = true
 		}
 	})
 
@@ -86,13 +98,18 @@ func RunResume(args []string) error {
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
 
-	// Inherit output mode from manifest unless explicitly overridden.
+	// Inherit output mode from manifest unless explicitly overridden. An
+	// override that only names the mode must never rewrite the template the Task
+	// was created with; changing the template is its own explicit request.
 	if outputModeExplicit && *outputMode != "" {
 		mode, template, err := normalizeProcessingSelection(*outputMode, *templateID)
 		if err != nil {
 			return err
 		}
-		m.OutputMode, m.RequestedTemplateID = mode, template
+		m.OutputMode = mode
+		if templateExplicit || strings.TrimSpace(m.RequestedTemplateID) == "" {
+			m.RequestedTemplateID = template
+		}
 	} else if m.OutputMode == "" {
 		m.OutputMode = "transcript"
 	}
@@ -109,7 +126,27 @@ func RunResume(args []string) error {
 	if *obsidianTemplatePath != "" {
 		settings.ObsidianTemplatePath = resolveCLIPath(*obsidianTemplatePath)
 	}
-	settings.ASRProvider, settings.MimoModel = *asrProvider, *asrModel
+	// A Task keeps one speech-recognition identity. Resume adopts the identity
+	// recorded on the manifest unless the caller explicitly requests one, and an
+	// explicit request that disagrees with the record is refused instead of
+	// silently mixing engines inside one Task.
+	requestedASR := ASRProviderConfig{ProviderID: ASRProviderID(*asrProvider), ModelID: ASRModelID(*asrModel)}
+	recordedASR, hasRecordedASR := recordedASRIdentity(m)
+	resumeASR, err := resumeASRIdentity(recordedASR, hasRecordedASR, requestedASR, asrIdentityExplicit)
+	if err != nil {
+		return err
+	}
+	// A Task without a recorded identity keeps that history unknown: the identity
+	// used for this run is stored per transcribed chunk, never backfilled into
+	// the Task-level record as if the earlier chunks had used it too.
+	settings.AutoCleanChunks = *autoCleanChunks
+	settings.LocalModelRoot = *appDataRoot
+	settings.LocalASRLanguage = *localLanguage
+	if m.Chunks.VAD != nil {
+		settings.UseVAD = true
+		settings.LocalASRLanguage = m.Chunks.VAD.Language
+	}
+	settings.ASRProvider, settings.MimoModel = string(resumeASR.ProviderID), string(resumeASR.ModelID)
 	settings.LLMProvider, settings.DeepSeekModel = *llmProvider, *llmModel
 	settings.TemplateStorePath = *templatesFile
 	if err := ValidateASRProviderConfig(settings.ASRConfig()); err != nil {
@@ -145,33 +182,45 @@ func RunResume(args []string) error {
 	// 4. Choose earliest incomplete stage.
 	stage, complete := ResumeStage(m)
 	if complete {
+		if m.State != TaskCompleted {
+			if err := MarkTaskCompleted(absTaskDir, m); err != nil {
+				return err
+			}
+			autoCleanTaskCacheLocked(absTaskDir, m, settings.AutoCleanChunks)
+		}
 		fmt.Println("Status: All outputs are valid — nothing to resume")
 		printResumeResult(absTaskDir, m)
 		return nil
 	}
 
-	// 5. Execute stages idempotently.
-	return executeResume(absTaskDir, m, settings, *outputMode, stage)
+	// 5. Execute stages idempotently under a cancellable context.
+	ctx, stop := watchCancellation(*controlStdin)
+	defer stop()
+	return executeResume(ctx, absTaskDir, m, settings, *outputMode, stage)
 }
 
 // executeResume runs the resume pipeline starting from the given stage.
-func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode string, startStage TaskState) error {
+func executeResume(ctx context.Context, taskDir string, m *Manifest, settings *Settings, outputMode string, startStage TaskState) error {
 	stage := startStage
 	for {
+		if err := ctx.Err(); err != nil {
+			markTaskCancelled(taskDir, m)
+			return cancelledError()
+		}
 		var err error
 		switch stage {
 		case TaskSplitting:
-			err = executeSplitting(taskDir, m, settings)
+			err = executeSplitting(ctx, taskDir, m, settings)
 		case TaskTranscribing:
-			err = executeTranscribing(taskDir, m, settings)
+			err = executeTranscribing(ctx, taskDir, m, settings)
 		case TaskMerging:
 			err = executeMerging(taskDir, m)
 		case TaskNotesGenerating:
 			err = executeNotesGenerating(taskDir, m, settings)
 		case TaskMinutesGenerating:
-			err = executeMinutesGenerating(taskDir, m, settings)
+			err = executeMinutesGenerating(ctx, taskDir, m, settings)
 		case TaskContentGenerating:
-			err = executeContentGenerating(taskDir, m, settings)
+			err = executeContentGenerating(ctx, taskDir, m, settings)
 		case TaskValidatingOutputs:
 			err = executeValidatingOutputs(taskDir, m)
 		default:
@@ -179,6 +228,13 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 		}
 
 		if err != nil {
+			if cancellationRequested(ctx, err) {
+				// A requested stop keeps every finished artifact and is recorded
+				// as cancelled, so the desktop never shows it as a provider
+				// failure and a later resume continues the missing work.
+				markTaskCancelled(taskDir, m)
+				return cancelledError()
+			}
 			if stage == TaskContentGenerating {
 				m.State = TaskCompleted
 				_ = SaveManifest(taskDir, m)
@@ -194,6 +250,7 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 			if err := MarkTaskCompleted(taskDir, m); err != nil {
 				return fmt.Errorf("marking task completed: %w", err)
 			}
+			autoCleanTaskCacheLocked(taskDir, m, settings.AutoCleanChunks)
 			fmt.Println("Status: Done")
 			printResumeResult(taskDir, m)
 			return nil
@@ -205,31 +262,46 @@ func executeResume(taskDir string, m *Manifest, settings *Settings, outputMode s
 	}
 }
 
-func executeContentGenerating(taskDir string, m *Manifest, settings *Settings) error {
-	if err := ValidateLLMProviderConfig(settings.LLMConfig()); err != nil {
+func executeContentGenerating(ctx context.Context, taskDir string, m *Manifest, settings *Settings) error {
+	if m.Chunks.VAD != nil && m.Chunks.VAD.Ready && len(m.Chunks.Items) == 0 {
+		return fmt.Errorf("no speech detected; content generation was not started")
+	}
+
+	// A retry of an existing generation runs with that generation's recorded
+	// provider and model, so readiness is evaluated against the identity that
+	// will actually execute instead of the current configuration.
+	effective, err := resumeGenerationSettings(m, settings)
+	if err != nil {
 		return err
 	}
-	if _, err := settings.RequireDeepSeekAPIKey(); err != nil {
+	if err := ValidateLLMProviderConfig(effective.LLMConfig()); err != nil {
+		return err
+	}
+	if _, err := effective.RequireDeepSeekAPIKey(); err != nil {
 		return err
 	}
 	if err := SetTaskState(taskDir, m, TaskContentGenerating); err != nil {
 		return err
 	}
-	fmt.Printf("LLM provider=%s model=%s\n", settings.LLMProvider, settings.DeepSeekModel)
+	fmt.Printf("LLM provider=%s model=%s\n", effective.LLMProvider, effective.DeepSeekModel)
 	fmt.Println("Status: Generating content")
-	generator, err := ResolveLLMContentGenerator(settings.LLMConfig())
+	generator, err := ResolveLLMContentGenerator(effective.LLMConfig())
 	if err != nil {
 		return err
 	}
-	return ResumeOrGenerateContent(taskDir, m, settings, generator)
+	return ResumeOrGenerateContentContext(ctx, taskDir, m, settings, generator)
 }
 
 // executeSplitting re-runs splitting if chunks are missing or invalid.
-func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
+func executeSplitting(ctx context.Context, taskDir string, m *Manifest, settings *Settings) error {
+	m.CacheCleanup = nil // A new chunk set starts a new cache lifecycle.
 	if err := SetTaskState(taskDir, m, TaskSplitting); err != nil {
 		return err
 	}
 	fmt.Println("Status: Splitting audio")
+	if m.Chunks.VAD != nil {
+		return prepareVADChunks(ctx, taskDir, m, settings)
+	}
 
 	sourceAudio := m.Source.Path
 	if !isCompleteFile(sourceAudio) {
@@ -261,6 +333,7 @@ func executeSplitting(taskDir string, m *Manifest, settings *Settings) error {
 		return err
 	}
 	chunks, err := SplitAudioWithCapabilities(
+		ctx,
 		sourceAudio,
 		chunksDir,
 		m.Chunks.ChunkMinutes,
@@ -334,89 +407,57 @@ func removeArtifactFile(path string) error {
 	return nil
 }
 
-// executeTranscribing transcribes only the PENDING chunks.
-func executeTranscribing(taskDir string, m *Manifest, settings *Settings) error {
+// recordedASRIdentity returns the speech-recognition identity a Task was created
+// with. An empty record means the manifest predates provider recording.
+func recordedASRIdentity(m *Manifest) (ASRProviderConfig, bool) {
+	provider := strings.TrimSpace(m.Chunks.ASRProvider)
+	model := strings.TrimSpace(m.Chunks.ASRModel)
+	if provider == "" || model == "" {
+		return ASRProviderConfig{}, false
+	}
+	return ASRProviderConfig{ProviderID: ASRProviderID(provider), ModelID: ASRModelID(model)}, true
+}
+
+// resumeASRIdentity decides which speech-recognition identity a resume run uses.
+// A Task keeps one identity: the recorded one wins unless the caller explicitly
+// requests a different one, and an explicit disagreement is refused so finished
+// and new chunks can never silently mix engines.
+func resumeASRIdentity(recorded ASRProviderConfig, hasRecorded bool, requested ASRProviderConfig, requestedExplicitly bool) (ASRProviderConfig, error) {
+	if !hasRecorded {
+		return requested, nil
+	}
+	if !requestedExplicitly || recorded == requested {
+		return recorded, nil
+	}
+	return ASRProviderConfig{}, fmt.Errorf("this task was created with speech provider %s/%s — resume must use the recorded provider", recorded.ProviderID, recorded.ModelID)
+}
+
+// executeTranscribing transcribes only the PENDING chunks. It runs through the
+// same provider dispatch and atomic commit step as a first execution, so a
+// resumed Task cannot take a divergent code path.
+func executeTranscribing(ctx context.Context, taskDir string, m *Manifest, settings *Settings) error {
 	if err := SetTaskState(taskDir, m, TaskTranscribing); err != nil {
 		return err
 	}
 
-	transcriptsDir := filepath.Join(taskDir, "transcripts")
-	if err := os.MkdirAll(transcriptsDir, 0700); err != nil {
-		return err
-	}
-
-	// Collect pending chunk paths.
-	var pendingPaths []string
+	var pendingItems []*ChunkItem
 	for i := range m.Chunks.Items {
 		if m.Chunks.Items[i].State == ChunkPending {
-			pendingPaths = append(pendingPaths, m.Chunks.Items[i].AudioPath)
+			pendingItems = append(pendingItems, &m.Chunks.Items[i])
 		}
 	}
 
-	if len(pendingPaths) == 0 {
+	if len(pendingItems) == 0 {
 		fmt.Println("Status: All chunks already transcribed")
 		return nil
 	}
 
-	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(pendingPaths))
+	fmt.Printf("Status: Transcribing %d chunk(s)\n", len(pendingItems))
 
-	apiKey, err := settings.RequireMimoAPIKey()
-	if err != nil {
-		return err
+	if m.Chunks.VAD != nil {
+		settings.LocalASRLanguage = m.Chunks.VAD.Language
 	}
-
-	for _, chunkPath := range pendingPaths {
-		chunkID := strings.TrimSuffix(filepath.Base(chunkPath), filepath.Ext(chunkPath))
-		chunk := m.ChunkByID(chunkID)
-		if chunk == nil {
-			continue
-		}
-
-		// Mark IN_PROGRESS.
-		chunk.State = ChunkInProgress
-		chunk.Attempts++
-		if err := SaveManifest(taskDir, m); err != nil {
-			return fmt.Errorf("saving manifest before transcription: %w", err)
-		}
-
-		fmt.Printf("Transcribing %s...\n", filepath.Base(chunkPath))
-		text, err := transcribeAudioFile(chunkPath, settings, apiKey)
-		if err != nil {
-			chunk.State = ChunkFailed
-			msg := err.Error()
-			chunk.LastError = &msg
-			_ = SaveManifest(taskDir, m)
-			return fmt.Errorf("transcribing %s: %w", filepath.Base(chunkPath), err)
-		}
-
-		// Write transcript atomically.
-		transcriptPath := filepath.Join(transcriptsDir, chunkID+".txt")
-		if err := WriteFileAtomically(transcriptPath, []byte(strings.TrimSpace(text)+"\n"), 0600); err != nil {
-			chunk.State = ChunkFailed
-			msg := err.Error()
-			chunk.LastError = &msg
-			_ = SaveManifest(taskDir, m)
-			return fmt.Errorf("writing transcript for %s: %w", chunkID, err)
-		}
-
-		chunk.State = ChunkCompleted
-		chunk.TranscriptPath = transcriptPath
-		transcriptHash, err := fileSHA256(transcriptPath)
-		if err != nil {
-			chunk.State = ChunkFailed
-			msg := err.Error()
-			chunk.LastError = &msg
-			_ = SaveManifest(taskDir, m)
-			return fmt.Errorf("hashing transcript for %s: %w", chunkID, err)
-		}
-		chunk.TranscriptSHA256 = transcriptHash
-		chunk.LastError = nil
-		if err := SaveManifest(taskDir, m); err != nil {
-			return fmt.Errorf("saving manifest after transcription: %w", err)
-		}
-	}
-
-	return nil
+	return transcribeChunkItems(ctx, taskDir, m, pendingItems, settings, nil)
 }
 
 // executeMerging merges all chunk transcripts into transcript.md.
@@ -430,15 +471,19 @@ func executeMerging(taskDir string, m *Manifest) error {
 	}
 	fmt.Println("Status: Merging transcript")
 
-	transcriptsDir := filepath.Join(taskDir, "transcripts")
 	transcriptPath := filepath.Join(taskDir, "transcript.md")
 
-	if err := MergeTranscripts(transcriptsDir, transcriptPath); err != nil {
+	if err := mergeTaskTranscript(taskDir, m, transcriptPath); err != nil {
 		return err
 	}
 
 	if err := markArtifactReady(transcriptPath, &m.Artifacts.Transcript); err != nil {
 		return err
+	}
+	if m.Chunks.VAD != nil {
+		if err := completeCanonicalTranscript(taskDir, transcriptPath, m); err != nil {
+			return err
+		}
 	}
 	return SaveManifest(taskDir, m)
 }
@@ -469,7 +514,7 @@ func executeNotesGenerating(taskDir string, m *Manifest, settings *Settings) err
 }
 
 // executeMinutesGenerating generates meeting_minutes.md via LLM + Obsidian template.
-func executeMinutesGenerating(taskDir string, m *Manifest, settings *Settings) error {
+func executeMinutesGenerating(ctx context.Context, taskDir string, m *Manifest, settings *Settings) error {
 	if err := SetTaskState(taskDir, m, TaskMinutesGenerating); err != nil {
 		return err
 	}
@@ -489,7 +534,7 @@ func executeMinutesGenerating(taskDir string, m *Manifest, settings *Settings) e
 		return fmt.Errorf("notes_input.md not found — cannot generate minutes")
 	}
 
-	rawMinutes, err := GenerateMinutes(notesPath, settings)
+	rawMinutes, err := GenerateMinutesContext(ctx, notesPath, settings)
 	if err != nil {
 		return err
 	}
@@ -552,6 +597,13 @@ func printResumeResult(taskDir string, m *Manifest) {
 	}
 	if m.Artifacts.Minutes.Path != "" && m.Artifacts.Minutes.State == ArtifactReady {
 		fmt.Printf("Meeting minutes saved: %s\n", m.Artifacts.Minutes.Path)
+	}
+	// A resumed transcript-and-generate task must report its generated deliverable
+	// the same way first execution does, so callers validate one output contract.
+	if m.OutputMode == "transcript_and_generate" {
+		if reference := latestCompletedGenerationReference(m); reference != "" {
+			fmt.Printf("Generated content saved: %s\n", filepath.Join(taskDir, filepath.FromSlash(reference)))
+		}
 	}
 	fmt.Printf("Task folder: %s\n", taskDir)
 }

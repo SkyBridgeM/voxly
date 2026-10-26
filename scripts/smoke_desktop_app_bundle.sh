@@ -25,6 +25,11 @@ fi
 
 sidecar="$app_path/Contents/MacOS/meeting-asr-go"
 test -x "$sidecar"
+test -x "$app_path/Contents/MacOS/ffmpeg"
+"$app_path/Contents/MacOS/ffmpeg" -version >/dev/null
+test -f "$app_path/Contents/Resources/licenses/FFmpeg-LGPL-2.1.txt"
+test -x "$app_path/Contents/MacOS/voxly-sensevoice-wrapper"
+"$app_path/Contents/MacOS/voxly-sensevoice-wrapper" --version
 version_output="$("$sidecar" version)"
 case "$version_output" in
   *meeting-asr-go*) ;;

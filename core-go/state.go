@@ -1,5 +1,7 @@
 package main
 
+import "path/filepath"
+
 // TaskState represents the current pipeline stage for a task.
 type TaskState = string
 
@@ -14,8 +16,13 @@ const (
 	TaskContentGenerating TaskState = "CONTENT_GENERATING"
 	TaskValidatingOutputs TaskState = "VALIDATING_OUTPUTS"
 	TaskCompleted         TaskState = "COMPLETED"
+	TaskCancelled         TaskState = "CANCELLED"
 	TaskFailed            TaskState = "FAILED"
 )
+
+// cancellationErrorCode is the durable error code for a requested stop, so a
+// cancel stays distinguishable from a provider or workflow failure.
+const cancellationErrorCode = "cancelled"
 
 // ChunkState represents the state of one split audio chunk.
 type ChunkState = string
@@ -50,6 +57,7 @@ var validTaskStates = map[TaskState]bool{
 	TaskContentGenerating: true,
 	TaskValidatingOutputs: true,
 	TaskCompleted:         true,
+	TaskCancelled:         true,
 	TaskFailed:            true,
 }
 
@@ -74,6 +82,27 @@ var validArtifactStates = map[ArtifactState]bool{
 // reconciled manifest and filesystem state. Returns the stage to execute and
 // whether the task is already complete.
 func ResumeStage(m *Manifest) (TaskState, bool) {
+	if m.Chunks.VAD != nil && m.Chunks.VAD.Ready {
+		if validVADPlan(m) != nil {
+			return TaskSplitting, false
+		}
+		if len(m.Chunks.Items) == 0 {
+			if !vadArtifactsValid(filepath.Dir(m.Artifacts.Transcript.Path), m) || m.Artifacts.Transcript.State != ArtifactReady {
+				return TaskMerging, false
+			}
+		} else if m.Artifacts.Transcript.State == ArtifactReady && !vadArtifactsValid(filepath.Dir(m.Artifacts.Transcript.Path), m) {
+			if !chunksExist(m) {
+				return TaskSplitting, false
+			}
+			for i := range m.Chunks.Items {
+				if !completedTranscriptValid(&m.Chunks.Items[i]) {
+					return TaskTranscribing, false
+				}
+			}
+			return TaskMerging, false
+		}
+	}
+
 	// A verified completed output is authoritative. Resume must not rebuild its
 	// upstream intermediates merely because chunks were later removed.
 	t := m.Artifacts.Transcript
@@ -131,6 +160,9 @@ func ResumeStage(m *Manifest) (TaskState, bool) {
 // chunksExist checks that chunk audio files exist on disk.
 func chunksExist(m *Manifest) bool {
 	for i := range m.Chunks.Items {
+		if m.Chunks.VAD != nil && completedTranscriptValid(&m.Chunks.Items[i]) {
+			continue
+		}
 		if !isCompleteFile(m.Chunks.Items[i].AudioPath) {
 			return false
 		}

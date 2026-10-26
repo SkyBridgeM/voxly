@@ -1,5 +1,12 @@
 # WORKLOG
 
+> **Historical development log.** The status and task list below describe the
+> 2026-07-09 Go migration work and are not the current project state. For the
+> active baseline, use [`README.md`](README.md),
+> [`core-go/README.md`](core-go/README.md), and
+> [`desktop/README.md`](desktop/README.md). Git history is authoritative for
+> later implementation chronology.
+
 ## 现状
 
 **分支：** `experiment/go-core-phase2b`

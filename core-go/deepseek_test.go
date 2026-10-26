@@ -64,6 +64,60 @@ func TestExtractDeepSeekContentWhitespaceOnly(t *testing.T) {
 	}
 }
 
+func TestExtractDeepSeekCompletionReportsFinishReason(t *testing.T) {
+	truncated := `{"choices":[{"finish_reason":"length","message":{"content":"partial text"}}]}`
+	outcome, err := extractDeepSeekCompletion([]byte(truncated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Text != "partial text" || outcome.FinishReason != "length" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+
+	empty := `{"choices":[{"finish_reason":"length","message":{"content":"   "}}]}`
+	outcome, err = extractDeepSeekCompletion([]byte(empty))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Text != "" || outcome.FinishReason != "length" {
+		t.Fatalf("empty truncated outcome = %#v", outcome)
+	}
+	if _, err := extractDeepSeekContent([]byte(empty)); err == nil || !strings.Contains(err.Error(), "empty content") {
+		t.Fatalf("plain text contract error = %v", err)
+	}
+
+	unreported := `{"choices":[{"message":{"content":"no reason"}}]}`
+	outcome, err = extractDeepSeekCompletion([]byte(unreported))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Text != "no reason" || outcome.FinishReason != "" {
+		t.Fatalf("unreported outcome = %#v", outcome)
+	}
+
+	// A refusal is allowed to carry no body at all, and must keep its own class
+	// instead of collapsing into a generic provider failure.
+	refused := `{"choices":[{"finish_reason":"content_filter","message":{"content":null}}]}`
+	outcome, err = extractDeepSeekCompletion([]byte(refused))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Text != "" || outcome.FinishReason != "content_filter" {
+		t.Fatalf("refused outcome = %#v", outcome)
+	}
+
+	// A normal stop still requires text, and a wrongly typed body stays a parse
+	// error rather than a completion class.
+	stopped := `{"choices":[{"finish_reason":"stop","message":{"content":"  "}}]}`
+	if _, err := extractDeepSeekCompletion([]byte(stopped)); err == nil || !strings.Contains(err.Error(), "empty content") {
+		t.Fatalf("empty normal stop error = %v", err)
+	}
+	malformed := `{"choices":[{"finish_reason":"stop","message":{"content":42}}]}`
+	if _, err := extractDeepSeekCompletion([]byte(malformed)); err == nil || !strings.Contains(err.Error(), "not a string") {
+		t.Fatalf("malformed content error = %v", err)
+	}
+}
+
 func TestExtractDeepSeekError(t *testing.T) {
 	body := `{"error":{"message":"Invalid API key"}}`
 	got := extractDeepSeekError([]byte(body))

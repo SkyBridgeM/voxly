@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yudi/meet-asr/core-go/taskmanifest"
 )
 
 // Helper to create a task directory with the standard layout.
@@ -963,4 +965,76 @@ func pad(n int) string {
 		return "00" + string(rune('0'+n))
 	}
 	return "0" + string(rune('0'+n/10)) + string(rune('0'+n%10))
+}
+
+func TestResumeASRIdentityPolicy(t *testing.T) {
+	cloud := ASRProviderConfig{ProviderID: ASRProviderMimo, ModelID: ASRModelMimoV25}
+	local := ASRProviderConfig{ProviderID: ASRProviderLocalSenseVoice, ModelID: ASRModelSenseVoiceSmallINT8}
+
+	if got, err := resumeASRIdentity(cloud, true, cloud, false); err != nil || got != cloud {
+		t.Fatalf("implicit resume = %v, %v", got, err)
+	}
+	if got, err := resumeASRIdentity(cloud, true, cloud, true); err != nil || got != cloud {
+		t.Fatalf("matching explicit resume = %v, %v", got, err)
+	}
+	if _, err := resumeASRIdentity(cloud, true, local, true); err == nil {
+		t.Fatal("explicit engine switch was accepted")
+	}
+	// Current settings must not override the identity a Task was created with.
+	if got, err := resumeASRIdentity(local, true, cloud, false); err != nil || got != local {
+		t.Fatalf("recorded identity was overridden: %v, %v", got, err)
+	}
+	if got, err := resumeASRIdentity(ASRProviderConfig{}, false, cloud, false); err != nil || got != cloud {
+		t.Fatalf("unrecorded manifest = %v, %v", got, err)
+	}
+}
+
+func TestResumeModeOverrideDoesNotResetTheRequestedTemplate(t *testing.T) {
+	taskDir, m := completedV2Manifest(t)
+	m.OutputMode = "transcript_and_generate"
+	m.RequestedTemplateID = "meeting-minutes"
+	m.Generations = []taskmanifest.GenerationRecord{{
+		GenerationID: "gen_done", TemplateID: "meeting-minutes", TemplateRevision: 1,
+		TemplateDisplayName: "Meeting minutes", TemplateInstructions: "minutes",
+		CreatedAt: "2026-07-16T01:00:00Z", UpdatedAt: "2026-07-16T01:00:00Z",
+		SourceTranscriptRevisionID: m.CanonicalTranscript.RevisionID, SourceTranscriptSHA256: m.CanonicalTranscript.ContentSHA256,
+		LLMProvider: "deepseek", LLMModel: "deepseek-v4-flash",
+		PromptCompositionVersion: promptCompositionVersion, PromptHash: "hash",
+		Status: "completed", ArtifactReference: "generated/meeting-minutes/gen_done.md",
+		Attempts: []taskmanifest.GenerationAttempt{{Attempt: 1, CreatedAt: "2026-07-16T01:00:00Z", Status: "completed"}},
+	}}
+	if err := SaveManifest(taskDir, m); err != nil {
+		t.Fatal(err)
+	}
+	generated := filepath.Join(taskDir, "generated", "meeting-minutes")
+	if err := os.MkdirAll(generated, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generated, "gen_done.md"), []byte("minutes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A caller that only restates the mode must not lose the recorded template.
+	if err := RunResume([]string{taskDir, "--output-mode", "transcript_and_generate"}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RequestedTemplateID != "meeting-minutes" {
+		t.Fatalf("requested template = %q", reloaded.RequestedTemplateID)
+	}
+
+	// An explicit template is still honoured.
+	if err := RunResume([]string{taskDir, "--output-mode", "transcript_and_generate", "--template-id", "structured-notes"}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err = LoadManifest(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RequestedTemplateID != "structured-notes" {
+		t.Fatalf("explicit template = %q", reloaded.RequestedTemplateID)
+	}
 }

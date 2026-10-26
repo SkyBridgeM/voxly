@@ -42,4 +42,8 @@ echo "Building offline Go sidecar for darwin/$goarch"
     go build -trimpath -o "$output" .
 )
 
+"$REPO_ROOT/scripts/build_sensevoice_runtime.sh"
+"$REPO_ROOT/scripts/build_ffmpeg_runtime.sh"
+python3 "$REPO_ROOT/scripts/prepare_desktop_licenses.py"
+
 echo "Built $output"

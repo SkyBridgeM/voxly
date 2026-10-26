@@ -1,0 +1,62 @@
+[
+  {
+    "file": "SHERPA-ONNX-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "ONNXRUNTIME-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE",
+    "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+  },
+  {
+    "file": "ONNXRUNTIME-ThirdPartyNotices.txt",
+    "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt",
+    "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+  },
+  {
+    "file": "KALDI-DECODER-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/k2-fsa/kaldi-decoder/v0.3.0/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "KALDI-NATIVE-FBANK-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/csukuangfj/kaldi-native-fbank/v1.22.3/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "file": "PORTAUDIO-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/PortAudio/portaudio/v19.7.0/LICENSE.txt",
+    "sha256": "ec52a1952d701f94e5135719a47376da4ee0b4a0201f1cafb49f61db6480ac3d"
+  },
+  {
+    "file": "KISSFFT-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/mborgerding/kissfft/131.1.0/COPYING",
+    "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6"
+  },
+  {
+    "file": "KISSFFT-BSD-3-Clause.txt",
+    "url": "https://raw.githubusercontent.com/mborgerding/kissfft/131.1.0/LICENSES/BSD-3-Clause",
+    "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
+  },
+  {
+    "file": "SIMPLE-SENTENCEPIECE-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/pkufool/simple-sentencepiece/v0.7/LICENSE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "file": "OPENFST-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/csukuangfj/openfst/v1.8.5-2026-07-09/COPYING",
+    "sha256": "4300529197035fd3452350718a0b8cee984e9412c9932d7f35fcde849fc97a4b"
+  },
+  {
+    "file": "KALDIFST-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/k2-fsa/kaldifst/master/LICENSE",
+    "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+  },
+  {
+    "file": "SILERO-VAD-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/snakers4/silero-vad/master/LICENSE",
+    "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+  }
+]

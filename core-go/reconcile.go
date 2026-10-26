@@ -15,12 +15,23 @@ import (
 // - reclassifies missing, empty, or temporary transcripts as PENDING;
 // - reclassifies IN_PROGRESS as PENDING unless a valid final transcript exists.
 func ReconcileChunks(taskDir string, m *Manifest) {
+	// Intentional cache removal does not invalidate completed ASR provenance.
+	if m.CacheCleanup != nil && (m.CacheCleanup.Status == "cleaned" || m.CacheCleanup.Status == "cleaning") && artifactMatches(filepath.Join(taskDir, "transcript.md"), &m.Artifacts.Transcript) {
+		return
+	}
 	chunksDir := filepath.Join(taskDir, "chunks")
 	transcriptsDir := filepath.Join(taskDir, "transcripts")
 
 	for i := range m.Chunks.Items {
 		item := &m.Chunks.Items[i]
 
+		if m.Chunks.VAD != nil {
+			item.TranscriptPath = filepath.Join(transcriptsDir, item.ID+".txt")
+			if hash, err := fileSHA256(item.TranscriptPath); err == nil && item.TranscriptSHA256 != "" && hash == item.TranscriptSHA256 {
+				item.State = ChunkCompleted
+				continue
+			}
+		}
 		// Verify chunk audio.
 		audioPath := filepath.Join(chunksDir, fmt.Sprintf("%s.%s", item.ID, m.Chunks.Format))
 		item.AudioPath = audioPath

@@ -57,13 +57,14 @@ func TestPrivacyStateCombinations(t *testing.T) {
 
 func TestLocalASRExecutionFailsExplicitly(t *testing.T) {
 	settings := DefaultSettings()
+	settings.LocalModelRoot = t.TempDir()
 	provider, err := ResolveASRProvider(ASRProviderConfig{ProviderID: ASRProviderLocalSenseVoice, ModelID: ASRModelSenseVoiceSmallINT8}, settings, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = provider.Transcribe(context.Background(), ASRRequest{AudioPath: "unused.wav"})
 	var executionError *ASRExecutionError
-	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
+	if !errors.As(err, &executionError) || executionError.Code != "not_installed" {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -76,11 +77,12 @@ func TestLocalRuntimeMissingDoesNotCreateTaskOrFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := DefaultSettings()
+	settings.LocalModelRoot = t.TempDir()
 	settings.ASRProvider = string(ASRProviderLocalSenseVoice)
 	settings.MimoModel = string(ASRModelSenseVoiceSmallINT8)
 	err := runWorkflow(audio, output, settings, "transcript_only")
 	var executionError *ASRExecutionError
-	if !errors.As(err, &executionError) || executionError.Code != "runtime_not_implemented" {
+	if !errors.As(err, &executionError) || executionError.Code != "not_installed" {
 		t.Fatalf("error = %v", err)
 	}
 	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
