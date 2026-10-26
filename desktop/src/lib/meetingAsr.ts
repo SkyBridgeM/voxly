@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
-export type BackendKind = "python" | "go";
+export type BackendKind = "go";
 export type RuntimeMode = "development" | "production";
 export type OutputMode = "transcript_only" | "transcript_and_generate";
 export type CredentialKey = "MIMO_API_KEY" | "DEEPSEEK_API_KEY";
@@ -565,7 +565,7 @@ export async function resumeMeetingAsr(
     const result = await invoke<RunResult>("resume_meeting_asr", {
       taskDir,
       outputMode: options.outputMode || undefined,
-      backend: options.backend || "python",
+      backend: options.backend || "go",
       mimoApiKey: options.mimoApiKey || undefined,
       deepseekApiKey: options.deepseekApiKey || undefined,
     });

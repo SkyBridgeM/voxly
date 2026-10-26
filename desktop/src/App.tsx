@@ -48,23 +48,12 @@ import "./App.css";
 
 type Theme = "light" | "dark" | "system";
 const MAX_RETAINED_LOGS = 1000;
-const DEVELOPMENT_BACKEND_OPTIONS = ["go", "python"] as const satisfies readonly BackendKind[];
 const DEFAULT_PROVIDER_SETTINGS: ProviderSettingsInfo = {
   local_asr_language: "zh",
   local_vad_enabled: false,
   asr: { provider_id: "mimo", model_id: "mimo-v2.5-asr" },
   llm: { provider_id: "deepseek", model_id: "deepseek-v4-flash" },
 };
-
-function resolveInitialBackend(
-  runtimeMode: RuntimeMode,
-  savedBackend: string | null
-): BackendKind {
-  if (runtimeMode === "production") return "go";
-  return savedBackend === "python" || savedBackend === "go"
-    ? savedBackend
-    : "go";
-}
 
 function App() {
   const buildRuntimeMode: RuntimeMode = import.meta.env.DEV ? "development" : "production";
@@ -78,9 +67,7 @@ function App() {
   const [templateIssues, setTemplateIssues] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState("structured-notes");
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(buildRuntimeMode);
-  const [backend, setBackend] = useState<BackendKind>(() =>
-    resolveInitialBackend(buildRuntimeMode, localStorage.getItem("backend"))
-  );
+  const backend: BackendKind = "go";
   const [isRunning, setIsRunning] = useState(false);
   const [stoppingRun, setStoppingRun] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -220,23 +207,11 @@ function App() {
   }, [locale]);
 
   useEffect(() => {
-    if (runtimeMode === "development") {
-      localStorage.setItem("backend", backend);
-    }
-  }, [backend, runtimeMode]);
-
-  useEffect(() => {
     let active = true;
     getRuntimeInfo()
       .then((info) => {
         if (!active) return;
         setRuntimeMode(info.runtime_mode);
-        setBackend(
-          resolveInitialBackend(
-            info.runtime_mode,
-            localStorage.getItem("backend")
-          )
-        );
       })
       .catch(() => {
         // Standalone frontend builds do not have a Tauri command bridge.
@@ -625,8 +600,7 @@ function App() {
     }
   };
 
-  const backendLabel = (mode: RuntimeMode, kind: BackendKind) => {
-    if (kind === "python") return t.backendPython;
+  const backendLabel = (mode: RuntimeMode) => {
     return mode === "production"
       ? t.backendGoProduction
       : t.backendGoExperimental;
@@ -1312,10 +1286,7 @@ function App() {
                       <div className="preflight-item">
                         <span className="preflight-label">{t.backend}</span>
                         <span className="preflight-value">
-                          {backendLabel(
-                            preflight.runtime_mode,
-                            preflight.backend
-                          )}
+                          {backendLabel(preflight.runtime_mode)}
                         </span>
                       </div>
                       <div className="preflight-item preflight-item-diagnostic">
@@ -1366,34 +1337,10 @@ function App() {
                     </div>
                   </div>
                 </div>
-                {runtimeMode === "production" ? (
-                  <div className="readonly-field">
-                    <span className="readonly-dot" aria-hidden="true"></span>
-                    {t.backendGoProduction}
-                  </div>
-                ) : (
-                  <div className="form-group form-group-compact">
-                    <label htmlFor="settings-backend">{t.backend}</label>
-                    <select
-                      id="settings-backend"
-                      value={backend}
-                      onChange={(e) => {
-                        const selectedBackend =
-                          e.target.value === "go" ? "go" : "python";
-                        setBackend(selectedBackend);
-                        void refreshPreflight(selectedBackend);
-                      }}
-                    >
-                      {DEVELOPMENT_BACKEND_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option === "go"
-                            ? t.backendGoExperimental
-                            : t.backendPython}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                <div className="readonly-field">
+                  <span className="readonly-dot" aria-hidden="true"></span>
+                  {backendLabel(runtimeMode)}
+                </div>
               </section>
                 </div>
               </div>

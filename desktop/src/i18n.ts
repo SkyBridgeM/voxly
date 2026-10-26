@@ -79,7 +79,6 @@ export interface Translations {
   notesWarning: string;
   llmWarning: string;
   backend: string;
-  backendPython: string;
   backendGoExperimental: string;
   backendGoProduction: string;
   settingsTitle: string;
@@ -404,8 +403,7 @@ export const translations: Record<Locale, Translations> = {
       "notes 模式会将音频发送至 MiMo ASR 转写，并在本地生成 notes_input.md；不会将转写文本发送至 DeepSeek。\n\nNotes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
     llmWarning: "音频将发送至 MiMo ASR，完成后的转写文本将发送至 DeepSeek，并按所选模板生成内容。",
     backend: "处理后端",
-    backendPython: "Python（开发备用）",
-    backendGoExperimental: "Go（开发默认 / 推荐）",
+    backendGoExperimental: "Go（开发模式）",
     backendGoProduction: "Go（生产模式内置）",
     settingsTitle: "设置",
     language: "语言",
@@ -456,7 +454,7 @@ export const translations: Record<Locale, Translations> = {
     settingsAppearance: "外观与语言",
     settingsAppearanceDesc: "调整界面语言和主题偏好。",
     settingsBackend: "处理后端",
-    settingsBackendDesc: "生产模式固定使用内置 Go；开发模式默认使用 Go，也可手动选择 Python 备用。",
+    settingsBackendDesc: "桌面版使用 Go 后端；正式安装包已内置运行时。",
     settingsCredentials: "凭据",
     settingsCredentialsDesc: "会话 Key 不会显示在状态信息、日志或输出文件中。",
     settingsMinutesModel: "会议纪要模型",
@@ -735,8 +733,7 @@ export const translations: Record<Locale, Translations> = {
       "Notes mode sends audio to MiMo ASR and generates notes_input.md locally. No transcript is sent to DeepSeek.",
     llmWarning: "Audio is sent to MiMo ASR. The completed transcript is then sent to DeepSeek using the selected template.",
     backend: "Processing backend",
-    backendPython: "Python (development fallback)",
-    backendGoExperimental: "Go (development default / recommended)",
+    backendGoExperimental: "Go (development)",
     backendGoProduction: "Go (packaged for production)",
     settingsTitle: "Settings",
     language: "Language",
@@ -787,7 +784,7 @@ export const translations: Record<Locale, Translations> = {
     settingsAppearance: "Appearance and language",
     settingsAppearanceDesc: "Choose the interface language and theme preference.",
     settingsBackend: "Processing backend",
-    settingsBackendDesc: "Production uses packaged Go; development defaults to Go with Python available as a manual fallback.",
+    settingsBackendDesc: "The desktop uses Go. Release builds include the runtime.",
     settingsCredentials: "Credentials",
     settingsCredentialsDesc: "Session keys are never shown in status metadata, logs, or output files.",
     settingsMinutesModel: "Minutes model",

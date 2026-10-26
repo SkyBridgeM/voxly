@@ -62,6 +62,6 @@ npm --prefix desktop run tauri -- dev
 - [Go 核心与 CLI](core-go/README.md)
 - [本地模型管理](docs/architecture/local-model-management.md)
 - [本版更新说明](docs/releases/0.1.0-alpha.md)
-- [旧版 Python CLI 与 WebUI](docs/legacy-python.md)
+- [旧版 Python 退役说明](docs/legacy-python.md)
 
-`src/`、`webui/` 和 Python 测试保留作旧实现参考。带日期的计划和审计记录当时的状态；当前功能以本说明和版本更新说明为准。
+旧 Python 后端和 WebUI 已退役，桌面开发与正式版统一使用 Go。Python 仅用于构建和独立 VAD 验证工具。带日期的计划和审计记录当时的状态；当前功能以本说明和版本更新说明为准。

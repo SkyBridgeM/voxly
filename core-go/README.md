@@ -20,8 +20,8 @@ packaged Go binary, native adapter and FFmpeg. Production uses sibling
 executables. Standalone development can use FFmpeg from PATH; the packaged
 runtime never falls back to a host FFmpeg if its own copy is missing.
 
-The desktop does not record microphone audio. The Python implementation under
-`src/` is a separate legacy path.
+The desktop does not record microphone audio. The old Python backend and WebUI
+have been retired; both desktop runtime modes use Go.
 
 ## Transcription
 

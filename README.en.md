@@ -62,6 +62,6 @@ The first build downloads pinned native dependencies and FFmpeg sources. Install
 - [Go core and CLI](core-go/README.md)
 - [Local model management](docs/architecture/local-model-management.md)
 - [Release notes](docs/releases/0.1.0-alpha.md)
-- [Legacy Python CLI and WebUI](docs/legacy-python.md)
+- [Python retirement notes](docs/legacy-python.md)
 
-The Python implementation is retained for maintenance and reference. Dated plans and audits describe earlier work. Use this README and the release notes for current functionality.
+The Python backend and WebUI have been retired. Development and production use Go; Python remains for build tooling and standalone VAD checks. Dated plans and audits describe earlier work. Use this README and the release notes for current functionality.

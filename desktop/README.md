@@ -85,8 +85,8 @@ notices. It downloads pinned dependencies on the first run. Install SenseVoice
 in Settings. Standalone development may use FFmpeg from PATH if no sibling
 runtime exists.
 
-Development defaults to Go and can explicitly select the deprecated Python
-backend. The production build permits only Go. An absolute
+Development and production both use Go. The old Python backend and its selector
+have been removed. An absolute
 `MEETING_ASR_GO_BINARY` override is available in development; production ignores
 it. Model weights live under the app data directory, separate from task folders.
 Changing the output folder does not move existing tasks.
@@ -153,8 +153,7 @@ npm --prefix desktop run build
 
 `./scripts/smoke_desktop_app_bundle.sh` builds an app bundle and checks its
 packaged executables and notices. Packaging-only updates need a short runtime
-sample; they do not require repeating a long interview transcription. Python
-regression tests apply when changing the legacy implementation or its contracts.
+sample; they do not require repeating a long interview transcription. The remaining Python build and VAD tools use only the standard library.
 
 Keep generated sidecars, build trees, model weights, recordings, task output and
 credentials out of source commits. Release attachments belong in GitHub Releases.

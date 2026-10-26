@@ -407,7 +407,6 @@ fn classify_stderr(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 enum BackendKind {
-    Python,
     Go,
 }
 
@@ -693,30 +692,18 @@ impl RuntimeMode {
 
 fn parse_backend_kind(value: &str) -> Result<BackendKind, BackendError> {
     match value {
-        "python" => Ok(BackendKind::Python),
         "go" => Ok(BackendKind::Go),
         other => Err(BackendError::InvalidInput {
-            message: format!("Invalid backend: {other}. Must be 'python' or 'go'."),
+            message: format!("Invalid backend: {other}. Only 'go' is supported."),
         }),
     }
 }
 
 fn resolve_backend_kind(
     requested: Option<&str>,
-    runtime_mode: RuntimeMode,
+    _runtime_mode: RuntimeMode,
 ) -> Result<BackendKind, BackendError> {
-    match runtime_mode {
-        RuntimeMode::Development => parse_backend_kind(requested.unwrap_or("go")),
-        RuntimeMode::Production => match requested.unwrap_or("go") {
-            "go" => Ok(BackendKind::Go),
-            "python" => Err(BackendError::InvalidInput {
-                message:
-                    "The production backend is fixed to the packaged Go sidecar; Python is development-only."
-                        .to_string(),
-            }),
-            other => parse_backend_kind(other),
-        },
-    }
+    parse_backend_kind(requested.unwrap_or("go"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -923,7 +910,7 @@ fn preflight_development_go_result(discovered: Result<PathBuf, BackendError>) ->
         Err(_) => {
             return preflight_check(
                 false,
-                "Development Go binary is unavailable. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY, or select Python as the development fallback.",
+                "Development Go binary is unavailable. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY.",
             );
         }
     };
@@ -935,7 +922,7 @@ fn preflight_development_go_result(discovered: Result<PathBuf, BackendError>) ->
         ),
         Err(_) => preflight_check(
             false,
-            "Development Go binary is unavailable or invalid. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY, or select Python as the development fallback.",
+            "Development Go binary is unavailable or invalid. Build core-go/meeting-asr-go, set MEETING_ASR_GO_BINARY.",
         ),
     }
 }
@@ -944,15 +931,9 @@ fn preflight_development_go() -> PreflightCheck {
     preflight_development_go_result(discover_development_go_binary())
 }
 
-fn preflight_sidecar(runtime_mode: RuntimeMode, backend: BackendKind) -> PreflightCheck {
+fn preflight_sidecar(runtime_mode: RuntimeMode, _backend: BackendKind) -> PreflightCheck {
     if runtime_mode == RuntimeMode::Development {
-        return match backend {
-            BackendKind::Go => preflight_development_go(),
-            BackendKind::Python => preflight_check(
-                true,
-                "Python development fallback is selected; the Go binary is not required.",
-            ),
-        };
+        return preflight_development_go();
     }
 
     match packaged_go_executable_dir() {
@@ -1880,14 +1861,9 @@ fn resolve_run_credentials<S: CredentialStore>(
 }
 
 fn validate_local_asr_start(
-    backend: BackendKind,
+    _backend: BackendKind,
     status: &LocalModelStatus,
 ) -> Result<(), BackendError> {
-    if backend != BackendKind::Go {
-        return Err(BackendError::InvalidInput {
-            message: "Local speech recognition requires the Go backend.".to_string(),
-        });
-    }
     if status.model_id != LOCAL_ASR_MODEL || status.state != "ready" {
         return Err(BackendError::InvalidInput {
             message: format!("Local speech recognition is not ready: {}", status.message),
@@ -2558,57 +2534,6 @@ impl ProcessRunner {
 // Command construction helpers
 // ---------------------------------------------------------------------------
 
-fn build_python_command(
-    audio_path: &str,
-    output_mode: &str,
-    output_dir: &str,
-    mimo_key: Option<&str>,
-    deepseek_key: Option<&str>,
-    deepseek_model: Option<&str>,
-    runtime_mode: RuntimeMode,
-) -> Command {
-    let root = resolve_project_root();
-    let mut cmd = Command::new("uv");
-    cmd.arg("run")
-        .arg("meeting-asr")
-        .arg("transcribe")
-        .arg(audio_path)
-        .arg("--output-mode")
-        .arg(output_mode)
-        .arg("--output-dir")
-        .arg(output_dir)
-        .current_dir(&root);
-
-    // Resolve all credentials in Rust first so inherited values cannot bypass
-    // the runtime-specific resolution policy.
-    cmd.env_remove("MIMO_API_KEY");
-    cmd.env_remove("DEEPSEEK_API_KEY");
-    if let Some(key) = mimo_key {
-        if !key.is_empty() {
-            cmd.env("MIMO_API_KEY", key);
-        }
-    }
-    if let Some(key) = deepseek_key {
-        if !key.is_empty() {
-            cmd.env("DEEPSEEK_API_KEY", key);
-        }
-    }
-    if let Some(model) = deepseek_model {
-        if !model.is_empty() {
-            cmd.arg("--llm-model").arg(model);
-        }
-    }
-
-    if runtime_mode == RuntimeMode::Production {
-        // The Python core explicitly calls load_settings(ROOT / ".env").
-        // python-dotenv supports this switch and therefore keeps release runs
-        // independent of a checkout's project-root .env.
-        cmd.env("PYTHON_DOTENV_DISABLED", "1");
-    }
-
-    cmd
-}
-
 fn isolated_go_project_root() -> Result<PathBuf, BackendError> {
     let root = std::env::temp_dir().join(format!("meeting-asr-runtime-{}", std::process::id()));
     fs::create_dir_all(&root).map_err(|error| BackendError::InvalidInput {
@@ -2799,15 +2724,6 @@ fn run_meeting_asr_blocking(
     // Resolve backend.
     let backend_kind =
         resolve_backend_kind(backend.as_deref(), runtime_mode).map_err(String::from)?;
-    if backend_kind == BackendKind::Python && output_mode == "transcript_and_generate" {
-        return Err(BackendError::InvalidInput { message: "Processing Model V2 generation is unavailable in the deprecated Python development fallback.".to_string() }.into());
-    }
-    let backend_output_mode = if backend_kind == BackendKind::Python {
-        "transcript"
-    } else {
-        output_mode.as_str()
-    };
-
     let packaged_executable_dir =
         if backend_kind == BackendKind::Go && runtime_mode == RuntimeMode::Production {
             Some(packaged_go_executable_dir().map_err(String::from)?)
@@ -2854,7 +2770,7 @@ fn run_meeting_asr_blocking(
     let environment = credential_environment(runtime_mode).map_err(String::from)?;
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
-        backend_output_mode,
+        &output_mode,
         &providers.asr.provider_id,
         runtime_mode,
         mimo_api_key.as_deref(),
@@ -2866,15 +2782,6 @@ fn run_meeting_asr_blocking(
         .then(find_env_file)
         .flatten();
     let mut cmd = match backend_kind {
-        BackendKind::Python => build_python_command(
-            &abs_audio_str,
-            backend_output_mode,
-            &out_dir,
-            Some(&credentials.mimo),
-            credentials.deepseek.as_deref(),
-            Some(&providers.llm.model_id),
-            runtime_mode,
-        ),
         BackendKind::Go => build_go_command(
             &abs_audio_str,
             &output_mode,
@@ -3031,8 +2938,7 @@ fn resume_meeting_asr_blocking(
     }
 
     // Determine effective output mode.
-    let effective_mode: Result<String, BackendError> = if backend_kind == BackendKind::Go {
-        // Go: require a manifest; read output_mode from it unless overridden.
+    let effective_mode: Result<String, BackendError> = {
         let manifest_path =
             find_go_manifest(&abs_task_dir).ok_or_else(|| BackendError::ManifestError {
                 message: format!(
@@ -3040,7 +2946,6 @@ fn resume_meeting_asr_blocking(
                     abs_task_dir.display()
                 ),
             })?;
-
         output_mode.clone().map(Ok).unwrap_or_else(|| {
             read_manifest_output_mode(&manifest_path).ok_or_else(|| BackendError::ManifestError {
                 message: format!(
@@ -3049,11 +2954,6 @@ fn resume_meeting_asr_blocking(
                 ),
             })
         })
-    } else {
-        // Python: keep existing behaviour — use provided mode or default.
-        Ok(output_mode
-            .clone()
-            .unwrap_or_else(|| "transcript".to_string()))
     };
 
     let effective_mode = effective_mode.map_err(String::from)?;
@@ -3073,11 +2973,7 @@ fn resume_meeting_asr_blocking(
     let credentials = resolve_run_credentials(
         &KeyringCredentialStore,
         &effective_mode,
-        if backend_kind == BackendKind::Python {
-            DEFAULT_ASR_PROVIDER
-        } else {
-            &desktop_settings.asr.provider_id
-        },
+        &desktop_settings.asr.provider_id,
         runtime_mode,
         mimo_api_key.as_deref(),
         deepseek_api_key.as_deref(),
@@ -3087,32 +2983,7 @@ fn resume_meeting_asr_blocking(
     let env_file = (runtime_mode == RuntimeMode::Development)
         .then(find_env_file)
         .flatten();
-    let root = resolve_project_root();
-
     let cmd = match backend_kind {
-        BackendKind::Python => {
-            let mut c = Command::new("uv");
-            c.arg("run")
-                .arg("meeting-asr")
-                .arg("resume")
-                .arg(abs_task_dir.as_os_str())
-                .current_dir(&root);
-            if let Some(ref mode) = output_mode {
-                c.arg("--output-mode").arg(mode);
-            }
-            c.env_remove("MIMO_API_KEY");
-            c.env_remove("DEEPSEEK_API_KEY");
-            if !credentials.mimo.is_empty() {
-                c.env("MIMO_API_KEY", &credentials.mimo);
-            }
-            if let Some(key) = credentials.deepseek.as_deref() {
-                c.env("DEEPSEEK_API_KEY", key);
-            }
-            if runtime_mode == RuntimeMode::Production {
-                c.env("PYTHON_DOTENV_DISABLED", "1");
-            }
-            c
-        }
         BackendKind::Go => {
             let binary = discover_go_binary(runtime_mode, packaged_executable_dir.as_deref())
                 .map_err(String::from)?;
@@ -5856,7 +5727,6 @@ mod tests {
             runtime_version: Some("1.13.8".to_string()),
         };
         assert!(validate_local_asr_start(BackendKind::Go, &status).is_ok());
-        assert!(validate_local_asr_start(BackendKind::Python, &status).is_err());
         for state in ["not_installed", "model_invalid", "runtime_missing"] {
             status.state = state.to_string();
             assert!(validate_local_asr_start(BackendKind::Go, &status).is_err());
@@ -5902,8 +5772,7 @@ mod tests {
 
     #[test]
     fn test_backend_kind_serialization() {
-        let python: BackendKind = serde_json::from_str("\"python\"").unwrap();
-        assert_eq!(python, BackendKind::Python);
+        assert!(serde_json::from_str::<BackendKind>("\"python\"").is_err());
         let go: BackendKind = serde_json::from_str("\"go\"").unwrap();
         assert_eq!(go, BackendKind::Go);
     }
@@ -5914,15 +5783,15 @@ mod tests {
     }
 
     #[test]
-    fn test_development_backend_policy_preserves_selector_and_default() {
+    fn test_development_backend_policy_uses_go_and_rejects_python() {
         assert_eq!(
             resolve_backend_kind(None, RuntimeMode::Development).unwrap(),
             BackendKind::Go
         );
-        assert_eq!(
-            resolve_backend_kind(Some("python"), RuntimeMode::Development).unwrap(),
-            BackendKind::Python
-        );
+        assert!(matches!(
+            resolve_backend_kind(Some("python"), RuntimeMode::Development),
+            Err(BackendError::InvalidInput { .. })
+        ));
         assert_eq!(
             resolve_backend_kind(Some("go"), RuntimeMode::Development).unwrap(),
             BackendKind::Go
@@ -5942,13 +5811,6 @@ mod tests {
     }
 
     #[test]
-    fn test_python_development_fallback_does_not_require_go_binary() {
-        let check = preflight_sidecar(RuntimeMode::Development, BackendKind::Python);
-        assert!(check.ready);
-        assert!(check.message.contains("Python development fallback"));
-    }
-
-    #[test]
     fn test_missing_development_go_binary_is_not_ready_and_does_not_fallback() {
         let check = preflight_development_go_result(Err(BackendError::BackendNotFound {
             message: "synthetic missing binary".to_string(),
@@ -5956,7 +5818,6 @@ mod tests {
         assert!(!check.ready);
         assert!(check.message.contains("Build core-go/meeting-asr-go"));
         assert!(check.message.contains("MEETING_ASR_GO_BINARY"));
-        assert!(check.message.contains("select Python"));
         assert!(!check.message.contains("synthetic missing binary"));
     }
 
@@ -5999,8 +5860,7 @@ mod tests {
     fn test_production_backend_policy_rejects_python() {
         match resolve_backend_kind(Some("python"), RuntimeMode::Production) {
             Err(BackendError::InvalidInput { message }) => {
-                assert!(message.contains("packaged Go sidecar"));
-                assert!(message.contains("development-only"));
+                assert!(message.contains("Only 'go' is supported"));
             }
             other => panic!("expected production Python rejection, got {other:?}"),
         }
@@ -6600,20 +6460,40 @@ mod tests {
 
     // --- command construction: paths stay as discrete arguments ---
 
+    #[cfg(unix)]
     #[test]
     fn test_build_go_command_paths_are_discrete() {
-        // The build_go_command requires a real Go binary, but we can test
-        // the Python command construction pattern for discrete arg safety.
+        use std::os::unix::fs::PermissionsExt;
+        let base = test_dir("voxly-go-command-spaces");
+        fs::create_dir_all(&base).unwrap();
+        let binary = base.join(go_binary_filename());
+        fs::write(
+            &binary,
+            b"#!/bin/sh\nprintf 'meeting-asr-go version test\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let settings = DesktopSettings::default();
+        let providers = ProviderSettingsInfo {
+            local_asr_language: settings.local_asr_language,
+            local_vad_enabled: settings.local_vad_enabled,
+            asr: settings.asr,
+            llm: settings.llm,
+        };
         let secret = "mimo-secret-value";
-        let cmd = build_python_command(
+        let cmd = build_go_command(
             "/path/with spaces/audio.mp3",
-            "transcript",
+            "transcript_only",
             "/output/dir",
             Some(secret),
             None,
+            &providers,
             None,
-            RuntimeMode::Development,
-        );
+            RuntimeMode::Production,
+            Some(&base),
+            None,
+        )
+        .unwrap();
         let args: Vec<_> = cmd.get_args().collect();
         // Verify that a path with spaces is NOT split into multiple args.
         let audio_arg_found = args
@@ -6628,6 +6508,7 @@ mod tests {
             !args.iter().any(|a| a.to_string_lossy().contains(secret)),
             "credential values must never be passed through argv"
         );
+        fs::remove_dir_all(base).unwrap();
     }
 
     // --- misc ---
@@ -6929,13 +6810,11 @@ mod tests {
     }
 
     #[test]
-    fn test_python_resume_does_not_require_go_manifest() {
-        // A Python task directory has no Go manifest files at all.
-        // find_go_manifest must return None — Python resume skips the
-        // Go manifest requirement and uses its own default mode.
-        let dir = std::env::temp_dir().join("test-py-nomanifest");
+    fn test_imported_task_without_manifest_is_detected() {
+        // A folder with transcript artifacts alone cannot be resumed as a Go task.
+        let dir = std::env::temp_dir().join("test-imported-nomanifest");
         fs::create_dir_all(&dir).unwrap();
-        // Create a Python-typical layout (just audio/chunks/transcripts).
+        // Existing audio and transcript folders do not replace a manifest.
         fs::create_dir_all(dir.join("audio")).unwrap();
         fs::create_dir_all(dir.join("chunks")).unwrap();
         fs::create_dir_all(dir.join("transcripts")).unwrap();
