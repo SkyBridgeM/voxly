@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/yudi/meet-asr/core-go/modelcatalog"
 )
 
 func TestBuiltInProviderCatalog(t *testing.T) {
@@ -55,6 +57,24 @@ func TestPrivacyStateCombinations(t *testing.T) {
 	}
 }
 
+// A missing model is not installable on every CI host. The same fail-closed
+// behavior should report the catalog's platform rejection before installation.
+func unavailableLocalModelCode(t *testing.T) string {
+	t.Helper()
+	catalog, err := modelcatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := catalog.Model(string(ASRModelSenseVoiceSmallINT8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modelcatalog.SupportsCurrentPlatform(model) {
+		return "unsupported_platform"
+	}
+	return "not_installed"
+}
+
 func TestLocalASRExecutionFailsExplicitly(t *testing.T) {
 	settings := DefaultSettings()
 	settings.LocalModelRoot = t.TempDir()
@@ -64,7 +84,7 @@ func TestLocalASRExecutionFailsExplicitly(t *testing.T) {
 	}
 	_, err = provider.Transcribe(context.Background(), ASRRequest{AudioPath: "unused.wav"})
 	var executionError *ASRExecutionError
-	if !errors.As(err, &executionError) || executionError.Code != "not_installed" {
+	if !errors.As(err, &executionError) || executionError.Code != unavailableLocalModelCode(t) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -82,7 +102,7 @@ func TestLocalRuntimeMissingDoesNotCreateTaskOrFallback(t *testing.T) {
 	settings.MimoModel = string(ASRModelSenseVoiceSmallINT8)
 	err := runWorkflow(audio, output, settings, "transcript_only")
 	var executionError *ASRExecutionError
-	if !errors.As(err, &executionError) || executionError.Code != "not_installed" {
+	if !errors.As(err, &executionError) || executionError.Code != unavailableLocalModelCode(t) {
 		t.Fatalf("error = %v", err)
 	}
 	if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
