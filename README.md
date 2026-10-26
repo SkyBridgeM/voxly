@@ -64,4 +64,4 @@ npm --prefix desktop run tauri -- dev
 - [本版更新说明](docs/releases/0.1.0-alpha.md)
 - [旧版 Python CLI 与 WebUI](docs/legacy-python.md)
 
-`src/`、`webui/` 和 Python 测试保留作旧实现参考。带日期的计划、审计和 WORKLOG 记录当时的状态，不代表当前版本已实现的能力。
+`src/`、`webui/` 和 Python 测试保留作旧实现参考。带日期的计划和审计记录当时的状态；当前功能以本说明和版本更新说明为准。

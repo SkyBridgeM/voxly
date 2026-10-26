@@ -64,4 +64,4 @@ The first build downloads pinned native dependencies and FFmpeg sources. Install
 - [Release notes](docs/releases/0.1.0-alpha.md)
 - [Legacy Python CLI and WebUI](docs/legacy-python.md)
 
-The Python implementation is retained for maintenance and reference. Dated plans and WORKLOG entries describe earlier work rather than the current release.
+The Python implementation is retained for maintenance and reference. Dated plans and audits describe earlier work. Use this README and the release notes for current functionality.

@@ -114,6 +114,33 @@ installer has been extracted and launched locally, and its packaged runtime has
 passed a short sample with Homebrew removed from PATH. A separate clean Mac has
 not yet been used for installation validation.
 
+## Release review
+
+Publish Alpha builds as prereleases and leave them out of Latest. Record the
+full source commit, build date, app version, architecture, artifact names and
+SHA-256 values in the release record. State whether the checkout was dirty and
+whether the app has Developer ID signing or Apple notarization. Release notes
+and attachments must agree on these details.
+
+Before publishing, check the production app from its packaged location: it must
+use the bundled Go runtime and FFmpeg, ignore development `.env` files, and keep
+task output inside the selected output folder. Use a short sample for the
+packaging check. Test missing dependencies only in a disposable copy. Live
+provider calls require an authorized manual check; CI must not make those calls
+or receive provider keys or Apple signing secrets for this unsigned build.
+
+Review third-party licenses and include the required notices and corresponding
+sources. Keep credentials, private recordings and transcripts out of release
+files, logs and screenshots. Explain that MiMo receives audio and DeepSeek
+receives transcript text when those providers are used. Describe Gatekeeper
+opening steps through the normal macOS interface without instructions to
+disable system security checks.
+
+Publishing is a maintainer action after review. Do not silently replace a
+published binary under the same version and filename. If an asset is faulty,
+withdraw it with a visible explanation and publish its replacement under a new
+version and tag with new checksums.
+
 ## Checks
 
 Run the checks relevant to the change:
