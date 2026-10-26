@@ -22,4 +22,6 @@ license terms. Full ONNX Runtime ThirdPartyNotices are included separately.
 SenseVoice weights are downloaded separately on request, not shipped inside
 this installer. The model manager records the model source and identity.
 
-This notice does not assign a license to Voxly's own source code.
+Voxly's own source code is licensed under the MIT License in the repository's
+root LICENSE file. Third-party components and model weights retain their
+respective licenses.

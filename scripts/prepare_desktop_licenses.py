@@ -11,6 +11,7 @@ import urllib.request
 repo = Path(__file__).resolve().parent.parent
 out = repo / "desktop/src-tauri/resources/licenses"
 out.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(repo / "LICENSE", out / "VOXLY-LICENSE.txt")
 for item in json.loads((repo / "native/third-party-licenses.json").read_text()):
     target = out / item["file"]
     data = target.read_bytes() if target.exists() else urllib.request.urlopen(item["url"], timeout=40).read()

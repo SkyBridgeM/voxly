@@ -3,6 +3,7 @@ name = "meeting-asr-desktop"
 version = "0.1.0-alpha"
 description = "Voxly — Local Voice Workspace"
 authors = ["SkyBridgeM"]
+license = "MIT"
 edition = "2021"
 
 [lib]
